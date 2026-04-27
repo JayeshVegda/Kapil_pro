@@ -65,7 +65,7 @@ function BackupPage() {
   }
 
   return (
-    <div className="w-full space-y-6 px-4 pb-10 pt-4 md:px-6">
+    <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="mb-3 text-sm font-semibold text-slate-900">Backup Export</h3>
         <p className="mb-4 text-sm text-slate-600">Export complete snapshot for recovery, migration, or audit. JSON is full-fidelity backup. CSV bundle is spreadsheet-friendly backup.</p>

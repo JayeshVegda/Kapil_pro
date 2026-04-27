@@ -14,7 +14,7 @@ function DashboardPage() {
 
   if (isPending) {
     return (
-      <div className="w-full px-4 pb-8 pt-4 md:px-6">
+      <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
         <section className="mb-6 grid grid-cols-1 gap-5 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, idx) => (
             <div key={idx} className="h-[180px] animate-pulse rounded-xl border border-slate-200 bg-white" />
@@ -25,7 +25,7 @@ function DashboardPage() {
   }
   if (isError) {
     return (
-      <div className="w-full px-4 pb-8 pt-4 md:px-6">
+      <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
         <section className="rounded-xl border border-red-200 bg-red-50 p-6">
           <h2 className="text-base font-semibold text-red-700">Unable to load dashboard</h2>
           <p className="mt-2 text-sm text-red-600">{error instanceof Error ? error.message : 'Unknown error'}</p>
@@ -36,7 +36,7 @@ function DashboardPage() {
   if (!data) return null
 
   return (
-    <div className="w-full px-4 pb-8 pt-4 md:px-6">
+    <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
       <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-sm xl:col-span-4">
           <div className="flex items-center justify-between">

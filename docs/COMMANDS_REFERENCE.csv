@@ -1,0 +1,112 @@
+Category,Command/Syntax,Type,Description,Example,Optional Parameters,Notes
+Slash Commands,/start,Command,Main menu with quick report buttons,,,Shows Balance/Dashboard/Day/Activity shortcuts
+Slash Commands,/help,Command,Full command reference,,,Same content as sending help (text)
+Slash Commands,/ping,Command,Health check for uptime monitoring,,,Returns pong
+Slash Commands,/sync,Command,Sync all party balances with NocoDB,,,Updates current_balance for every party
+Slash Commands,/undo,Command,Undo last sale or payment,,,Only undoes the most recent transaction; resyncs that party balance
+Slash Commands,/list,Command,List all parties with balances (Gas and Ele),,,Shows party name and balance
+Slash Commands,/arch,Command,List archived parties with buttons,,,Shows party name | date range; tap for summary/PDF/restore
+Party Shortcut,<party>,Text,Full party report (balance sales payments),sambhu,,Fuzzy match; single close match auto-accepted
+Party Shortcut,<party> pdf,Text,Full party ledger PDF,sambhu pdf,,
+Party Shortcut,<party> xls,Text,Full party Excel ledger,sambhu xls,,
+Add Party,add party <name>,Text,Create party: choose Gas vs Ele then opening balance,add party sambhu,,Also: add <name> (same flow)
+Add Party,add <name>,Text,Same as add party when name is not the word party,add raju,,Cancelled via inline Cancel
+Collection Split,r <party> <amt> + <party> <amt> …,Text,Split collection; per-party amounts and charges @0.3%; buttons to start p payment,r party1 4.4l + sambhu 2.2l,,Read-only; does not post payments; session r_send / Forward buttons
+Notes,notes <expr> | <denoms>,Text,Note denomination breakdown (fewest notes + alternatives),notes 46850 | 500 100 50,,Expression can use * etc.
+Notes,<line1>\n<line2>,Text,Implicit notes: amount line then denomination line (no notes keyword),46850 then line 500 100 50,,Ignored if message starts with batch
+Batch,batch <party>\n<lines>,Text,One message: multi-line payment (p) or sale (s) lines for one party,batch salu\n11-3 p 1L\n11-3 s 2 814,,Date optional per line; # comments; see docs/batch-format.md
+Sale,s <party>,Text,View last 10 sales for party,s sambhu,,Last 10 per msg_sales_view
+Sale,s <party> pdf,Text,Export party sales PDF,s sambhu pdf,,
+Sale,s <party> xls,Text,Export party sales Excel,s sambhu xls,,
+Sale,s <party> <bags>,Text,Gas: spindle bags at Vilaity+default markup,s sambhu 10,,
+Sale,s <party> <bags> <rate>,Text,Gas: bags at custom Rs/kg rate,s sambhu 10 790,,
+Sale,s <party> sp <bags>,Text,Explicit spindle bags,s sambhu sp 10,,
+Sale,s <party> sp <bags> <rate>,Text,Spindle with rate,s sambhu sp 10 790,,
+Sale,s <party> tp <bags>,Text,Tapper plug bags,s sambhu tp 5,,
+Sale,s <party> tp <bags> <rate>,Text,Tapper with rate,s sambhu tp 5 810,,
+Sale,s <party> sp X tp Y,Text,Both spindle and tapper in one sale,s sambhu sp 10 tp 5,,
+Sale,s <party> <amount>,Text,Electronic party: direct sale amount,s raju 50000,,
+Sale,s <party> ... gst,Text,Add 18% GST,s sambhu 10 790 gst,,
+Sale,s <party> ... m,Text,Alias for gst,s sambhu 10 m,,
+Sale,s <party> ... +t <amount>,Text,Add transport,s sambhu 10 790 +t 2000,,
+Sale,s <party> ... +transport <amount>,Text,Same as +t,s sambhu 10 +transport 2000,,
+Sale,s <party> ... +o <amount>,Text,Add other amount,s sambhu 10 +o 500,,
+Sale,s <party> ... +other <amount>,Text,Same as +o,s sambhu 10 +other 500,,
+Sale,s <party> ... <date>,Text,Back-date sale,s sambhu 10 790 19-02-2026,,
+Sale,s <party> ... -1,Text,Sale dated yesterday,s sambhu 10 -1,,
+Sale,s <party> ... --dry,Text,Dry-run: show calculation no DB write,s sambhu 10 --dry,,
+Sale,s <party> ... "note",Text,Note in quotes,s sambhu 10 "partial delivery",,
+Payment,p <party>,Text,View last 10 payments,p sambhu,,Last 10 per msg_payments_view
+Payment,p <party> pdf,Text,Export party payments PDF,p sambhu pdf,,
+Payment,p <party> xls,Text,Export party payments Excel,p sambhu xls,,
+Payment,p <party> <amount>,Text,Record payment (cash default); amount: commas lakh crore,p sambhu 50000,,Example with comma: p sambhu 50000
+Payment,p <party> Xl / lakh / crore,Text,Indian notation e.g. 15l 2.3l 1c,p satish 15l,,
+Payment,p <party> <amount> bank,Text,Payment mode bank,p sambhu 10000 bank,,
+Payment,p <party> <amount> cash,Text,Payment mode cash,p sambhu 10000 cash,,
+Payment,p <party> <amount> cheque,Text,Payment mode cheque,p sambhu 10000 cheque,,
+Payment,p <party> <amount> <date>,Text,Back-date payment,p sambhu 10000 18-02-2026,,
+Payment,p <party> <amount> -1,Text,Payment dated yesterday,p sambhu 10000 -1,,
+Payment,p <party> <amount> "note",Text,Note in quotes,p sambhu 10000 "Cheque #123",,
+Balance,bal,Text,Company total balance (Gas + Ele),bal,,
+Balance,bal pdf,Text,Dashboard PDF export (same as dash pdf),bal pdf,,
+Balance,bal xls,Text,Dashboard Excel export; optional Google Sheet sync when configured,bal xls,APPS_SCRIPT_URL,Set in .env for Sheet push
+Balance,bal <party>,Text,One party balance,bal sambhu,,Fuzzy match; multiple matches show pick list
+Reports,rate,Text,Vilaity brass rate only,rate,,
+Reports,rate all,Text,All brass rates (Vilaity Honey Gulf Honey Europe),rate all,,
+Reports,rate pdf,Text,Brass rates PDF export,rate pdf,,
+Reports,rate all pdf,Text,Same PDF as rate pdf,rate all pdf,,
+Reports,log,Text,Last 20 transactions (sales + payments),log,,Label in UI: last 20
+Reports,log xls,Text,Export all sales and payments to Excel,log xls,,
+Reports,day,Text,Today day summary (gas/ele sold collected),day,,
+Reports,day <date>,Text,Day report for DD-MM-YYYY,day 19-02-2026,,
+Reports,day -1,Text,Yesterday,day -1,,
+Reports,day yday,Text,Alias for yesterday,day yday,,
+Reports,day -2 / -3 / -7,Text,That many days ago,day -7,,
+Reports,day today,Text,Today (explicit),day today,,parse_date accepts today/0
+Reports,day pdf,Text,Today day PDF,day pdf,,
+Reports,day xls,Text,Today day Excel,day xls,,
+Reports,day <date> pdf,Text,Day PDF for date,day 19-02-2026 pdf,,
+Reports,day <date> xls,Text,Day Excel for date,day -1 xls,,
+Reports,dash,Text,Monthly dashboard text (two messages: loading then report),dash,,
+Reports,dash pdf,Text,Dashboard PDF export,dash pdf,,
+Reports,dash xls,Text,Dashboard Excel + optional Google Sheet sync,dash xls,APPS_SCRIPT_URL,Set in .env for Sheet push
+Settings,set,Text,Show default Spindle and Tapper markups (Vilaity + X),set,,
+Settings,set sp <amount>,Text,Default spindle markup Rs above Vilaity,set sp 110,,
+Settings,set tp <amount>,Text,Default tapper markup Rs above Vilaity,set tp 120,,
+Adjustment,adjust,Text,Show party list with Adjust buttons (then reply + or - amount),adjust,,
+Adjustment,adjust <party> +<amt>,Text,Add to party balance (reconcile),adjust sambhu +1000,,Stored as payment mode adjustment
+Adjustment,adjust <party> -<amt>,Text,Subtract from party balance,adjust sambhu -500,,Use when bot balance higher than book
+Adjustment,adjust <party> <amt> +|-,Text,Alternate form: amount then direction word,adjust sambhu 1000 +,,See parse_adjust in core.py
+Archive,del,Text,Alias for /undo (undo last sale/payment only),del,,Not the same as del party
+Archive,del party <party>,Text,Archive party and remove from active list,del party sambhu,,Saves to data/archives.json; confirm required
+Archive,arch,Text,List archived parties with buttons,arch,,Same as /arch; tap to view PDF restore
+Help,help,Text,Full command list (like /help),help,,
+Help,help <topic>,Text,Contextual help for one topic,help batch,,Topics: s p r notes batch bal day rate dash log del arch adjust set gst dry
+Confirmation,y / yes / 1,Text,Confirm sale payment or archive after preview,y,,Or tap inline Yes; expires 2 min
+Confirmation,n / no / 0,Text,Cancel pending confirmation,n,,Or tap inline No
+Fuzzy Match,1-5,Text,Pick party from numbered suggestions when multiple matches,3,,After fuzzy match prompt
+Fuzzy Match,Inline pick buttons,UI,Tap labeled button instead of digit,,,callback pick:0 pick:1 …
+Spindle Tokens,sp / spindle,Keyword,Spindle bag keywords,s sambhu sp 10,,
+Tapper Tokens,tp / tapper / cock / tapperplug / tapper_plug,Keyword,Tapper plug keywords,s sambhu tp 5,,tapper_plug from config.py
+Date Formats,DD-MM-YYYY,Format,Explicit date,19-02-2026,,
+Date Formats,-1 / -2 / -3 / -7,Format,Days ago from today,-1 = yesterday,,
+Date Formats,today / 0,Format,Alias for today,today,,
+Date Formats,yday / yesterday,Format,Alias for yesterday,yday,,
+Export Formats,pdf,Format,PDF export,dash pdf,,
+Export Formats,xls,Format,Excel export (openpyxl),dash xls,,
+Units,1 bag,Unit,1 bag = 50 kg (BAGS_TO_KG),,,Gas sales
+Units,sp tp rate,Unit,Rupees per kg for gas bag lines,,,
+Environment Variables,TG_TOKEN,Required,Telegram bot token,,,.env
+Environment Variables,NOCODB_TOKEN,Required,NocoDB API token,,,.env
+Environment Variables,ALLOWED_USER_IDS,Required,Comma-separated Telegram user IDs (empty denies access),,,.env
+Environment Variables,NOCODB_BASE_URL,Optional,NocoDB tables API base URL,,,.env
+Environment Variables,PARTIES_TABLE,Optional,NocoDB table ID for parties,,,.env
+Environment Variables,SALES_TABLE,Optional,NocoDB table ID for sales,,,.env
+Environment Variables,PAYMENTS_TABLE,Optional,NocoDB table ID for payments,,,.env
+Environment Variables,BRASS_CHAT_ID,Optional,Telegram chat for brass RSS alerts,,,.env for scripts/brass_rss.py
+Environment Variables,BRASS_RATES_TABLE,Optional,NocoDB table for Jamnagar brass rates,,,.env for scripts/brass_rss.py
+Environment Variables,APPS_SCRIPT_URL,Optional,Google Apps Script web app URL for dashboard Sheet sync,,,.env
+Environment Variables,APPS_SCRIPT_SECRET,Optional,Shared secret for Apps Script POST,,,.env
+Environment Variables,DEBUG,Optional,Set true for debug logging,,,.env
+CLI Scripts,python main.py,CLI,Run Telegram bot (polling),,From project root with venv activated,
+CLI Scripts,python scripts/brass_rss.py,CLI,BrassB2B RSS to Telegram + NocoDB rates,,Cron example */5 10-11 * * *,Requires BRASS_CHAT_ID BRASS_RATES_TABLE

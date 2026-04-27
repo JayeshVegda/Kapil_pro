@@ -262,11 +262,11 @@ function LedgerPage() {
   }, [statementPage, totalStatementPages])
 
   return (
-    <div className="w-full space-y-6 px-4 pb-10 pt-4 md:px-6">
+    <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-base font-semibold text-slate-900">Party Analytics Dashboard</h2>
-          <p className="text-xs text-slate-500">As of {asOfDate}</p>
+          <p className="text-xs text-slate-500">As of {formatFullDate(asOfDate)}</p>
         </div>
         <div className="mt-3 grid grid-cols-1 gap-2">
           <select className={inputClass} value={selectedCustomerIdResolved} onChange={(event) => setSelectedCustomerId(event.target.value)}>
@@ -310,7 +310,7 @@ function LedgerPage() {
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-3">
               <h3 className="text-base font-semibold text-slate-900">{selectedRow.customerName} - Quick Health Summary</h3>
-              <p className="text-xs text-slate-500">As of {asOfDate}</p>
+              <p className="text-xs text-slate-500">As of {formatFullDate(asOfDate)}</p>
             </div>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-5">
               <Metric label="Status" value={decisionModel.healthStatus} emphasized={decisionModel.healthStatus !== 'Good'} />
@@ -376,6 +376,48 @@ function LedgerPage() {
                   ))}
                 </ul>
               </div>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-3">
+              <h3 className="text-sm font-semibold text-slate-900">Item-wise Purchase Summary</h3>
+              <p className="text-xs text-slate-500">Which items this party buys most, with bags and quantity.</p>
+            </div>
+            <div className="max-h-[320px] overflow-auto rounded-md border border-slate-100 no-scrollbar">
+              <table className="w-full min-w-[860px]">
+                <thead>
+                  <tr className="bg-slate-50">
+                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Item</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bills</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bags</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Qty (kg)</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Avg Rate</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Last Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(statementQuery.data?.itemSummary ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-500">
+                        No item-level bill details found for this party.
+                      </td>
+                    </tr>
+                  )}
+                  {(statementQuery.data?.itemSummary ?? []).map((item, index) => (
+                    <tr key={`${item.itemName}-${index}`} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
+                      <td className="px-3 py-2.5 text-sm font-medium text-slate-800">{item.itemName}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-sm text-slate-700">{item.billCount}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-sm text-slate-700">{Math.round(item.totalBags)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-sm text-slate-700">{Math.round(item.totalQty)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-sm font-semibold text-slate-900">{formatInrInteger(item.totalAmount)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-sm text-slate-700">{formatInrInteger(item.averageRate)}</td>
+                      <td className="px-3 py-2.5 text-sm text-slate-700">{item.lastDate ? formatFullDate(item.lastDate) : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </section>
         </>

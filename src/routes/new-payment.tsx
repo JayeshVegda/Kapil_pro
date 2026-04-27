@@ -109,7 +109,7 @@ function NewPaymentPage() {
   }
 
   return (
-    <div className="w-full space-y-6 px-4 pb-10 pt-4 md:px-6">
+    <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-4 text-sm font-semibold text-slate-900">Payment Details</h2>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">

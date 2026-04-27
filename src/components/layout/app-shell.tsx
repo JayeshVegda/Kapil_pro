@@ -1,7 +1,8 @@
 import { useIsFetching, useQueryClient } from '@tanstack/react-query'
 import { Outlet, useRouterState } from '@tanstack/react-router'
-import { AlertTriangle, CheckCircle2, Clock3, Loader2, RefreshCw, Search } from 'lucide-react'
-import { SidebarNav } from './sidebar-nav'
+import { AlertTriangle, CheckCircle2, Clock3, Loader2, Menu, RefreshCw, Search } from 'lucide-react'
+import { useState } from 'react'
+import { SidebarNavPanel } from './sidebar-nav'
 
 const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Dashboard', subtitle: 'Live business overview and pending actions' },
@@ -16,6 +17,7 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
 }
 
 export function AppShell() {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const meta = pageMeta[pathname] ?? { title: 'Kapil Billing', subtitle: 'Business billing workspace' }
   const queryClient = useQueryClient()
@@ -34,12 +36,22 @@ export function AppShell() {
 
   return (
     <div className="flex min-h-dvh bg-slate-100">
-      <SidebarNav />
+      <SidebarNavPanel mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-50 flex items-center justify-between gap-4 border-b border-slate-200/90 bg-white/95 px-5 py-2.5 backdrop-blur">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight text-slate-900">{meta.title}</h1>
-            <p className="text-xs text-slate-500">{meta.subtitle}</p>
+        <header className="sticky top-0 z-50 flex items-center justify-between gap-3 border-b border-slate-200/90 bg-white/95 px-3 py-2.5 backdrop-blur sm:px-4 lg:px-5">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <button
+              type="button"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-slate-200 text-slate-700 lg:hidden"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open navigation menu"
+            >
+              <Menu size={16} />
+            </button>
+            <div className="min-w-0">
+              <h1 className="truncate text-base font-semibold tracking-tight text-slate-900 sm:text-lg">{meta.title}</h1>
+              <p className="hidden truncate text-xs text-slate-500 sm:block">{meta.subtitle}</p>
+            </div>
           </div>
           <div className="flex items-center gap-2 md:gap-3">
             <label className="relative hidden lg:block">
@@ -70,7 +82,7 @@ export function AppShell() {
                 {syncState === 'error' && <AlertTriangle size={13} />}
                 {syncState === 'outdated' && <Clock3 size={13} />}
               </span>
-              <span className="inline-flex flex-col items-start leading-tight">
+              <span className="hidden md:inline-flex md:flex-col md:items-start md:leading-tight">
                 <span className="text-xs font-semibold text-slate-700">
                   {syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync Error' : syncState === 'outdated' ? 'Outdated' : 'Synced'}
                 </span>
@@ -88,7 +100,9 @@ export function AppShell() {
             </button>
           </div>
         </header>
-        <Outlet />
+        <div className="w-full 2xl:mx-auto 2xl:max-w-[1680px]">
+          <Outlet />
+        </div>
       </main>
     </div>
   )

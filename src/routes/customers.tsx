@@ -153,7 +153,7 @@ function CustomersPage() {
   const canSubmitForm = formState.name.trim().length > 0 && !createOrUpdateMutation.isPending
 
   return (
-    <div className="w-full space-y-8 px-4 pb-10 pt-4 md:px-6">
+    <div className="w-full space-y-8 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {statusText && <p className="text-xs text-slate-500" role="status" aria-live="polite">{statusText}</p>}
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

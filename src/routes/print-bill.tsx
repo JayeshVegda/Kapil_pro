@@ -248,7 +248,7 @@ function PrintBillPage() {
   }
 
   return (
-    <div className="w-full px-4 pb-10 pt-4 md:px-6">
+    <div className="w-full px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-span-5">
           <div className="mb-2 flex items-center justify-between gap-2">
@@ -266,8 +266,8 @@ function PrintBillPage() {
           {printQuery.isLoading && <p className="text-sm text-slate-500">Loading bills...</p>}
           {printQuery.isError && <p className="text-sm text-red-600">Unable to load bill data.</p>}
           {!printQuery.isLoading && !printQuery.isError && (
-            <div className="max-h-[72vh] overflow-auto rounded-md border border-slate-100">
-              <table className="w-full min-w-[760px]">
+            <div className="max-h-[72vh] overflow-auto rounded-md border border-slate-100 no-scrollbar">
+              <table className="w-full min-w-[640px] sm:min-w-[760px]">
               <thead>
                 <tr className="sticky top-0 bg-slate-50">
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bill</th>

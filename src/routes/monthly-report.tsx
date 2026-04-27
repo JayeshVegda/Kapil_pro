@@ -281,7 +281,7 @@ function ReportPage() {
   }, [reportQuery.data, today])
 
   return (
-    <div className="w-full space-y-6 px-3 pb-10 pt-4 md:px-4 xl:px-5">
+    <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {reportQuery.isLoading && <section className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">Loading company report...</section>}
       {reportQuery.isError && <section className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700 shadow-sm">Unable to load company report.</section>}
 

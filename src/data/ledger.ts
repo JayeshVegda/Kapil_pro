@@ -84,6 +84,7 @@ export async function loadPartyStatement(customerId: string, asOfDate: string) {
     billNo: num(bill.bill_no),
     total: calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate)),
   }))
+  const billDateById = new Map(bills.map((bill) => [bill.id, bill.date]))
   const payments = paymentsRawTyped.map((payment) => ({
     id: payment.id,
     date: datePart(payment.date),
@@ -93,12 +94,54 @@ export async function loadPartyStatement(customerId: string, asOfDate: string) {
 
   const openingBalance = num((customerRaw as PBRecord).opening_balance)
   const events = buildPartyEvents({ openingBalance, bills, payments })
+  const itemSummaryMap = new Map<
+    string,
+    {
+      itemName: string
+      totalQty: number
+      totalBags: number
+      totalAmount: number
+      billCount: number
+      lastDate: string
+    }
+  >()
+  const billCountByItem = new Map<string, Set<string>>()
+  for (const row of billItemsRawTyped) {
+    const billId = String(row.bill ?? '')
+    if (!billDateById.has(billId)) continue
+    const itemName = String(row.item_name ?? '').trim() || 'Unknown Item'
+    const entry = itemSummaryMap.get(itemName) ?? {
+      itemName,
+      totalQty: 0,
+      totalBags: 0,
+      totalAmount: 0,
+      billCount: 0,
+      lastDate: '',
+    }
+    entry.totalQty += num(row.qty)
+    entry.totalBags += num(row.bags)
+    entry.totalAmount += num(row.amount)
+    const billDate = billDateById.get(billId) ?? ''
+    if (billDate > entry.lastDate) entry.lastDate = billDate
+    itemSummaryMap.set(itemName, entry)
+    const seenBills = billCountByItem.get(itemName) ?? new Set<string>()
+    seenBills.add(billId)
+    billCountByItem.set(itemName, seenBills)
+  }
+  const itemSummary = [...itemSummaryMap.values()]
+    .map((entry) => ({
+      ...entry,
+      billCount: billCountByItem.get(entry.itemName)?.size ?? 0,
+      averageRate: entry.totalQty > 0 ? entry.totalAmount / entry.totalQty : 0,
+    }))
+    .sort((a, b) => b.totalAmount - a.totalAmount || b.totalQty - a.totalQty)
 
   return {
     customerId,
     customerName: String((customerRaw as PBRecord).name ?? ''),
     openingBalance,
     events,
+    itemSummary,
   }
 }
 
