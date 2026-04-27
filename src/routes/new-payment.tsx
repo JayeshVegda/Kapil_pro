@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { loadCustomerPaymentLedger, loadPaymentCustomers, savePayment } from '@/data/payments'
 import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
@@ -29,6 +29,8 @@ function NewPaymentPage() {
   const [amount, setAmount] = useState<number>(0)
   const [note, setNote] = useState('')
   const [statusText, setStatusText] = useState('')
+  const [isQuickPaymentOpen, setIsQuickPaymentOpen] = useState(false)
+  const [quickPaymentCommand, setQuickPaymentCommand] = useState('')
 
   const customersQuery = useQuery({
     queryKey: ['payment-customers'],
@@ -106,7 +108,36 @@ function NewPaymentPage() {
     setAmount(0)
     setNote('')
     setStatusText('')
+    setIsQuickPaymentOpen(false)
+    setQuickPaymentCommand('')
   }
+
+  function applyQuickPaymentCommand() {
+    const parsed = parsePaymentCommand(quickPaymentCommand, customersQuery.data ?? [], today)
+    if (!parsed.ok) {
+      setStatusText(parsed.error)
+      return
+    }
+    setCustomerId(parsed.customer.id)
+    setAmount(parsed.amount)
+    setMode(parsed.mode)
+    setDate(parsed.date)
+    setNote(parsed.note)
+    setStatusText('Command applied. Review and save.')
+    setIsQuickPaymentOpen(false)
+    setQuickPaymentCommand('')
+  }
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.altKey && event.key.toLowerCase() === 'b') {
+        event.preventDefault()
+        setIsQuickPaymentOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
@@ -220,6 +251,42 @@ function NewPaymentPage() {
           </button>
         </div>
       </section>
+      {isQuickPaymentOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h3 className="text-base font-semibold text-slate-900">Payment Command (Alt + B)</h3>
+              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickPaymentOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="space-y-2 px-4 py-4">
+              <input
+                autoFocus
+                className={inputClass}
+                value={quickPaymentCommand}
+                onChange={(e) => setQuickPaymentCommand(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    applyQuickPaymentCommand()
+                  }
+                }}
+                placeholder='party amount [mode=Cash] [date=today|-1|DD-MM-YYYY] ["note"]'
+              />
+              <p className="text-xs text-slate-500">Default mode is Cash. Example: `sambhu 50000` or `sambhu 1.5l bank -1`</p>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsQuickPaymentOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" onClick={applyQuickPaymentCommand}>
+                Apply to Payment Form
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -244,3 +311,62 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 const inputClass =
   'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+
+function parsePaymentCommand(
+  input: string,
+  customers: Array<{ id: string; name: string }>,
+  today: string,
+):
+  | { ok: true; customer: { id: string; name: string }; amount: number; mode: 'Cash' | 'Bank'; date: string; note: string }
+  | { ok: false; error: string } {
+  const raw = input.trim()
+  if (!raw) return { ok: false, error: 'Type payment command first.' }
+  const noteMatch = raw.match(/"([^"]*)"/)
+  const note = noteMatch?.[1]?.trim() ?? ''
+  const withoutNote = noteMatch ? raw.replace(noteMatch[0], '').trim() : raw
+  const tokens = withoutNote.split(/\s+/).filter(Boolean)
+  const offset = tokens[0]?.toLowerCase() === 'p' ? 1 : 0
+  if (tokens.length < 2 + offset) return { ok: false, error: 'Use: party amount [mode] [date]' }
+  const partyToken = tokens[0 + offset]
+  const customer = resolveCustomer(partyToken, customers)
+  if (!customer) return { ok: false, error: `Party not found: ${partyToken}` }
+  const amount = parseAmountToken(tokens[1 + offset])
+  if (!(amount > 0)) return { ok: false, error: 'Invalid payment amount' }
+
+  let mode: 'Cash' | 'Bank' = 'Cash'
+  let date = today
+  for (const token of tokens.slice(2 + offset)) {
+    const lower = token.toLowerCase()
+    if (lower === 'cash') mode = 'Cash'
+    else if (lower === 'bank' || lower === 'cheque') mode = 'Bank'
+    else date = parseDateToken(lower, today)
+  }
+
+  return { ok: true, customer, amount, mode, date, note }
+}
+
+function resolveCustomer(token: string, customers: Array<{ id: string; name: string }>) {
+  const exact = customers.find((c) => c.name.toLowerCase() === token.toLowerCase())
+  if (exact) return exact
+  const fuzzy = customers.find((c) => c.name.toLowerCase().includes(token.toLowerCase()))
+  return fuzzy ?? null
+}
+
+function parseAmountToken(token: string) {
+  const normalized = token.toLowerCase().replaceAll(',', '')
+  if (normalized.endsWith('l')) return Number(normalized.slice(0, -1)) * 100000
+  if (normalized.endsWith('c')) return Number(normalized.slice(0, -1)) * 10000000
+  return Number(normalized)
+}
+
+function parseDateToken(token: string, today: string) {
+  if (token === 'today' || token === '0') return today
+  if (token === '-1' || token === 'yday' || token === 'yesterday') {
+    const d = new Date(`${today}T00:00:00`)
+    d.setDate(d.getDate() - 1)
+    return getLocalIsoDate(d)
+  }
+  const m = token.match(/^(\d{2})-(\d{2})-(\d{4})$/)
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`
+  return token
+}

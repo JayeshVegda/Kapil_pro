@@ -52,6 +52,8 @@ function NewBillPage() {
   const [rows, setRows] = useState<BillItemRow[]>([{ itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
   const [statusText, setStatusText] = useState('')
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+  const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
+  const [quickCommandInput, setQuickCommandInput] = useState('')
   const { marketRate, refreshMarketRate } = useMarketRate()
   const billNoInitializedRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
@@ -247,6 +249,8 @@ function NewBillPage() {
     setLrInput('')
     setLrList([])
     setBillNo((prev) => prev + 1)
+    setIsQuickEntryOpen(false)
+    setQuickCommandInput('')
   }
 
   function addLrChip() {
@@ -288,6 +292,28 @@ function NewBillPage() {
     if (!validateBeforePreview()) return
     setStatusText('')
     setIsPreviewOpen(true)
+  }
+
+  function applyQuickEntry() {
+    const parsed = parseQuickCommandLine(quickCommandInput, customersQuery.data ?? [], itemsQuery.data ?? [], today, mktRate)
+    if (!parsed.ok) {
+      setStatusText(parsed.error)
+      return
+    }
+    setCustomerId(parsed.customer.id)
+    setDate(parsed.date)
+    setTransport(parsed.transport)
+    setGstRate(parsed.gstRate)
+    setRows([
+      {
+        itemName: parsed.item.name,
+        qty: parsed.qtyKg,
+        rate: parsed.rate,
+        manualRateEdited: true,
+      },
+    ])
+    setStatusText(`Quick Entry applied (${parsed.qtyHint})`)
+    setIsQuickEntryOpen(false)
   }
 
   async function confirmAndSave() {
@@ -380,6 +406,17 @@ function NewBillPage() {
       }),
     )
   }, [mktRate, itemsQuery.data])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.altKey && event.key.toLowerCase() === 'b') {
+        event.preventDefault()
+        setIsQuickEntryOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
@@ -775,6 +812,43 @@ function NewBillPage() {
           </div>
         </div>
       )}
+      {isQuickEntryOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h3 className="text-base font-semibold text-slate-900">Bill Command (Alt + B)</h3>
+              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickEntryOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="space-y-2 px-4 py-4">
+              <input
+                autoFocus
+                className={inputClass}
+                value={quickCommandInput}
+                onChange={(e) => setQuickCommandInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    applyQuickEntry()
+                  }
+                }}
+                placeholder='party [item] qty [rate=auto] [gst] [date=today|-1|DD-MM-YYYY] [+t 2000] (default item: Spindle (8.5.Gm))'
+              />
+              <p className="text-xs text-slate-500">Qty rule: if qty is 50 or less it is treated as bags, else treated as kg.</p>
+              <p className="text-xs text-slate-500">Examples: `sambhu 10` | `sambhu spindle 10 gst +t 2000` | `sambhu tapper 620 790 -1`</p>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsQuickEntryOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" onClick={applyQuickEntry}>
+                Apply to Bill Form
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -799,3 +873,94 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 const inputClass =
   'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+
+function parseQuickCommandLine(
+  input: string,
+  customers: Array<{ id: string; name: string }>,
+  items: Array<{ id: string; name: string; defaultRate: number }>,
+  today: string,
+  mktRate: number,
+):
+  | {
+      ok: true
+      customer: { id: string; name: string }
+      item: { id: string; name: string; defaultRate: number }
+      qtyKg: number
+      qtyHint: string
+      rate: number
+      gstRate: number
+      date: string
+      transport: number
+    }
+  | { ok: false; error: string } {
+  const raw = input.trim()
+  if (!raw) return { ok: false, error: 'Quick command is empty' }
+  const tokens = raw.split(/\s+/).filter(Boolean)
+  if (tokens.length < 2) return { ok: false, error: 'Use: party [item] qty [rate] [gst] [date] [+t amount]' }
+
+  const customer = resolveByName(tokens[0], customers)
+  if (!customer) return { ok: false, error: `Party not found: ${tokens[0]}` }
+
+  let qtyIndex = -1
+  for (let i = 1; i < tokens.length; i += 1) {
+    if (Number.isFinite(Number(tokens[i])) && Number(tokens[i]) > 0) {
+      qtyIndex = i
+      break
+    }
+  }
+  if (qtyIndex < 0) return { ok: false, error: 'Quantity missing in command' }
+  const qtyRaw = Number(tokens[qtyIndex])
+  const qtyKg = qtyRaw <= 50 ? qtyRaw * 50 : qtyRaw
+  const qtyHint = qtyRaw <= 50 ? `${Math.round(qtyRaw)} bags` : `${Math.round(qtyRaw)} kg`
+
+  const itemToken = tokens.slice(1, qtyIndex).join(' ').trim()
+  const defaultItemName = 'Spindle (8.5.Gm)'
+  const fallbackItem = items.find((item) => item.name.toLowerCase() === defaultItemName.toLowerCase()) ?? items[0]
+  const item = itemToken ? resolveByName(itemToken, items) : fallbackItem
+  if (!item) return { ok: false, error: 'Item list is empty' }
+
+  let rate = item.defaultRate + mktRate
+  let gstRate = 0
+  let date = today
+  let transport = 0
+  for (let i = qtyIndex + 1; i < tokens.length; i += 1) {
+    const token = tokens[i].toLowerCase()
+    if (Number.isFinite(Number(token)) && Number(token) > 0) {
+      rate = Number(token)
+      continue
+    }
+    if (token === 'gst' || token === 'm') {
+      gstRate = 18
+      continue
+    }
+    if ((token === '+t' || token === '+transport') && i + 1 < tokens.length) {
+      transport = Number(tokens[i + 1]) || transport
+      i += 1
+      continue
+    }
+    date = parseQuickDateToken(token, today)
+  }
+
+  return { ok: true, customer, item, qtyKg, qtyHint, rate, gstRate, date, transport }
+}
+
+function resolveByName<T extends { name: string }>(token: string, records: T[]) {
+  const exact = records.find((record) => record.name.toLowerCase() === token.toLowerCase())
+  if (exact) return exact
+  const fuzzy = records.find((record) => record.name.toLowerCase().includes(token.toLowerCase()))
+  return fuzzy ?? null
+}
+
+function parseQuickDateToken(value: string, today: string) {
+  const token = value.trim().toLowerCase()
+  if (!token) return today
+  if (token === 'today' || token === '0') return today
+  if (token === '-1' || token === 'yday' || token === 'yesterday') {
+    const d = new Date(`${today}T00:00:00`)
+    d.setDate(d.getDate() - 1)
+    return getLocalIsoDate(d)
+  }
+  const m = token.match(/^(\d{2})-(\d{2})-(\d{4})$/)
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`
+  return token
+}
