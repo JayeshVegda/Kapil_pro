@@ -1,0 +1,200 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,'Inter',ui-sans-serif,sans-serif}
+.shell{display:flex;height:670px;border-radius:10px;overflow:hidden}
+.sidebar{width:210px;flex-shrink:0;background:#1E2A3B;display:flex;flex-direction:column}
+.logo-area{padding:16px 16px 14px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;gap:10px}
+.logo-mark{width:30px;height:30px;background:#3B82F6;border-radius:7px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:700;flex-shrink:0}
+.logo-name{font-size:13px;font-weight:600;color:#F1F5F9;letter-spacing:-0.2px;line-height:1.2}
+.logo-sub{font-size:10.5px;color:#64748B;margin-top:1px}
+.sb-actions{padding:12px 10px 10px;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;gap:5px}
+.btn-p{background:#3B82F6;color:#fff;border:none;border-radius:6px;padding:0 12px;height:31px;font-size:12px;font-weight:500;cursor:pointer;text-align:left}
+.btn-p:hover{background:#2563EB}
+.btn-s{background:rgba(255,255,255,0.06);color:#CBD5E1;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:0 12px;height:31px;font-size:12px;cursor:pointer;text-align:left}
+.btn-s:hover{background:rgba(255,255,255,0.1)}
+.nav-area{padding:10px 8px;flex:1;overflow:hidden}
+.ngl{font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:#475569;padding:0 8px;margin-bottom:3px;margin-top:14px}
+.ngl:first-child{margin-top:2px}
+.ni{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:5px;font-size:12px;color:#94A3B8;cursor:pointer;margin-bottom:1px}
+.ni:hover{background:rgba(255,255,255,0.07);color:#E2E8F0}
+.ni.active{background:rgba(59,130,246,0.18);color:#93C5FD;font-weight:500}
+.ni-dot{width:4px;height:4px;border-radius:50%;background:#334155;flex-shrink:0}
+.ni.active .ni-dot{background:#3B82F6}
+.sb-foot{padding:10px 14px;border-top:1px solid rgba(255,255,255,0.06);font-size:10px;color:#475569}
+.main{flex:1;overflow-y:auto;display:flex;flex-direction:column;min-width:0;background:#F1F5F9}
+.topbar{background:#fff;border-bottom:1px solid #E2E8F0;padding:12px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.page-title{font-size:15px;font-weight:600;color:#0F172A;letter-spacing:-0.3px}
+.page-sub{font-size:11px;color:#94A3B8;margin-top:2px}
+.tb-right{display:flex;align-items:center;gap:8px}
+.sync-row{display:flex;align-items:center;gap:5px;font-size:11px;color:#94A3B8}
+.sdot{width:6px;height:6px;border-radius:50%;background:#22C55E;flex-shrink:0}
+.tbtn{background:#fff;color:#475569;border:1px solid #E2E8F0;border-radius:5px;padding:0 10px;height:27px;font-size:11px;cursor:pointer}
+.tbtn:hover{background:#F8FAFC}
+.content{padding:18px 20px;flex:1}
+
+.stats-grid{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:8px;margin-bottom:8px}
+.stat-hero{background:#1E40AF;border-radius:8px;padding:15px 17px}
+.sh-l{font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.09em;color:rgba(219,234,254,0.5);margin-bottom:5px}
+.sh-v{font-size:21px;font-weight:700;color:#fff;letter-spacing:-0.6px;font-variant-numeric:tabular-nums;line-height:1}
+.sh-s{font-size:11px;color:rgba(219,234,254,0.4);margin-top:5px}
+.stat-card{background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:13px 15px}
+.sc-l{font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.09em;color:#94A3B8;margin-bottom:5px}
+.sc-v{font-size:18px;font-weight:700;color:#0F172A;letter-spacing:-0.4px;font-variant-numeric:tabular-nums;line-height:1}
+.sc-s{font-size:11px;color:#94A3B8;margin-top:4px}
+
+.mini-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.mini-c{background:#fff;border:1px solid #E2E8F0;border-radius:7px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between}
+.ml{font-size:11px;color:#94A3B8}
+.mv{font-size:14px;font-weight:700;color:#0F172A;letter-spacing:-0.3px;font-variant-numeric:tabular-nums}
+
+.sec{background:#fff;border:1px solid #E2E8F0;border-radius:8px;margin-bottom:8px;overflow:hidden}
+.sec-head{padding:11px 16px;border-bottom:1px solid #F1F5F9;display:flex;align-items:center;justify-content:space-between}
+.sec-title{font-size:13px;font-weight:600;color:#0F172A;letter-spacing:-0.2px}
+.filters{display:flex;gap:5px}
+.fsel{font-size:11px;color:#64748B;border:1px solid #E2E8F0;border-radius:5px;padding:3px 7px;background:#F8FAFC;cursor:pointer;outline:none}
+
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+th{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#94A3B8;padding:7px 15px;text-align:left;background:#F8FAFC;border-bottom:1px solid #F1F5F9}
+th.r{text-align:right}
+td{font-size:12.5px;color:#0F172A;padding:9px 15px;border-bottom:1px solid #F1F5F9;vertical-align:middle}
+td.r{text-align:right;font-variant-numeric:tabular-nums}
+td.dim{color:#94A3B8;font-size:12px}
+tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:#F8FAFC;cursor:pointer}
+tbody tr.ov td{background:#FFF8F8}
+tbody tr.ov:hover td{background:#FFF1F1}
+.ra{font-size:11px;color:#CBD5E1;opacity:0;transition:opacity 0.1s}
+tbody tr:hover .ra{opacity:1}
+.bn{font-weight:600;font-size:12.5px;color:#1E40AF;font-variant-numeric:tabular-nums}
+
+.badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:10.5px;font-weight:500}
+.bu{background:#FEF9C3;color:#854D0E}
+.bov{background:#FEE2E2;color:#991B1B}
+.bbk{background:#DBEAFE;color:#1E40AF}
+.bca{background:#DCFCE7;color:#166534}
+</style>
+
+<div class="shell">
+  <div class="sidebar">
+    <div class="logo-area">
+      <div class="logo-mark">K</div>
+      <div>
+        <div class="logo-name">Kapil Products</div>
+        <div class="logo-sub">Billing & Ledger</div>
+      </div>
+    </div>
+    <div class="sb-actions">
+      <button class="btn-p">+ New bill</button>
+      <button class="btn-s">₹ Record payment</button>
+    </div>
+    <div class="nav-area">
+      <div class="ngl">Main</div>
+      <div class="ni active"><span class="ni-dot"></span>Dashboard</div>
+      <div class="ni"><span class="ni-dot"></span>New bill</div>
+      <div class="ni"><span class="ni-dot"></span>New payment</div>
+      <div class="ngl">View</div>
+      <div class="ni"><span class="ni-dot"></span>Print bill</div>
+      <div class="ni"><span class="ni-dot"></span>Ledger</div>
+      <div class="ni"><span class="ni-dot"></span>Transactions</div>
+      <div class="ni"><span class="ni-dot"></span>Monthly report</div>
+      <div class="ngl">Setup</div>
+      <div class="ni"><span class="ni-dot"></span>Customers</div>
+      <div class="ni"><span class="ni-dot"></span>Items</div>
+      <div class="ni"><span class="ni-dot"></span>Backup</div>
+    </div>
+    <div class="sb-foot">v2 · PocketBase</div>
+  </div>
+
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <div class="page-title">Dashboard</div>
+        <div class="page-sub">Saturday, 25 April 2026</div>
+      </div>
+      <div class="tb-right">
+        <div class="sync-row"><div class="sdot"></div>Synced 4:35 pm</div>
+        <button class="tbtn">↻ Refresh</button>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="stats-grid">
+        <div class="stat-hero">
+          <div class="sh-l">Outstanding balance</div>
+          <div class="sh-v">₹38,16,203</div>
+          <div class="sh-s">Across all customers</div>
+        </div>
+        <div class="stat-card">
+          <div class="sc-l">Total sales</div>
+          <div class="sc-v">₹32,63,203</div>
+          <div class="sc-s">This month</div>
+        </div>
+        <div class="stat-card">
+          <div class="sc-l">Received</div>
+          <div class="sc-v">₹8,22,000</div>
+          <div class="sc-s">This month</div>
+        </div>
+        <div class="stat-card">
+          <div class="sc-l">Total bills</div>
+          <div class="sc-v">26</div>
+          <div class="sc-s">This month</div>
+        </div>
+      </div>
+
+      <div class="mini-row">
+        <div class="mini-c"><span class="ml">Today's sales</span><span class="mv">₹2,12,020</span></div>
+        <div class="mini-c"><span class="ml">Today's collection</span><span class="mv" style="color:#CBD5E1">₹0</span></div>
+        <div class="mini-c"><span class="ml">Net revenue</span><span class="mv">₹13,54,172</span></div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-head">
+          <div class="sec-title">Recent bills</div>
+          <div class="filters">
+            <select class="fsel"><option>This month</option><option>Last month</option></select>
+            <select class="fsel"><option>All customers</option><option>Diwan Enterprise</option></select>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:88px">Bill no</th>
+              <th style="width:76px">Date</th>
+              <th>Customer</th>
+              <th class="r" style="width:108px">Amount</th>
+              <th style="width:80px">Status</th>
+              <th style="width:46px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="bn">51-026</td><td class="dim">27/04/26</td><td>Mehta Metals</td><td class="r">₹67,500</td><td><span class="badge bu">Unpaid</span></td><td class="r"><span class="ra">Ledger</span></td></tr>
+            <tr><td class="bn">51-025</td><td class="dim">26/04/26</td><td>Diwan Enterprise</td><td class="r">₹1,75,145</td><td><span class="badge bu">Unpaid</span></td><td class="r"><span class="ra">Ledger</span></td></tr>
+            <tr><td class="bn">51-024</td><td class="dim">25/04/26</td><td>Aaleshbhai</td><td class="r">₹2,12,020</td><td><span class="badge bu">Unpaid</span></td><td class="r"><span class="ra">Ledger</span></td></tr>
+            <tr><td class="bn">51-023</td><td class="dim">24/04/26</td><td>D.E.</td><td class="r">₹1,89,393</td><td><span class="badge bu">Unpaid</span></td><td class="r"><span class="ra">Ledger</span></td></tr>
+            <tr class="ov"><td class="bn">51-020</td><td class="dim">16/04/26</td><td>Diwan Enterprise</td><td class="r" style="color:#991B1B;font-weight:700">₹1,05,374</td><td><span class="badge bov">Overdue</span></td><td class="r"><span class="ra">Ledger</span></td></tr>
+            <tr class="ov"><td class="bn">51-019</td><td class="dim">12/04/26</td><td>Shree Brass Works</td><td class="r" style="color:#991B1B;font-weight:700">₹1,03,700</td><td><span class="badge bov">Overdue</span></td><td class="r"><span class="ra">Ledger</span></td></tr>
+            <tr class="ov"><td class="bn">51-018</td><td class="dim">07/04/26</td><td>Mehta Metals</td><td class="r" style="color:#991B1B;font-weight:700">₹1,11,350</td><td><span class="badge bov">Overdue</span></td><td class="r"><span class="ra">Ledger</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="sec">
+        <div class="sec-head">
+          <div class="sec-title">Recent payments</div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:78px">Date</th>
+              <th>Customer</th>
+              <th style="width:68px">Mode</th>
+              <th class="r" style="width:108px">Amount</th>
+              <th style="width:130px">Note</th>
+              <th style="width:46px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="dim">22/04/26</td><td>Kiran Traders</td><td><span class="badge bbk">Bank</span></td><td class="r">₹5,000</td><td class="dim">Small transfer</td><td class="r"><span class="ra">Ledger</span></td></tr>
+            <tr><td class="dim">21/04/26</td><td>Patel Industries</td><td><span class="badge bca">Cash</span></td><td class="r">₹10,000</td><td class="dim">Part settlement</td><td class="r"><span class="ra">Ledger</span></td></tr>
+            <tr><td class="dim">18/04/26</td><td>Shree Brass Works</td><td><span class="badge bbk">Bank</span></td><td class="r">₹22,000</td><td class="dim">IMPS</td><td class="r"><span class="ra">Ledger</span></td></tr>
+            <tr><td class="dim">16/04/26</td><td>Diwan Enterprise</td><td><span class="badge bbk">Bank</span></td><td class="r">

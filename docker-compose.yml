@@ -1,0 +1,24 @@
+services:
+  billing-pocketbase:
+    image: ghcr.io/muchobien/pocketbase:latest
+    container_name: kapil-billing-pocketbase
+    restart: unless-stopped
+    command: serve --http=0.0.0.0:8090 --dir=/pb_data
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./pb_data:/pb_data
+
+  billing-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: billing-billing-web
+    container_name: kapil-billing-web
+    restart: unless-stopped
+    depends_on:
+      - billing-pocketbase
+    ports:
+      - "8088:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

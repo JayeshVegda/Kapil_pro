@@ -1,0 +1,10 @@
+Date,Type,Amount,Book No (optional),Bill No (optional),Note
+2026-01-08,Transport Loading,3200,51,2,Truck helper charges
+2026-01-29,Office Expense,1800,,,Stationery and print
+2026-02-11,Market Travel,2500,,,Jamnagar visit
+2026-02-19,Transport Claim,4100,51,9,Freight paid
+2026-03-05,Repair,3600,,,Machine servicing
+2026-03-22,Tea & Snacks,950,,,Staff daily
+2026-04-03,Internet,1200,,,Monthly internet
+2026-04-15,Transport Claim,3900,51,20,Outward delivery
+2026-04-22,Misc,1400,,,Packing material
