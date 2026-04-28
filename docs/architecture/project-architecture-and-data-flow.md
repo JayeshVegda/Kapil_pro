@@ -38,6 +38,15 @@ Main collections used by app:
 - `bill_items`: bill lines (`bill`, `item_name`, `qty`, `rate`, `amount`, `bags`)
 - `payments`: payment entries (`customer`, `date`, `amount`, `mode`, `note`)
 
+Current operational schema notes:
+
+- `bills` and `payments` include `created` and `updated` fields and these are consumed by in-memory sort tie-breakers.
+- `bills` includes persisted `status` (`pending`, `partial`, `paid`) for dashboard/status views.
+- Indexes currently configured through PocketBase admin API:
+  - `bills(date)`, `bills(customer)`
+  - `payments(date)`, `payments(customer)`
+  - `bill_items(bill)`
+
 ## Layer Responsibilities
 
 ### Route Layer (`src/routes`)
@@ -75,6 +84,21 @@ Domain modules provide reusable pure business logic:
 
 This is the preferred location for calculations requiring consistency across pages.
 
+### Date Semantics and Balance Engine (Mandatory)
+
+The project has two date fields with different roles:
+
+- **Business date** (`date`): accounting meaning selected by user.
+- **Record timestamp** (`created`): actual write time in PocketBase.
+
+Permanent rules:
+
+1. Sort by business date first, then created timestamp, then record id.
+2. Use range-based filtering (`<= asOfDate`) for financial data inclusion.
+3. Never duplicate outstanding formulas in pages/routes.
+4. Use `computeCustomerOutstanding()` in `src/domain/records.ts` as the single outstanding engine.
+5. After data mutations, invalidate all dependent query keys immediately; local reconciliation is allowed to prevent stale UI while refetch is pending.
+
 ## End-to-End Data Flow
 
 ### Bill Creation Flow
@@ -90,7 +114,17 @@ This is the preferred location for calculations requiring consistency across pag
 1. Route loads customer ledger context
 2. Domain allocation preview computes oldest-first settlement
 3. Save writes payment record
-4. Relevant queries are invalidated
+4. `computeBillStatuses()` recalculates and persists status for all bills of that customer
+5. Relevant queries are invalidated
+
+### Bill Status Engine
+
+- Single source: `src/domain/bills.ts` (`computeBillStatuses`)
+- Settlement order:
+  1. payments sorted by business date then created timestamp (ascending)
+  2. opening balance settled first
+  3. remaining payments applied to bills in chronological order
+- Result per bill: `pending`, `partial`, `paid`
 
 ### Company Report Flow
 
@@ -153,7 +187,7 @@ Common conventions used across screens:
 Recommended next improvements:
 
 1. Add transactional uniqueness enforcement for bill numbering at backend level
-2. Consolidate shared balance/aging calculations into a single domain service
+2. Keep all balance/aging changes centralized in `computeCustomerOutstanding()` only
 3. Add integration tests for:
    - cross-page consistency (dashboard vs ledger vs company)
    - backup validator edge cases

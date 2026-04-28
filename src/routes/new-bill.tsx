@@ -4,12 +4,16 @@ import html2canvas from 'html2canvas'
 import { Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
+import { toUserMessage } from '@/app/errors'
+import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { saveBillWithItems } from '@/data/bills'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billing-calculations'
+import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
 import { useMarketRate } from '@/domain/market-rate'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInQty, formatInrInteger, parseNonNegativeNumber, parsePositiveIntInput } from '@/lib/inr-format'
+import { filterRankedNameMatches, findBestNameMatch, normalizeSearchText } from '@/lib/search'
 
 export const Route = createFileRoute('/new-bill')({
   component: NewBillPage,
@@ -23,6 +27,14 @@ type AutoBalanceContext = { previousBalanceDate: string; previousBalanceAmount: 
 type PBRecord = Record<string, unknown> & { id: string }
 const num = (v: unknown) => (Number.isFinite(Number(v ?? 0)) ? Number(v) : 0)
 const datePart = (v: unknown) => String(v ?? '').slice(0, 10)
+const toTs = (v: unknown) => {
+  const ts = new Date(String(v ?? '')).getTime()
+  return Number.isFinite(ts) ? ts : 0
+}
+const bagsFromQtyKg = (qtyKg: number) => {
+  if (!(qtyKg > 0)) return 0
+  return Math.round(qtyKg / 50)
+}
 const COMPANY_NAME = 'Kapil Trading Co.'
 const submitRowSchema = z.object({
   itemName: z.string().trim().min(1),
@@ -54,7 +66,7 @@ function NewBillPage() {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
   const [quickCommandInput, setQuickCommandInput] = useState('')
-  const { marketRate, refreshMarketRate } = useMarketRate()
+  const { marketRate, refreshMarketRate } = useMarketRate(date)
   const billNoInitializedRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
 
@@ -93,22 +105,34 @@ function NewBillPage() {
       const [billsRaw, billItemsRaw, paymentsRaw] = await Promise.all([
         pb.collection('bills').getFullList({
           sort: 'date,bill_no',
-          filter: `customer = "${customerId}" && date <= "${date}"`,
+          filter: `customer = "${customerId}"`,
         }),
         pb.collection('bill_items').getFullList(),
         pb.collection('payments').getFullList({
           sort: 'date',
-          filter: `customer = "${customerId}" && date <= "${date}"`,
+          filter: `customer = "${customerId}"`,
         }),
       ])
       const customerRecord = await pb.collection('customers').getOne(customerId)
 
-      const bills = billsRaw as PBRecord[]
+      const bills = (billsRaw as PBRecord[])
+        .filter((bill) => datePart(bill.date) <= date)
+        .sort((a, b) => {
+          const d = datePart(a.date).localeCompare(datePart(b.date))
+          if (d !== 0) return d
+          const c = toTs(a.created) - toTs(b.created)
+          if (c !== 0) return c
+          return String(a.id).localeCompare(String(b.id))
+        })
       const billItems = billItemsRaw as PBRecord[]
-      const payments = (paymentsRaw as PBRecord[]).map((payment) => ({
-        date: datePart(payment.date),
-        amount: num(payment.amount),
-      }))
+      const payments = (paymentsRaw as PBRecord[])
+        .filter((payment) => datePart(payment.date) <= date)
+        .map((payment) => ({
+          date: datePart(payment.date),
+          amount: num(payment.amount),
+          createdTs: toTs(payment.created),
+          id: String(payment.id),
+        }))
       const openingBalance = num(customerRecord.opening_balance)
 
       const priorBills = bills.filter((bill) => datePart(bill.date) < date)
@@ -125,15 +149,33 @@ function NewBillPage() {
 
       const lastBill = priorBills[priorBills.length - 1]
       const lastBillDate = datePart(lastBill.date)
+      const lastBillCreatedTs = toTs(lastBill.created)
       const billTotals = priorBills.map((bill) => ({
         date: datePart(bill.date),
         total: calculateBillTotalFromBase(itemTotalByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate)),
       }))
 
       const billedUntilLastBill = billTotals.reduce((sum, entry) => sum + entry.total, 0)
-      const paidUntilLastBill = payments.filter((entry) => entry.date <= lastBillDate).reduce((sum, entry) => sum + entry.amount, 0)
-      const previousBalanceAmount = openingBalance + billedUntilLastBill - paidUntilLastBill
-      const credits = payments.filter((entry) => entry.date > lastBillDate && entry.date <= date && entry.amount > 0)
+      const paidUntilLastBill = payments
+        .filter((entry) => {
+          if (entry.date < lastBillDate) return true
+          if (entry.date > lastBillDate) return false
+          // Same bill day: include only payments entered up to last bill creation time.
+          if (entry.createdTs > 0 && lastBillCreatedTs > 0) return entry.createdTs <= lastBillCreatedTs
+          return true
+        })
+        .reduce((sum, entry) => sum + entry.amount, 0)
+      const previousBalanceAmount = computeNetBalance(openingBalance, billedUntilLastBill, paidUntilLastBill)
+      const credits = payments.filter(
+        (entry) =>
+          entry.amount > 0 &&
+          // Credit should be after last bill cutoff.
+          (entry.date > lastBillDate ||
+            (entry.date === lastBillDate &&
+              ((entry.createdTs > 0 && lastBillCreatedTs > 0 && entry.createdTs > lastBillCreatedTs) ||
+                (entry.createdTs === 0 || lastBillCreatedTs === 0)))) &&
+          isOnOrBeforeDay(entry.date, date),
+      )
 
       return {
         previousBalanceDate: lastBillDate || date,
@@ -177,7 +219,7 @@ function NewBillPage() {
       resetForm()
     },
     onError: (err) => {
-      setStatusText(err instanceof Error ? err.message : 'Failed to save bill')
+      setStatusText(toUserMessage(err))
     },
   })
 
@@ -228,13 +270,13 @@ function NewBillPage() {
       },
       ...(validCredits.length > 0
         ? validCredits.map((entry) => ({
-            particulars: `Cr [${formatFullDate(entry.date)}]`,
+            particulars: `Credited on ${formatFullDate(entry.date)}`,
             qty: '',
             rate: '-',
             amount: `${Math.round(entry.amount)}`,
             isMeta: true as const,
           }))
-        : [{ particulars: 'Cr [No credits in this period]', qty: '', rate: '-', amount: '0', isMeta: true as const }]),
+        : [{ particulars: 'No credited entries in this period', qty: '', rate: '-', amount: '0', isMeta: true as const }]),
     ],
     [mktRate, validRows, totals.transport, totals.gstAmount, gstRate, previousBalanceAmount, previousBalanceDate, validCredits],
   )
@@ -374,7 +416,7 @@ function NewBillPage() {
       `Bill Date: ${formatFullDate(date)}`,
       `Current Bill: ${formatInrInteger(totals.grandTotal)}`,
       `${previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'}: ${formatInrInteger(Math.abs(previousBalanceAmount))} (${previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)})`,
-      `Payments Adjusted: ${formatInrInteger(totalCredits)}`,
+      ...validCredits.map((entry) => `Credited on ${formatFullDate(entry.date)}: ${formatInrInteger(entry.amount)}`),
       `${payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}: ${formatInrInteger(Math.abs(payableAfterAdjustments))}`,
     ].join('\n')
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
@@ -431,7 +473,7 @@ function NewBillPage() {
             type="button"
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
             onClick={() => {
-              void refreshMarketRate().then((ok) => {
+              void refreshMarketRate({ targetDate: date }).then((ok) => {
                 if (ok) {
                   setStatusText('Market rate updated from RSS')
                 } else {
@@ -459,17 +501,19 @@ function NewBillPage() {
             <input className={inputClass} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
           <Field label="Customer">
-            <select className={inputClass} value={customerId} onChange={(e) => setCustomerId(e.target.value)} disabled={customersQuery.isLoading || customersQuery.isError}>
-              <option value="">Select customer...</option>
-              {customersQuery.isLoading && <option value="" disabled>Loading customers...</option>}
-              {customersQuery.isError && <option value="" disabled>Unable to load customers</option>}
-              {!customersQuery.isLoading && !customersQuery.isError && (customersQuery.data ?? []).length === 0 && <option value="" disabled>No customers found</option>}
-              {(customersQuery.data ?? []).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <SearchableCombobox
+              options={customersQuery.data ?? []}
+              value={customerId}
+              onChange={(nextId) => {
+                setCustomerId(nextId)
+                setStatusText('')
+              }}
+              inputClassName={inputClass}
+              placeholder={customersQuery.isLoading ? 'Loading customers...' : 'Search customer...'}
+              disabled={customersQuery.isLoading || customersQuery.isError}
+              emptyText="No matching customer found."
+              maxResults={25}
+            />
           </Field>
           <Field label="MKT Rate">
             <input className={inputClass} type="number" value={mktRate} onChange={(e) => setMktRate(parseNonNegativeNumber(e.target.value))} />
@@ -592,30 +636,29 @@ function NewBillPage() {
                 return (
                   <tr key={i} className="border-t border-slate-100">
                     <td className="px-3 py-2.5 align-middle">
-                      <select
+                      <input
                         className={inputClass}
+                        list={`bill-item-options-${i}`}
                         value={row.itemName}
                         disabled={itemsQuery.isLoading || itemsQuery.isError}
                         onChange={(e) => {
                           const itemName = e.target.value
-                          const selected = (itemsQuery.data ?? []).find((it) => it.name === itemName)
+                          const selected = findExactNameMatch(itemsQuery.data ?? [], itemName)
                           updateRow(i, {
                             itemName,
                             rate: selected ? selected.defaultRate + mktRate : row.rate,
-                            manualRateEdited: false,
+                            manualRateEdited: selected ? false : row.manualRateEdited,
                           })
                         }}
-                      >
-                        <option value="">Select item...</option>
-                        {itemsQuery.isLoading && <option value="" disabled>Loading items...</option>}
-                        {itemsQuery.isError && <option value="" disabled>Unable to load items</option>}
-                        {!itemsQuery.isLoading && !itemsQuery.isError && (itemsQuery.data ?? []).length === 0 && <option value="" disabled>No items found</option>}
-                        {(itemsQuery.data ?? []).map((it) => (
-                          <option key={it.id} value={it.name}>
-                            {it.name}
-                          </option>
-                        ))}
-                      </select>
+                        placeholder={itemsQuery.isLoading ? 'Loading items...' : 'Type to search item...'}
+                      />
+                      <datalist id={`bill-item-options-${i}`}>
+                        {filterRankedNameMatches(itemsQuery.data ?? [], row.itemName, (item) => item.name)
+                          .slice(0, 20)
+                          .map((item) => (
+                            <option key={item.id} value={item.name} />
+                          ))}
+                      </datalist>
                     </td>
                     <td className="px-3 py-2.5 align-middle">
                       <input
@@ -678,9 +721,11 @@ function NewBillPage() {
               <Metric label="Line items" value={formatInrInteger(totals.itemsTotal)} />
               <Metric label="Transport" value={formatInrInteger(transport)} />
               <Metric label="GST" value={formatInrInteger(totals.gstAmount)} />
-              <Metric label={previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'} value={formatInrInteger(Math.abs(previousBalanceAmount))} />
+              {previousBalanceAmount !== 0 && (
+                <Metric label={previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'} value={formatInrInteger(Math.abs(previousBalanceAmount))} />
+              )}
               <Metric label="Sub Total" value={formatInrInteger(subTotalBeforeCredits)} />
-              <Metric label="Credits" value={`- ${formatInrInteger(totalCredits)}`} />
+              <Metric label="Credited Entries" value={String(validCredits.length)} />
             </div>
             <div className="text-left lg:text-right">
               <p className="text-xs text-slate-400">{payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}</p>
@@ -756,14 +801,12 @@ function NewBillPage() {
                         </tr>
                       )
                     })}
-                    <tr>
-                      <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">Current Bill Total</td>
-                      <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[11px] font-semibold">{Math.round(totals.grandTotal).toLocaleString('en-IN')}</td>
-                    </tr>
-                    <tr>
-                      <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">Sub Total</td>
-                      <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[11px] font-semibold">{Math.round(subTotalBeforeCredits).toLocaleString('en-IN')}</td>
-                    </tr>
+                    {totals.grandTotal !== 0 && (
+                      <tr>
+                        <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">Current Bill Total</td>
+                        <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[11px] font-semibold">{Math.round(totals.grandTotal).toLocaleString('en-IN')}</td>
+                      </tr>
+                    )}
                     <tr>
                       <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">{payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}</td>
                       <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[12px] font-bold">{Math.round(Math.abs(payableAfterAdjustments)).toLocaleString('en-IN')}</td>
@@ -774,9 +817,16 @@ function NewBillPage() {
                 <div className="mt-2 flex items-start justify-between">
                   <div className="space-y-1">
                     <p>Weight : <span className="font-semibold">{formatInQty(totals.totalQty, 'kg')}</span></p>
-                    <p>Bags : <span className="font-semibold">{validRows.length || 0}</span></p>
-                    <p>{previousBalanceAmount >= 0 ? 'Prev Bal' : 'Prev Advance'} [{previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)}] : <span className="font-semibold">{Math.round(Math.abs(previousBalanceAmount)).toLocaleString('en-IN')}</span></p>
-                    <p>Total Credits : <span className="font-semibold">-{Math.round(totalCredits).toLocaleString('en-IN')}</span></p>
+                    <p>Bags : <span className="font-semibold">{bagsFromQtyKg(totals.totalQty)}</span></p>
+                    {previousBalanceAmount !== 0 && (
+                      <p>{previousBalanceAmount >= 0 ? 'Prev Bal' : 'Prev Advance'} [{previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)}] : <span className="font-semibold">{Math.round(Math.abs(previousBalanceAmount)).toLocaleString('en-IN')}</span></p>
+                    )}
+                    {validCredits.map((entry, index) => (
+                      <p key={`${entry.date}-${entry.amount}-${index}`}>
+                        Credited on {formatFullDate(entry.date)} : <span className="font-semibold">-{Math.round(entry.amount).toLocaleString('en-IN')}</span>
+                      </p>
+                    ))}
+                    {validCredits.length === 0 && <p>No credited entries in this period</p>}
                     <p className="mt-2 inline-block rounded-md border border-slate-400 px-2 py-1">
                       LR No. <span className="font-semibold">{lrList.length > 0 ? lrList.join(', ') : '-'}</span>
                     </p>
@@ -945,10 +995,13 @@ function parseQuickCommandLine(
 }
 
 function resolveByName<T extends { name: string }>(token: string, records: T[]) {
-  const exact = records.find((record) => record.name.toLowerCase() === token.toLowerCase())
-  if (exact) return exact
-  const fuzzy = records.find((record) => record.name.toLowerCase().includes(token.toLowerCase()))
-  return fuzzy ?? null
+  return findBestNameMatch(records, token, (record) => record.name) ?? null
+}
+
+function findExactNameMatch<T extends { name: string }>(records: T[], value: string) {
+  const normalized = normalizeSearchText(value)
+  if (!normalized) return undefined
+  return records.find((record) => normalizeSearchText(record.name) === normalized)
 }
 
 function parseQuickDateToken(value: string, today: string) {

@@ -13,7 +13,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
             staleTime: 60_000,
             refetchOnWindowFocus: false,
             refetchOnReconnect: false,
-            refetchOnMount: false,
+            // If data is stale/invalidated, refresh when user opens that page.
+            refetchOnMount: true,
             retry: 1,
           },
         },

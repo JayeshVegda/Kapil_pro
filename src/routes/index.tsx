@@ -56,7 +56,8 @@ function DashboardPage() {
         <div className="rounded-xl bg-blue-700 p-5 text-white shadow-sm xl:col-span-4">
           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-blue-100/85">Outstanding Balance</p>
           <p className="mt-3 font-mono text-4xl font-bold tracking-tight">{fmtMoneyCompact(data.kpis.outstanding)}</p>
-          <p className="mt-3 text-sm text-blue-100/80">vs last month: <span className="font-semibold text-white">{trendText(data.kpis.salesVsLastMonth)}</span></p>
+          <p className="mt-2 text-[11px] text-blue-100/80">Includes opening balances + billed - collected</p>
+          <p className="mt-2 text-sm text-blue-100/80">vs last month: <span className="font-semibold text-white">{trendText(data.kpis.salesVsLastMonth)}</span></p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm xl:col-span-4">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">This Month Performance</p>
@@ -113,11 +114,11 @@ function DashboardPage() {
                     tabIndex={0}
                     aria-label={`Open bill ${bill.bookNo}/${bill.billNo}`}
                   >
-                    <td className="px-4 py-2.5 text-sm text-slate-600">{formatFullDate(bill.date)}</td>
+                    <td className="px-4 py-2.5 text-sm text-slate-600">{formatFullDate(bill.businessDate ?? bill.date ?? '')}</td>
                     <td className="px-4 py-2.5 text-sm font-medium text-slate-800">{bill.customerName}</td>
                     <td className="px-4 py-2.5 text-sm text-slate-600">{bill.bookNo}/{bill.billNo}</td>
                     <td className="px-4 py-2.5"><StatusBadge status={bill.status} /></td>
-                    <td className="px-4 py-2.5 text-right text-sm font-semibold text-slate-900">{fmtMoney(bill.total)}</td>
+                    <td className="px-4 py-2.5 text-right text-sm font-semibold text-slate-900">{fmtMoney(bill.total ?? 0)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -155,7 +156,7 @@ function DashboardPage() {
                     tabIndex={0}
                     aria-label={`Open payment from ${payment.customerName}`}
                   >
-                    <td className="px-4 py-2.5 text-sm text-slate-600">{formatFullDate(payment.date)}</td>
+                    <td className="px-4 py-2.5 text-sm text-slate-600">{formatFullDate(payment.businessDate ?? payment.date ?? '')}</td>
                     <td className="px-4 py-2.5 text-sm font-medium text-slate-800">{payment.customerName}</td>
                     <td className="px-4 py-2.5 text-sm text-slate-600"><span className="mr-2">{payment.mode}</span><StatusBadge status={payment.status} /></td>
                     <td className="px-4 py-2.5 text-right text-sm font-semibold text-slate-900">{fmtMoney(payment.amount)}</td>

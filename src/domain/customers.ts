@@ -1,10 +1,12 @@
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { computeNetBalance, splitBalance } from '@/domain/financial-math'
 
 export type CustomerRecord = {
   id: string
   name: string
   active: boolean
   openingBalance: number
+  openingBalanceDate?: string
   phone?: string
   gstin?: string
   address?: string
@@ -81,10 +83,8 @@ export function buildCustomerLedgerSummaries(params: {
     .map((customer) => {
       const billedTotal = billTotalByCustomer.get(customer.id) ?? 0
       const paidTotal = paymentTotalByCustomer.get(customer.id) ?? 0
-      const netBalance = customer.openingBalance + billedTotal - paidTotal
-      const dueAmount = netBalance > 0 ? netBalance : 0
-      const advanceAmount = netBalance < 0 ? Math.abs(netBalance) : 0
-      const balanceLabel: 'Due' | 'Advance' | 'Clear' = dueAmount > 0 ? 'Due' : advanceAmount > 0 ? 'Advance' : 'Clear'
+      const netBalance = computeNetBalance(customer.openingBalance, billedTotal, paidTotal)
+      const { dueAmount, advanceAmount, balanceLabel } = splitBalance(netBalance)
       return {
         customer,
         billedTotal,

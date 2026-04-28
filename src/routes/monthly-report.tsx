@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { loadDashboardCollections } from '@/data/dashboard'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { computeCustomerOutstanding, type CanonicalBillRecord, type CanonicalPaymentRecord } from '@/domain/records'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
@@ -62,6 +63,30 @@ function ReportPage() {
     const billItems = data.billItemsRaw
     const payments = data.paymentsRaw
     const customers = data.customersRaw
+    const canonicalBills: CanonicalBillRecord[] = bills.map((bill) => ({
+      id: bill.id,
+      businessDate: str(bill.date).slice(0, 10),
+      createdAt: str(bill.created),
+      customerId: str(bill.customer),
+      customerName: str(bill.customer_name),
+      bookNo: num(bill.book_no),
+      billNo: num(bill.bill_no),
+      total: 0,
+      mktRate: num(bill.mkt),
+      transport: num(bill.transport),
+      gstRate: num(bill.gst_rate),
+      lrNo: str(bill.lr_no),
+    }))
+    const canonicalPayments: CanonicalPaymentRecord[] = payments.map((payment) => ({
+      id: payment.id,
+      businessDate: str(payment.date).slice(0, 10),
+      createdAt: str(payment.created),
+      customerId: str(payment.customer),
+      customerName: str(payment.customer_name),
+      amount: num(payment.amount),
+      mode: str(payment.mode),
+      note: str(payment.note),
+    }))
 
     const itemSumByBill = new Map<string, number>()
     const itemBagsByBill = new Map<string, number>()
@@ -73,11 +98,13 @@ function ReportPage() {
 
     const customerNameById = new Map<string, string>()
     const openingByCustomer = new Map<string, number>()
+    const openingDateByCustomer = new Map<string, string>()
     let activeCustomers = 0
     for (const customer of customers) {
       const id = customer.id
       customerNameById.set(id, str(customer.name))
       openingByCustomer.set(id, num(customer.opening_balance))
+      openingDateByCustomer.set(id, str(customer.opening_balance_date).slice(0, 10))
       if (Boolean(customer.active)) activeCustomers += 1
     }
 
@@ -94,6 +121,7 @@ function ReportPage() {
 
     for (const [customerId, opening] of openingByCustomer.entries()) {
       customerOutstandingMap.set(customerId, opening)
+      customerLatestBillDate.set(customerId, openingDateByCustomer.get(customerId) ?? '')
     }
 
     for (const bill of bills) {
@@ -113,8 +141,6 @@ function ReportPage() {
       dailySalesMap.set(billDate, (dailySalesMap.get(billDate) ?? 0) + billTotal)
       dailyBagsMap.set(billDate, (dailyBagsMap.get(billDate) ?? 0) + (itemBagsByBill.get(bill.id) ?? 0))
       customerSalesMap.set(customerId, (customerSalesMap.get(customerId) ?? 0) + billTotal)
-      customerOutstandingMap.set(customerId, (customerOutstandingMap.get(customerId) ?? 0) + billTotal)
-
       const monthly = monthlyMap.get(billMonth) ?? { sales: 0, collections: 0 }
       monthly.sales += billTotal
       monthlyMap.set(billMonth, monthly)
@@ -126,14 +152,24 @@ function ReportPage() {
       const paymentDate = str(payment.date).slice(0, 10)
       if (!paymentDate || paymentDate > today) continue
       const amount = num(payment.amount)
-      const customerId = str(payment.customer)
       const paymentMonth = paymentDate.slice(0, 7)
       totalCollections += amount
-      customerOutstandingMap.set(customerId, (customerOutstandingMap.get(customerId) ?? 0) - amount)
-
       const monthly = monthlyMap.get(paymentMonth) ?? { sales: 0, collections: 0 }
       monthly.collections += amount
       monthlyMap.set(paymentMonth, monthly)
+    }
+
+    for (const [customerId, openingBalance] of openingByCustomer.entries()) {
+      const rollup = computeCustomerOutstanding({
+        openingBalance,
+        bills: canonicalBills.filter((bill) => bill.customerId === customerId).map((bill) => ({
+          ...bill,
+          total: calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, bill.transport ?? 0, bill.gstRate ?? 0),
+        })),
+        payments: canonicalPayments.filter((payment) => payment.customerId === customerId),
+        asOfDate: today,
+      })
+      customerOutstandingMap.set(customerId, rollup.netBalance)
     }
 
     const monthlyTrend = [...monthlyMap.entries()]

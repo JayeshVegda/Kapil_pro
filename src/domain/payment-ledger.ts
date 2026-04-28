@@ -1,18 +1,16 @@
-export type LedgerBill = {
-  id: string
-  date: string
-  billNo: number
+import { isOnOrBeforeDay } from '@/domain/financial-math'
+import { compareBusinessDateThenCreatedAsc, computeCustomerOutstanding, type CanonicalBillRecord, type CanonicalPaymentRecord } from '@/domain/records'
+
+export type LedgerBill = CanonicalBillRecord & {
+  date?: string
+  businessDate?: string
   bookNo: number
+  billNo: number
   total: number
   compactDetails?: string
 }
 
-export type LedgerPayment = {
-  id?: string
-  date: string
-  amount: number
-  mode?: string
-}
+export type LedgerPayment = CanonicalPaymentRecord & { date?: string }
 
 export type PaymentAllocationLine = {
   dueRef: string
@@ -25,6 +23,7 @@ export type PaymentAllocationLine = {
 
 export type PaymentPreview = {
   openingBalance: number
+  openingBalanceDate: string
   outstandingBeforePayment: number
   paymentApplied: number
   outstandingAfterPayment: number
@@ -38,29 +37,35 @@ const num = (value: unknown) => {
 }
 
 const byDateAndBill = (a: LedgerBill, b: LedgerBill) => {
-  const dateCmp = a.date.localeCompare(b.date)
+  const aDate = a.businessDate || a.date || ''
+  const bDate = b.businessDate || b.date || ''
+  const dateCmp = aDate.localeCompare(bDate)
   if (dateCmp !== 0) return dateCmp
+  const createdCmp = compareBusinessDateThenCreatedAsc(a, b)
+  if (createdCmp !== 0) return createdCmp
   if (a.billNo !== b.billNo) return a.billNo - b.billNo
   return a.bookNo - b.bookNo
 }
 
 export function buildPaymentPreview(params: {
   openingBalance: number
+  openingBalanceDate?: string
   bills: LedgerBill[]
   payments: LedgerPayment[]
   paymentAmount: number
   asOfDate: string
 }): PaymentPreview {
   const openingBalance = num(params.openingBalance)
+  const openingBalanceDate = String(params.openingBalanceDate ?? '').trim()
   const paymentAmount = Math.max(0, num(params.paymentAmount))
   const asOfDate = String(params.asOfDate ?? '')
 
   const bills = params.bills
-    .filter((bill) => bill.date <= asOfDate)
+    .filter((bill) => isOnOrBeforeDay(bill.businessDate || bill.date || '', asOfDate))
     .sort(byDateAndBill)
     .map((bill) => ({
       dueRef: `${bill.bookNo}/${bill.billNo}`,
-      dueDate: bill.date,
+      dueDate: bill.businessDate || bill.date || '',
       compactDetails: bill.compactDetails ?? '-',
       dueAmount: Math.max(0, num(bill.total)),
       remainingAmount: Math.max(0, num(bill.total)),
@@ -70,7 +75,7 @@ export function buildPaymentPreview(params: {
   if (openingBalance > 0) {
     dues.push({
       dueRef: 'Opening Balance',
-      dueDate: 'Opening',
+      dueDate: openingBalanceDate || 'Opening',
       compactDetails: 'Opening balance carry-forward',
       dueAmount: openingBalance,
       remainingAmount: openingBalance,
@@ -79,8 +84,8 @@ export function buildPaymentPreview(params: {
   dues.push(...bills)
 
   const payments = params.payments
-    .filter((payment) => payment.date <= asOfDate)
-    .sort((a, b) => a.date.localeCompare(b.date))
+    .filter((payment) => isOnOrBeforeDay(payment.businessDate || payment.date || '', asOfDate))
+    .sort(compareBusinessDateThenCreatedAsc)
 
   // First settle historical dues with historical payments.
   for (const payment of payments) {
@@ -94,8 +99,13 @@ export function buildPaymentPreview(params: {
     }
   }
 
-  const duesOutstandingBeforePayment = dues.reduce((sum, due) => sum + due.remainingAmount, 0)
-  const outstandingBeforePayment = openingBalance < 0 ? -Math.abs(openingBalance) + duesOutstandingBeforePayment : duesOutstandingBeforePayment
+  const canonicalOutstanding = computeCustomerOutstanding({
+    openingBalance,
+    bills: params.bills,
+    payments: params.payments,
+    asOfDate,
+  }).netBalance
+  const outstandingBeforePayment = canonicalOutstanding
   let remainingNewPayment = paymentAmount
   const lines: PaymentAllocationLine[] = dues
     .filter((due) => due.remainingAmount > 0)
@@ -118,6 +128,7 @@ export function buildPaymentPreview(params: {
 
   return {
     openingBalance,
+    openingBalanceDate,
     outstandingBeforePayment,
     paymentApplied,
     outstandingAfterPayment,

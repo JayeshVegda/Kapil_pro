@@ -1,4 +1,11 @@
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import {
+  compareBusinessDateThenCreatedAsc,
+  computeCustomerOutstanding,
+  type CanonicalBillRecord,
+  type CanonicalPaymentRecord,
+} from '@/domain/records'
+import { isOnOrBeforeDay } from '@/domain/financial-math'
 
 export type PartyEvent = {
   id: string
@@ -41,15 +48,7 @@ export type PartyKpis = {
   overdueParties: number
 }
 
-export type LedgerBill = {
-  id: string
-  customerId: string
-  date: string
-  bookNo: number
-  billNo: number
-  transport: number
-  gstRate: number
-}
+export type LedgerBill = CanonicalBillRecord & { date?: string }
 
 export type LedgerBillItem = {
   billId: string
@@ -58,19 +57,14 @@ export type LedgerBillItem = {
   bags: number
 }
 
-export type LedgerPayment = {
-  id: string
-  customerId: string
-  date: string
-  amount: number
-  mode: string
-}
+export type LedgerPayment = CanonicalPaymentRecord & { date?: string }
 
 export type LedgerCustomer = {
   id: string
   name: string
   active: boolean
   openingBalance: number
+  openingBalanceDate?: string
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000
@@ -102,25 +96,45 @@ export function buildPartyRows(params: {
 
   return params.customers
     .map((customer) => {
-      const bills = params.bills.filter((bill) => bill.customerId === customer.id && bill.date <= params.asOfDate)
-      const payments = params.payments.filter((payment) => payment.customerId === customer.id && payment.date <= params.asOfDate)
+      const bills = params.bills.filter(
+        (bill) => bill.customerId === customer.id && isOnOrBeforeDay(bill.businessDate ?? bill.date ?? '', params.asOfDate),
+      )
+      const payments = params.payments.filter(
+        (payment) =>
+          payment.customerId === customer.id && isOnOrBeforeDay(payment.businessDate ?? payment.date ?? '', params.asOfDate),
+      )
       const billCount = bills.length
       const totalItemAmount = bills.reduce((sum, bill) => sum + (itemSumByBill.get(bill.id) ?? 0), 0)
       const totalWeight = bills.reduce((sum, bill) => sum + (itemQtyByBill.get(bill.id) ?? 0), 0)
       const totalBags = bills.reduce((sum, bill) => sum + (itemBagsByBill.get(bill.id) ?? 0), 0)
-      const totalTransport = bills.reduce((sum, bill) => sum + bill.transport, 0)
-      const totalGst = bills.reduce((sum, bill) => sum + ((itemSumByBill.get(bill.id) ?? 0) * bill.gstRate) / 100, 0)
-      const billedTotal = bills.reduce((sum, bill) => sum + calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, bill.transport, bill.gstRate), 0)
+      const totalTransport = bills.reduce((sum, bill) => sum + (bill.transport ?? 0), 0)
+      const totalGst = bills.reduce((sum, bill) => sum + ((itemSumByBill.get(bill.id) ?? 0) * (bill.gstRate ?? 0)) / 100, 0)
+      const billedTotal = bills.reduce(
+        (sum, bill) => sum + calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, bill.transport ?? 0, bill.gstRate ?? 0),
+        0,
+      )
       const paidTotal = payments.reduce((sum, payment) => sum + payment.amount, 0)
       const averageSellingRate = totalWeight > 0 ? totalItemAmount / totalWeight : 0
       const averageSellingWeight = billCount > 0 ? totalWeight / billCount : 0
-      const netBalance = customer.openingBalance + billedTotal - paidTotal
+      const outstanding = computeCustomerOutstanding({
+        openingBalance: customer.openingBalance,
+        bills: bills.map((bill) => ({
+          ...bill,
+          total: calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, bill.transport ?? 0, bill.gstRate ?? 0),
+        })),
+        payments,
+        asOfDate: params.asOfDate,
+      })
+      const netBalance = outstanding.netBalance
       const dueAmount = netBalance > 0 ? netBalance : 0
       const advanceAmount = netBalance < 0 ? Math.abs(netBalance) : 0
-      const lastBillDate = bills.map((bill) => bill.date).sort().at(-1) ?? ''
-      const lastPaymentDate = payments.map((payment) => payment.date).sort().at(-1) ?? ''
+      const sortedBills = [...bills].sort(compareBusinessDateThenCreatedAsc)
+      const sortedPayments = [...payments].sort(compareBusinessDateThenCreatedAsc)
+      const lastBillDate = sortedBills.at(-1)?.businessDate ?? sortedBills.at(-1)?.date ?? ''
+      const lastPaymentDate = sortedPayments.at(-1)?.businessDate ?? sortedPayments.at(-1)?.date ?? ''
       const latestActivityDate = [lastBillDate, lastPaymentDate].filter(Boolean).sort().at(-1) ?? ''
-      const overdueDays = dueAmount > 0 ? daysBetween(lastBillDate || latestActivityDate, params.asOfDate) : 0
+      const baseDueDate = lastBillDate || latestActivityDate || customer.openingBalanceDate || ''
+      const overdueDays = dueAmount > 0 ? daysBetween(baseDueDate, params.asOfDate) : 0
       const status: PartyRow['status'] =
         dueAmount <= 0 ? (advanceAmount > 0 ? 'Advance' : 'Clear') : overdueDays >= params.overdueDaysThreshold ? 'Overdue' : 'Pending'
       return {
@@ -161,12 +175,14 @@ export function buildPartyKpis(rows: PartyRow[]): PartyKpis {
 
 export function buildPartyEvents(params: {
   openingBalance: number
-  bills: Array<{ id: string; date: string; bookNo: number; billNo: number; total: number }>
-  payments: Array<{ id: string; date: string; amount: number; mode: string }>
+  openingBalanceDate?: string
+  bills: Array<{ id: string; businessDate?: string; date?: string; createdAt?: string; bookNo: number; billNo: number; total: number }>
+  payments: Array<{ id: string; businessDate?: string; date?: string; createdAt?: string; amount: number; mode: string }>
 }): PartyEvent[] {
   const timeline: Array<{
     key: string
     date: string
+    createdAt: string
     sortOrder: number
     type: PartyEvent['type']
     details: string
@@ -176,7 +192,8 @@ export function buildPartyEvents(params: {
 
   timeline.push({
     key: 'opening-balance',
-    date: '',
+    date: String(params.openingBalanceDate ?? ''),
+    createdAt: '',
     sortOrder: -1,
     type: 'Opening',
     details: 'Opening Balance',
@@ -187,7 +204,8 @@ export function buildPartyEvents(params: {
   for (const bill of params.bills) {
     timeline.push({
       key: `bill-${bill.id}`,
-      date: bill.date,
+      date: bill.businessDate ?? bill.date ?? '',
+      createdAt: bill.createdAt ?? '',
       sortOrder: 1,
       type: 'Bill',
       details: `Bill ${bill.bookNo}/${bill.billNo}`,
@@ -199,7 +217,8 @@ export function buildPartyEvents(params: {
   for (const payment of params.payments) {
     timeline.push({
       key: `payment-${payment.id}`,
-      date: payment.date,
+      date: payment.businessDate ?? payment.date ?? '',
+      createdAt: payment.createdAt ?? '',
       sortOrder: 2,
       type: 'Payment',
       details: `Payment (${payment.mode || 'Bank'})`,
@@ -210,6 +229,8 @@ export function buildPartyEvents(params: {
 
   timeline.sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date)
+    const createdDiff = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    if (Number.isFinite(createdDiff) && createdDiff !== 0) return createdDiff
     return a.sortOrder - b.sortOrder
   })
 

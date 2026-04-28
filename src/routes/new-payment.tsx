@@ -2,11 +2,18 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
-import { loadCustomerPaymentLedger, loadPaymentCustomers, savePayment } from '@/data/payments'
-import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
+import { toUserMessage } from '@/app/errors'
+import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
+import { SearchableCombobox } from '@/components/ui/searchable-combobox'
+import { ensurePaymentPersisted, loadCustomerPaymentLedger, loadPaymentCustomers, savePayment, type SavedPaymentReceipt } from '@/data/payments'
+import type { TransactionsContext } from '@/data/transactions'
+import { isOnOrBeforeDay } from '@/domain/financial-math'
+import { compareBusinessDateThenCreatedDesc } from '@/domain/records'
+import { formatFullDate } from '@/lib/date'
 import { buildPaymentPreview } from '@/domain/payment-ledger'
 import { getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
+import { findBestNameMatch } from '@/lib/search'
 
 export const Route = createFileRoute('/new-payment')({
   component: NewPaymentPage,
@@ -29,6 +36,7 @@ function NewPaymentPage() {
   const [amount, setAmount] = useState<number>(0)
   const [note, setNote] = useState('')
   const [statusText, setStatusText] = useState('')
+  const [lastSavedPayment, setLastSavedPayment] = useState<SavedPaymentReceipt | null>(null)
   const [isQuickPaymentOpen, setIsQuickPaymentOpen] = useState(false)
   const [quickPaymentCommand, setQuickPaymentCommand] = useState('')
 
@@ -49,6 +57,7 @@ function NewPaymentPage() {
     if (!ledgerQuery.data) return null
     return buildPaymentPreview({
       openingBalance: ledgerQuery.data.openingBalance,
+      openingBalanceDate: ledgerQuery.data.openingBalanceDate,
       bills: ledgerQuery.data.bills,
       payments: ledgerQuery.data.payments,
       paymentAmount: amount,
@@ -71,7 +80,7 @@ function NewPaymentPage() {
       if (!selectedCustomer) {
         throw new Error('Please select a customer')
       }
-      await savePayment({
+      return savePayment({
         customerId: parsed.data.customerId,
         customerName: selectedCustomer.name,
         date: parsed.data.date,
@@ -80,17 +89,102 @@ function NewPaymentPage() {
         note: parsed.data.note,
       })
     },
-    onSuccess: async () => {
-      setStatusText('Payment saved successfully')
+    onSuccess: async (savedPayment) => {
+      const persisted = await ensurePaymentPersisted(savedPayment.id)
+      setStatusText(`Payment saved: ${formatInrInteger(savedPayment.amount)} for ${savedPayment.customerName}`)
+      setLastSavedPayment(savedPayment)
+      queryClient.setQueryData(['payment-ledger-context', customerId, date], (prev: unknown) => {
+        if (!prev || typeof prev !== 'object') return prev
+        const existing = prev as {
+          customerId: string
+          openingBalance: number
+          openingBalanceDate: string
+          customerName: string
+          bills: Array<{
+            id: string
+            businessDate: string
+            createdAt: string
+            customerId: string
+            customerName: string
+            billNo: number
+            bookNo: number
+            total: number
+            transport: number
+            gstRate: number
+            mktRate: number
+            lrNo: string
+            compactDetails: string
+          }>
+          payments: Array<{
+            id: string
+            businessDate: string
+            createdAt: string
+            customerId: string
+            customerName: string
+            amount: number
+            mode: string
+            note: string
+          }>
+        }
+        if (savedPayment.customerId !== existing.customerId || savedPayment.date > date) return prev
+        const alreadyPresent = existing.payments.some((payment) => payment.id === savedPayment.id)
+        if (alreadyPresent) return prev
+        return {
+          ...existing,
+          payments: [
+            ...existing.payments,
+            {
+              id: savedPayment.id,
+              businessDate: savedPayment.date,
+              createdAt: new Date().toISOString(),
+              customerId: savedPayment.customerId,
+              customerName: savedPayment.customerName,
+              amount: savedPayment.amount,
+              mode: savedPayment.mode,
+              note: savedPayment.note,
+            },
+          ],
+        }
+      })
+      queryClient.setQueryData(['transactions-page'], (prev: TransactionsContext | undefined) => {
+        if (!prev) return prev
+        const alreadyPresent = prev.payments.some((payment) => payment.id === savedPayment.id)
+        if (alreadyPresent) return prev
+        return {
+          ...prev,
+          payments: [
+            {
+              id: savedPayment.id,
+              businessDate: savedPayment.date,
+              createdAt: new Date().toISOString(),
+              customerId: savedPayment.customerId,
+              customerName: savedPayment.customerName,
+              amount: savedPayment.amount,
+              mode: savedPayment.mode,
+              note: savedPayment.note,
+              date: savedPayment.date,
+            },
+            ...prev.payments,
+          ],
+        }
+      })
       setAmount(0)
       setNote('')
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: ['payment-ledger-context', customerId, date] }),
-      ])
+      await invalidateAfterPaymentWrite(queryClient, customerId)
+      const refreshed = await ledgerQuery.refetch()
+      const visibleAfterRefresh = refreshed.data?.payments?.some((payment) => payment.id === savedPayment.id) ?? false
+      if (!isOnOrBeforeDay(savedPayment.date, date)) {
+        setStatusText(
+          `Payment saved: ${formatInrInteger(savedPayment.amount)} for ${savedPayment.customerName}. It is after current as-of date filter, so totals exclude it.`,
+        )
+      } else if (!visibleAfterRefresh || !persisted) {
+        setStatusText(
+          `Payment saved: ${formatInrInteger(savedPayment.amount)} for ${savedPayment.customerName}. Syncing latest ledger...`,
+        )
+      }
     },
     onError: (error) => {
-      setStatusText(error instanceof Error ? error.message : 'Failed to save payment')
+      setStatusText(toUserMessage(error))
     },
   })
 
@@ -100,6 +194,42 @@ function NewPaymentPage() {
     if (!amount || amount <= 0) return 'Enter payment amount to simulate oldest-first settlement'
     return 'Ready to save payment'
   }, [statusText, customerId, amount])
+
+  const recentPayments = useMemo(() => {
+    const base = ledgerQuery.data?.payments ?? []
+    const merged = [...base]
+    if (
+      lastSavedPayment &&
+      lastSavedPayment.customerId === customerId &&
+      isOnOrBeforeDay(lastSavedPayment.date, date) &&
+      !merged.some((payment) => payment.id === lastSavedPayment.id)
+    ) {
+      merged.push({
+        id: lastSavedPayment.id,
+        businessDate: lastSavedPayment.date,
+        createdAt: new Date().toISOString(),
+        customerId: lastSavedPayment.customerId,
+        customerName: lastSavedPayment.customerName,
+        amount: lastSavedPayment.amount,
+        mode: lastSavedPayment.mode,
+        note: lastSavedPayment.note,
+      })
+    }
+    return merged.sort(compareBusinessDateThenCreatedDesc).slice(0, 6)
+  }, [ledgerQuery.data?.payments, lastSavedPayment, customerId, date])
+
+  const currentOutstanding = useMemo(() => {
+    if (!ledgerQuery.data) return null
+    const preview = buildPaymentPreview({
+      openingBalance: ledgerQuery.data.openingBalance,
+      openingBalanceDate: ledgerQuery.data.openingBalanceDate,
+      bills: ledgerQuery.data.bills,
+      payments: ledgerQuery.data.payments,
+      paymentAmount: 0,
+      asOfDate: date,
+    })
+    return preview.outstandingBeforePayment
+  }, [ledgerQuery.data, date])
 
   function resetForm() {
     setDate(today)
@@ -148,14 +278,19 @@ function NewPaymentPage() {
             <input className={inputClass} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
           <Field label="Customer">
-            <select className={inputClass} value={customerId} onChange={(e) => setCustomerId(e.target.value)} disabled={customersQuery.isLoading || customersQuery.isError}>
-              <option value="">Select customer...</option>
-              {(customersQuery.data ?? []).map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name}
-                </option>
-              ))}
-            </select>
+            <SearchableCombobox
+              options={customersQuery.data ?? []}
+              value={customerId}
+              onChange={(nextId) => {
+                setCustomerId(nextId)
+                setStatusText('')
+              }}
+              inputClassName={inputClass}
+              placeholder="Search customer..."
+              disabled={customersQuery.isLoading || customersQuery.isError}
+              emptyText="No matching customer found."
+              maxResults={50}
+            />
           </Field>
           <Field label="Mode">
             <select className={inputClass} value={mode} onChange={(e) => setMode((e.target.value === 'Bank' ? 'Bank' : 'Cash'))}>
@@ -183,13 +318,30 @@ function NewPaymentPage() {
         )}
         {paymentPreview && (
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <Metric label="Opening Balance" value={formatInrInteger(paymentPreview.openingBalance)} />
+            <Metric
+              label={`Opening Balance (${paymentPreview.openingBalanceDate ? paymentPreview.openingBalanceDate : 'Opening'})`}
+              value={formatInrInteger(paymentPreview.openingBalance)}
+            />
             <Metric label={paymentPreview.outstandingBeforePayment >= 0 ? 'Outstanding Before' : 'Advance Before'} value={formatInrInteger(Math.abs(paymentPreview.outstandingBeforePayment))} />
             <Metric label="Payment Applied" value={`- ${formatInrInteger(paymentPreview.paymentApplied)}`} />
             <Metric label={paymentPreview.outstandingAfterPayment >= 0 ? 'Outstanding After' : 'Advance After'} value={formatInrInteger(Math.abs(paymentPreview.outstandingAfterPayment))} />
           </div>
         )}
       </section>
+
+      {lastSavedPayment && (
+        <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+          <p className="text-sm font-semibold text-emerald-800">Latest saved payment confirmed</p>
+          <p className="mt-1 text-xs text-emerald-700">
+            {formatFullDate(lastSavedPayment.date)} - {lastSavedPayment.customerName} - {formatInrInteger(lastSavedPayment.amount)} ({lastSavedPayment.mode})
+          </p>
+          {currentOutstanding !== null && (
+            <p className="mt-1 text-xs text-emerald-700">
+              Updated balance now: {formatInrInteger(Math.abs(currentOutstanding))} {currentOutstanding >= 0 ? 'Outstanding' : 'Advance'}
+            </p>
+          )}
+        </section>
+      )}
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
@@ -226,6 +378,36 @@ function NewPaymentPage() {
                     <td className="px-3 py-2 text-right text-sm font-mono text-slate-800">{formatInrInteger(line.dueAmount)}</td>
                     <td className="px-3 py-2 text-right text-sm font-mono text-emerald-700">{formatInrInteger(line.paidAmount)}</td>
                     <td className="px-3 py-2 text-right text-sm font-mono text-slate-800">{formatInrInteger(line.remainingAmount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="mb-3 text-sm font-semibold text-slate-900">Recent Payments (Selected Party)</h2>
+        {!customerId && <p className="text-sm text-slate-500">Select customer to view recent payments.</p>}
+        {customerId && recentPayments.length === 0 && <p className="text-sm text-slate-500">No payment history for selected date range.</p>}
+        {recentPayments.length > 0 && (
+          <div className="overflow-x-auto no-scrollbar">
+            <table className="w-full min-w-[720px]">
+              <thead>
+                <tr className="bg-slate-50">
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Date</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Ref</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Mode</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentPayments.map((payment) => (
+                  <tr key={`${payment.id ?? 'na'}-${payment.businessDate}-${payment.amount}`} className="border-t border-slate-100">
+                    <td className="px-3 py-2 text-sm text-slate-700">{formatFullDate(payment.businessDate ?? payment.date ?? '')}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-600">{(payment.id ?? '-').slice(0, 8)}</td>
+                    <td className="px-3 py-2 text-sm text-slate-700">{payment.mode || '-'}</td>
+                    <td className="px-3 py-2 text-right font-mono text-sm text-slate-900">{formatInrInteger(payment.amount)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -346,10 +528,7 @@ function parsePaymentCommand(
 }
 
 function resolveCustomer(token: string, customers: Array<{ id: string; name: string }>) {
-  const exact = customers.find((c) => c.name.toLowerCase() === token.toLowerCase())
-  if (exact) return exact
-  const fuzzy = customers.find((c) => c.name.toLowerCase().includes(token.toLowerCase()))
-  return fuzzy ?? null
+  return findBestNameMatch(customers, token, (customer) => customer.name) ?? null
 }
 
 function parseAmountToken(token: string) {

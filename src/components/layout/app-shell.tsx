@@ -8,6 +8,7 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Dashboard', subtitle: 'Live business overview and pending actions' },
   '/new-bill': { title: 'Bills', subtitle: 'Create and preview new sale bills' },
   '/new-payment': { title: 'Payments', subtitle: 'Record collections and adjustments' },
+  '/transactions': { title: 'Logs', subtitle: 'Manage recent bills and payments with CRUD actions' },
   '/ledger': { title: 'Party', subtitle: 'Single-party ledger and analytics' },
   '/monthly-report': { title: 'Report', subtitle: 'Company-level performance insights' },
   '/customers': { title: 'Customers', subtitle: 'Manage customer master data' },

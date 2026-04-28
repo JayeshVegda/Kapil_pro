@@ -1,3 +1,14 @@
+# Handoff Addendum: Date and Outstanding Consistency
+
+For all future contributors and AI agents:
+
+- Treat `date` (business date) and `created` (save timestamp) as separate fields.
+- Sort financial records by business date first, then created timestamp, then id.
+- Use range checks (`<= asOfDate`) for financial inclusion, not exact-date equality.
+- Keep outstanding logic in one place only: `src/domain/records.ts` -> `computeCustomerOutstanding()`.
+- Do not introduce page-specific outstanding formulas.
+- After mutations, invalidate dependent query keys immediately and reconcile local view state to avoid stale summaries.
+
 # Project scope and organization discussion
 _Exported on 4/26/2026 at 12:19:40 GMT+5:30 from Cursor (3.0.13)_
 
@@ -2854,7 +2865,7 @@ Understood — I’ll now make market-rate behavior time-based (daily around 10:
 Plan for this change:
 - Auto fetch only once daily after **10:30 AM** (not frequent), while keeping manual refresh.
 - Remove noisy “Updated from RSS…” + source text and remove the whole debug section.
-- Persist market rate to DB daily using `misc_expenses` (`type = market_rate`) so we keep a history.
+- Persist market rate to DB daily using dedicated `brass_rates` collection so we keep a history.
 
 I’ll apply these edits now and verify with typecheck/build.
 
@@ -2868,8 +2879,10 @@ Implemented exactly what you asked on `/new-bill` and deployed live.
   - `Updated from RSS at ... (/api/market-rate)`
 - Removed the full **Market Rate Debug** panel and copy logs UI.
 - Added daily DB persistence of market rate:
-  - Saved into PocketBase `misc_expenses` collection
-  - Stored as one record per day with `type = "market_rate"`
+  - Saved into PocketBase `brass_rates` collection
+  - Stored as one record per day keyed by `date`
+  - `vilaity` is the official bill market rate
+  - `honey_gulf` and `honey_europe` are preserved for history
   - If same-day record exists, it updates instead of duplicating
 
 ### Where updated
@@ -2917,7 +2930,7 @@ I implemented exactly this behavior:
 - Removed that text line (`Auto updates daily at 10:30 AM...`) from UI.
 - New logic on `/new-bill`:
   1. Load cached value quickly (if available).
-  2. Check **today’s market rate in DB** (`misc_expenses` with `type = market_rate` and `date = today`).
+  2. Check **today’s market rate in DB** (`brass_rates` with `date = today`).
   3. If found in DB: use it, cache it, **no auto refresh**.
   4. If not found in DB: fetch from RSS once, show it, save to cache + DB.
 - Manual **Refresh Rate** button still works anytime and updates today’s DB entry.
@@ -3417,3 +3430,21 @@ Confidence level: High (for accidental deletion of critical files and import tar
 Likely missing files (explicit list):
 None strongly indicated.
 If you want an even stricter proof, next step would be a read-only tsc -b --noEmit + Vite build dry validation, but I did not run mutating commands in Ask mode.
+
+---
+
+## Handoff Addendum: DB Changes (2026-04-28)
+
+- PocketBase collections `bills` and `payments` now return `created` and `updated` in API responses.
+- Added indexes via PocketBase admin API:
+  - `bills(date)`, `bills(customer)`
+  - `payments(date)`, `payments(customer)`
+  - `bill_items(bill)`
+- Added `status` text field to `bills` with operational values: `pending`, `partial`, `paid`.
+- Bill status persistence now uses shared domain logic in `src/domain/bills.ts` (`computeBillStatuses`).
+  - Opening balance is settled first.
+  - Remaining payments are applied oldest-first to bills.
+  - Status is recalculated and persisted after payment saves and bill saves.
+- Backfill/maintenance scripts currently present:
+  - `scripts/backfill-created-updated.mjs`
+  - `scripts/backfill-created-updated-sqlite.py`

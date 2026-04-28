@@ -24,15 +24,21 @@ export async function loadPartyDashboard(asOfDate: string, overdueDaysThreshold 
     name: String(row.name ?? ''),
     active: Boolean(row.active),
     openingBalance: num(row.opening_balance),
+    openingBalanceDate: datePart(row.opening_balance_date),
   }))
   const bills: LedgerBill[] = (billsRaw as PBRecord[]).map((row) => ({
     id: row.id,
     customerId: String(row.customer ?? ''),
-    date: datePart(row.date),
+    customerName: String(row.customer_name ?? ''),
+    businessDate: datePart(row.date),
+    createdAt: String(row.created),
     bookNo: num(row.book_no),
     billNo: num(row.bill_no),
+    total: 0,
     transport: num(row.transport),
     gstRate: num(row.gst_rate),
+    mktRate: num(row.mkt),
+    lrNo: String(row.lr_no ?? ''),
   }))
   const billItems: LedgerBillItem[] = (billItemsRaw as PBRecord[]).map((row) => ({
     billId: String(row.bill ?? ''),
@@ -43,9 +49,12 @@ export async function loadPartyDashboard(asOfDate: string, overdueDaysThreshold 
   const payments: LedgerPayment[] = (paymentsRaw as PBRecord[]).map((row) => ({
     id: row.id,
     customerId: String(row.customer ?? ''),
-    date: datePart(row.date),
+    customerName: String(row.customer_name ?? ''),
+    businessDate: datePart(row.date),
+    createdAt: String(row.created),
     amount: num(row.amount),
     mode: String(row.mode ?? ''),
+    note: String(row.note ?? ''),
   }))
 
   const rows = buildPartyRows({ customers, bills, billItems, payments, asOfDate, overdueDaysThreshold })
@@ -58,18 +67,18 @@ export async function loadPartyStatement(customerId: string, asOfDate: string) {
     pb.collection('customers').getOne(customerId),
     pb.collection('bills').getFullList({
       sort: 'date,bill_no',
-      filter: `customer = "${customerId}" && date <= "${asOfDate}"`,
+      filter: `customer = "${customerId}"`,
     }),
     pb.collection('bill_items').getFullList(),
     pb.collection('payments').getFullList({
       sort: 'date',
-      filter: `customer = "${customerId}" && date <= "${asOfDate}"`,
+      filter: `customer = "${customerId}"`,
     }),
   ])
 
-  const billsRawTyped = billsRaw as PBRecord[]
+  const billsRawTyped = (billsRaw as PBRecord[]).filter((bill) => datePart(bill.date) <= asOfDate)
   const billItemsRawTyped = billItemsRaw as PBRecord[]
-  const paymentsRawTyped = paymentsRaw as PBRecord[]
+  const paymentsRawTyped = (paymentsRaw as PBRecord[]).filter((payment) => datePart(payment.date) <= asOfDate)
 
   const itemSumByBill = new Map<string, number>()
   for (const row of billItemsRawTyped) {
@@ -79,21 +88,27 @@ export async function loadPartyStatement(customerId: string, asOfDate: string) {
 
   const bills = billsRawTyped.map((bill) => ({
     id: bill.id,
-    date: datePart(bill.date),
+    businessDate: datePart(bill.date),
+    createdAt: String(bill.created),
     bookNo: num(bill.book_no),
     billNo: num(bill.bill_no),
     total: calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate)),
   }))
-  const billDateById = new Map(bills.map((bill) => [bill.id, bill.date]))
+  const billDateById = new Map(bills.map((bill) => [bill.id, bill.businessDate]))
   const payments = paymentsRawTyped.map((payment) => ({
     id: payment.id,
-    date: datePart(payment.date),
+    businessDate: datePart(payment.date),
+    createdAt: String(payment.created),
     amount: num(payment.amount),
     mode: String(payment.mode ?? ''),
   }))
 
   const openingBalance = num((customerRaw as PBRecord).opening_balance)
-  const events = buildPartyEvents({ openingBalance, bills, payments })
+  const storedOpeningBalanceDate = datePart((customerRaw as PBRecord).opening_balance_date)
+  const earliestBillDate = bills.map((bill) => bill.businessDate).filter(Boolean).sort()[0] ?? ''
+  const earliestPaymentDate = payments.map((payment) => payment.businessDate).filter(Boolean).sort()[0] ?? ''
+  const openingBalanceDate = storedOpeningBalanceDate || [earliestBillDate, earliestPaymentDate].filter(Boolean).sort()[0] || asOfDate
+  const events = buildPartyEvents({ openingBalance, openingBalanceDate, bills, payments })
   const itemSummaryMap = new Map<
     string,
     {

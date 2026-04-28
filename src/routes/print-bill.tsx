@@ -5,6 +5,7 @@ import { Download, Printer, Search, Share2 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
@@ -138,7 +139,7 @@ function PrintBillPage() {
   const preview = useMemo(() => {
     if (!selectedBill || !printQuery.data) return null
     const allCustomerBills = printQuery.data.bills
-      .filter((bill) => bill.customerId === selectedBill.customerId && bill.date <= selectedBill.date)
+      .filter((bill) => bill.customerId === selectedBill.customerId && isOnOrBeforeDay(bill.date, selectedBill.date))
       .sort((a, b) => a.date.localeCompare(b.date) || a.billNo - b.billNo)
     const currentIdx = allCustomerBills.findIndex((bill) => bill.id === selectedBill.id)
     if (currentIdx < 0) return null
@@ -161,7 +162,10 @@ function PrintBillPage() {
     const paidBeforePrevious =
       currentIdx > 0
         ? printQuery.data.payments
-            .filter((entry) => entry.customerId === selectedBill.customerId && entry.date <= allCustomerBills[currentIdx - 1].date)
+            .filter(
+              (entry) =>
+                entry.customerId === selectedBill.customerId && isOnOrBeforeDay(entry.date, allCustomerBills[currentIdx - 1].date),
+            )
             .reduce((sum, entry) => sum + entry.amount, 0)
         : 0
     previousBalance -= paidBeforePrevious
@@ -169,9 +173,9 @@ function PrintBillPage() {
     const periodCreditEntries = printQuery.data.payments
       .filter((entry) => {
         if (entry.customerId !== selectedBill.customerId) return false
-        if (entry.date > selectedBill.date) return false
+        if (!isOnOrBeforeDay(entry.date, selectedBill.date)) return false
         if (!previousCutoffDate) return true
-        return entry.date > previousCutoffDate
+        return !isOnOrBeforeDay(entry.date, previousCutoffDate)
       })
       .sort((a, b) => a.date.localeCompare(b.date))
     const periodCredits = periodCreditEntries.reduce((sum, entry) => sum + entry.amount, 0)
@@ -239,9 +243,11 @@ function PrintBillPage() {
       `Bill ${preview.selectedBill.bookNo}/${preview.selectedBill.billNo}`,
       `Date: ${formatFullDate(preview.selectedBill.date)}`,
       `Party: ${preview.selectedBill.customerName}`,
-      `Current Bill: ${formatInrInteger(preview.currentBillTotal)}`,
-      `Previous Balance: ${formatInrInteger(preview.previousBalance)} (${preview.previousBillDate === 'Opening' ? 'Opening' : formatFullDate(preview.previousBillDate)})`,
-      `Credits: ${formatInrInteger(preview.periodCredits)}`,
+      ...(preview.currentBillTotal !== 0 ? [`Current Bill: ${formatInrInteger(preview.currentBillTotal)}`] : []),
+      ...(preview.previousBalance !== 0
+        ? [`Previous Balance: ${formatInrInteger(preview.previousBalance)} (${preview.previousBillDate === 'Opening' ? 'Opening' : formatFullDate(preview.previousBillDate)})`]
+        : []),
+      ...preview.periodCreditEntries.map((entry) => `Credited on ${formatFullDate(entry.date)}: ${formatInrInteger(entry.amount)}`),
       `Amount Due: ${formatInrInteger(preview.finalTotal)}`,
     ].join('\n')
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
@@ -394,27 +400,27 @@ function PrintBillPage() {
 
                   <div className="my-3 border-t border-slate-300" />
                   <div className="space-y-1.5 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span>Current Bill Total</span>
-                      <span className="font-mono font-semibold">{formatInrInteger(preview.currentBillTotal)}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>Previous Balance [dt. {preview.previousBillDate === 'Opening' ? 'Opening' : formatFullDate(preview.previousBillDate)}]</span>
-                      <span className="font-mono">+ {formatInrInteger(preview.previousBalance)}</span>
-                    </div>
+                    {preview.currentBillTotal !== 0 && (
+                      <div className="flex items-center justify-between">
+                        <span>Current Bill Total</span>
+                        <span className="font-mono font-semibold">{formatInrInteger(preview.currentBillTotal)}</span>
+                      </div>
+                    )}
+                    {preview.previousBalance !== 0 && (
+                      <div className="flex items-center justify-between">
+                        <span>Previous Balance [dt. {preview.previousBillDate === 'Opening' ? 'Opening' : formatFullDate(preview.previousBillDate)}]</span>
+                        <span className="font-mono">+ {formatInrInteger(preview.previousBalance)}</span>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between">
                       <span>Sub Total</span>
                       <span className="font-mono">{formatInrInteger(preview.subtotal)}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>Cr. Entries</span>
-                      <span className="font-mono">- {formatInrInteger(preview.periodCredits)}</span>
                     </div>
                     {preview.periodCreditEntries.length > 0 && (
                       <div className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
                         {preview.periodCreditEntries.map((entry, index) => (
                           <div key={`${entry.date}-${entry.amount}-${index}`} className="flex items-center justify-between text-[11px] text-slate-600">
-                            <span>Cr on {formatFullDate(entry.date)}</span>
+                            <span>Credited on {formatFullDate(entry.date)}</span>
                             <span className="font-mono">- {formatInrInteger(entry.amount)}</span>
                           </div>
                         ))}

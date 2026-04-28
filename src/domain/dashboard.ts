@@ -1,28 +1,29 @@
 import { useQuery } from '@tanstack/react-query'
 import { loadDashboardCollections } from '@/data/dashboard'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import {
+  compareBusinessDateThenCreatedDesc,
+  computeCustomerOutstanding,
+  type CanonicalBillRecord,
+  type CanonicalCustomerBalanceRecord,
+  type CanonicalPaymentRecord,
+} from '@/domain/records'
 import { formatMonthYear, getLocalIsoDate, toMonthKey } from '@/lib/date'
 
 export const DASHBOARD_QUERY_KEY = ['dashboard-data'] as const
 
-type DashboardBill = {
-  id: string
-  date: string
+type DashboardBill = CanonicalBillRecord & {
+  businessDate: string
   customerId: string
   customerName: string
-  billNo: number
-  bookNo: number
   total: number
-  status: 'Pending' | 'Paid'
+  status: 'Pending' | 'Partial' | 'Paid'
 }
-
-type DashboardPayment = {
-  id: string
-  date: string
+type DashboardPayment = CanonicalPaymentRecord & {
+  businessDate: string
   customerId: string
   customerName: string
   amount: number
-  mode: string
   status: 'Collected'
 }
 
@@ -52,6 +53,12 @@ export type DashboardData = {
 
 const num = (v: unknown) => (Number.isFinite(Number(v ?? 0)) ? Number(v) : 0)
 const datePart = (v: unknown) => String(v ?? '').slice(0, 10)
+const normalizeBillStatus = (value: unknown): DashboardBill['status'] => {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (raw === 'paid') return 'Paid'
+  if (raw === 'partial') return 'Partial'
+  return 'Pending'
+}
 const monthKey = (d: string) => toMonthKey(d)
 const monthLabel = (m: string) => {
   return formatMonthYear(m)
@@ -59,6 +66,7 @@ const monthLabel = (m: string) => {
 
 export async function fetchDashboardData(): Promise<DashboardData> {
   const { billsRaw, billItemsRaw, paymentsRaw, customersRaw } = await loadDashboardCollections()
+  const asOfDate = getLocalIsoDate()
 
   const itemSumByBill = new Map<string, number>()
   for (const row of billItemsRaw) {
@@ -66,64 +74,93 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     itemSumByBill.set(billId, (itemSumByBill.get(billId) ?? 0) + num(row.amount))
   }
 
-  const bills = billsRaw.map((row) => {
+  const bills = billsRaw
+    .filter((row) => datePart(row.date) <= asOfDate)
+    .map((row) => {
     const itemsTotal = itemSumByBill.get(row.id) ?? 0
     return {
       id: row.id,
+      businessDate: datePart(row.date),
+      createdAt: String(row.created ?? ''),
       date: datePart(row.date),
       customerId: String(row.customer ?? ''),
       customerName: String(row.customer_name ?? 'Unknown'),
       billNo: num(row.bill_no),
       bookNo: num(row.book_no),
       total: calculateBillTotalFromBase(itemsTotal, num(row.transport), num(row.gst_rate)),
-      status: 'Pending' as const,
+      transport: num(row.transport),
+      gstRate: num(row.gst_rate),
+      mktRate: num(row.mkt),
+      lrNo: String(row.lr_no ?? ''),
+      status: normalizeBillStatus(row.status),
     }
-  })
+    })
 
-  const payments = paymentsRaw.map((row) => ({
-    id: row.id,
-    date: datePart(row.date),
-    customerId: String(row.customer ?? ''),
-    customerName: String(row.customer_name ?? 'Unknown'),
-    amount: num(row.amount),
-    mode: String(row.mode ?? 'Bank'),
-    status: 'Collected' as const,
-  }))
+  const payments = paymentsRaw
+    .filter((row) => datePart(row.date) <= asOfDate)
+    .map((row) => ({
+      id: row.id,
+      businessDate: datePart(row.date),
+      createdAt: String(row.created ?? ''),
+      date: datePart(row.date),
+      customerId: String(row.customer ?? ''),
+      customerName: String(row.customer_name ?? 'Unknown'),
+      amount: num(row.amount),
+      mode: String(row.mode ?? 'Bank'),
+      note: String(row.note ?? ''),
+      status: 'Collected' as const,
+    }))
+  const customers = customersRaw.map(
+    (row): CanonicalCustomerBalanceRecord => ({
+      customerId: row.id,
+      openingBalance: num(row.opening_balance),
+    }),
+  )
 
   const nowMonth = monthKey(getLocalIsoDate())
   const prev = new Date()
   prev.setMonth(prev.getMonth() - 1)
   const prevMonth = monthKey(getLocalIsoDate(prev))
-  const thisMonthSales = bills.filter((b) => monthKey(b.date) === nowMonth).reduce((s, b) => s + b.total, 0)
-  const thisMonthCollection = payments.filter((p) => monthKey(p.date) === nowMonth).reduce((s, p) => s + p.amount, 0)
-  const previousMonthSales = bills.filter((b) => monthKey(b.date) === prevMonth).reduce((s, b) => s + b.total, 0)
-  const previousMonthCollection = payments.filter((p) => monthKey(p.date) === prevMonth).reduce((s, p) => s + p.amount, 0)
+  const thisMonthSales = bills.filter((b) => monthKey(b.businessDate) === nowMonth).reduce((s, b) => s + b.total, 0)
+  const thisMonthCollection = payments.filter((p) => monthKey(p.businessDate) === nowMonth).reduce((s, p) => s + p.amount, 0)
+  const previousMonthSales = bills.filter((b) => monthKey(b.businessDate) === prevMonth).reduce((s, b) => s + b.total, 0)
+  const previousMonthCollection = payments.filter((p) => monthKey(p.businessDate) === prevMonth).reduce((s, p) => s + p.amount, 0)
 
-  const totalSales = bills.reduce((s, b) => s + b.total, 0)
-  const totalCollection = payments.reduce((s, p) => s + p.amount, 0)
-  const outstanding = totalSales - totalCollection
+  const outstandingByParty = new Map<string, number>()
+  let totalSales = 0
+  let totalCollection = 0
+  for (const customer of customers) {
+    const customerBills = bills.filter((bill) => bill.customerId === customer.customerId)
+    const customerPayments = payments.filter((payment) => payment.customerId === customer.customerId)
+    const rollup = computeCustomerOutstanding({
+      openingBalance: customer.openingBalance,
+      bills: customerBills,
+      payments: customerPayments,
+      asOfDate,
+    })
+    totalSales += rollup.billedTotal
+    totalCollection += rollup.paidTotal
+    outstandingByParty.set(customer.customerId, rollup.netBalance)
+  }
+  const outstanding = [...outstandingByParty.values()].reduce((sum, value) => sum + value, 0)
   const collectionRate = totalSales > 0 ? (totalCollection / totalSales) * 100 : 0
   const averageBillValue = bills.length > 0 ? totalSales / bills.length : 0
   const thisMonthNet = thisMonthSales - thisMonthCollection
   const salesVsLastMonth = thisMonthSales - previousMonthSales
   const collectionVsLastMonth = thisMonthCollection - previousMonthCollection
 
-  const outstandingByParty = new Map<string, number>()
-  for (const b of bills) outstandingByParty.set(b.customerId, (outstandingByParty.get(b.customerId) ?? 0) + b.total)
-  for (const p of payments) outstandingByParty.set(p.customerId, (outstandingByParty.get(p.customerId) ?? 0) - p.amount)
   const pendingParties = [...outstandingByParty.values()].filter((v) => v > 0).length
   const pendingAmount = [...outstandingByParty.values()].filter((v) => v > 0).reduce((s, v) => s + v, 0)
   const avgPartyPending = pendingParties > 0 ? pendingAmount / pendingParties : 0
   const highRiskParties = [...outstandingByParty.values()].filter((v) => v > avgPartyPending * 1.5).length
 
-  const billsWithStatus = bills.map((b) => ({ ...b, status: (outstandingByParty.get(b.customerId) ?? 0) > 0 ? ('Pending' as const) : ('Paid' as const) }))
   const allMonths = new Set<string>()
-  bills.forEach((b) => allMonths.add(monthKey(b.date)))
-  payments.forEach((p) => allMonths.add(monthKey(p.date)))
+  bills.forEach((b) => allMonths.add(monthKey(b.businessDate)))
+  payments.forEach((p) => allMonths.add(monthKey(p.businessDate)))
   const monthlyTrend = [...allMonths].sort().slice(-6).map((m) => ({
     month: monthLabel(m),
-    sales: bills.filter((b) => monthKey(b.date) === m).reduce((s, b) => s + b.total, 0),
-    collection: payments.filter((p) => monthKey(p.date) === m).reduce((s, p) => s + p.amount, 0),
+    sales: bills.filter((b) => monthKey(b.businessDate) === m).reduce((s, b) => s + b.total, 0),
+    collection: payments.filter((p) => monthKey(p.businessDate) === m).reduce((s, p) => s + p.amount, 0),
   }))
 
   return {
@@ -133,15 +170,15 @@ export async function fetchDashboardData(): Promise<DashboardData> {
       thisMonthCollection,
       totalBills: bills.length,
       pendingParties,
-      activeCustomers: customersRaw.length,
+      activeCustomers: customersRaw.filter((customer) => Boolean(customer.active)).length,
       collectionRate,
       averageBillValue,
       thisMonthNet,
       salesVsLastMonth,
       collectionVsLastMonth,
     },
-    recentBills: billsWithStatus.slice(0, 8),
-    recentPayments: payments.slice(0, 8),
+    recentBills: bills.sort(compareBusinessDateThenCreatedDesc).slice(0, 8),
+    recentPayments: payments.sort(compareBusinessDateThenCreatedDesc).slice(0, 8),
     actionRequired: { pendingAmount, pendingParties, highRiskParties },
     monthlyTrend,
   }

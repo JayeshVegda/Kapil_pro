@@ -1,4 +1,5 @@
 import { pb } from '@/data/pocketbase'
+import { runDataOperation } from '@/data/reliability'
 import { buildCustomerLedgerSummaries, type BillItemRecord, type BillRecord, type CustomerRecord, type PaymentRecord } from '@/domain/customers'
 
 type PBRecord = Record<string, unknown> & { id: string }
@@ -10,7 +11,7 @@ const num = (value: unknown) => {
 
 const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
 
-const optionalKeys = ['phone', 'gstin', 'address', 'credit_limit', 'note'] as const
+const optionalKeys = ['opening_balance_date', 'phone', 'gstin', 'address', 'credit_limit', 'note'] as const
 
 function extractCustomerRecord(record: PBRecord): CustomerRecord {
   return {
@@ -18,6 +19,7 @@ function extractCustomerRecord(record: PBRecord): CustomerRecord {
     name: String(record.name ?? ''),
     active: Boolean(record.active),
     openingBalance: num(record.opening_balance),
+    openingBalanceDate: String(record.opening_balance_date ?? '').slice(0, 10),
     phone: String(record.phone ?? ''),
     gstin: String(record.gstin ?? ''),
     address: String(record.address ?? ''),
@@ -30,6 +32,7 @@ function buildCustomerWritePayload(input: {
   name: string
   active: boolean
   openingBalance: number
+  openingBalanceDate?: string
   phone?: string
   gstin?: string
   address?: string
@@ -40,6 +43,7 @@ function buildCustomerWritePayload(input: {
     name: input.name,
     active: input.active,
     opening_balance: input.openingBalance,
+    opening_balance_date: input.openingBalanceDate ?? '',
     phone: input.phone ?? '',
     gstin: input.gstin ?? '',
     address: input.address ?? '',
@@ -126,6 +130,7 @@ export async function createCustomer(input: {
   name: string
   active: boolean
   openingBalance: number
+  openingBalanceDate?: string
   phone?: string
   gstin?: string
   address?: string
@@ -133,7 +138,9 @@ export async function createCustomer(input: {
   note?: string
 }) {
   const payload = buildCustomerWritePayload(input)
-  await writeCustomerWithSchemaFallback('create', payload)
+  await runDataOperation('create-customer', async () => {
+    await writeCustomerWithSchemaFallback('create', payload)
+  })
 }
 
 export async function updateCustomer(
@@ -142,6 +149,7 @@ export async function updateCustomer(
     name: string
     active: boolean
     openingBalance: number
+    openingBalanceDate?: string
     phone?: string
     gstin?: string
     address?: string
@@ -150,10 +158,14 @@ export async function updateCustomer(
   },
 ) {
   const payload = buildCustomerWritePayload(input)
-  await writeCustomerWithSchemaFallback('update', payload, id)
+  await runDataOperation('update-customer', async () => {
+    await writeCustomerWithSchemaFallback('update', payload, id)
+  })
 }
 
 export async function toggleCustomerActive(id: string, nextActive: boolean) {
-  await pb.collection('customers').update(id, { active: nextActive })
+  await runDataOperation('toggle-customer-active', async () => {
+    await pb.collection('customers').update(id, { active: nextActive })
+  })
 }
 

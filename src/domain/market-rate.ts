@@ -79,28 +79,28 @@ async function saveMarketRateDayRecord(rate: number, rateDate: string) {
   const day = /^\d{4}-\d{2}-\d{2}$/.test(rateDate)
     ? rateDate
     : getLocalIsoDate()
-  const filter = `type = "market_rate" && date ~ "${day}"`
   const payload = {
     date: day,
-    type: 'market_rate',
+    vilaity: rate,
+    source: 'rss_auto',
     note: 'Jamnagar local rate',
-    amount: rate,
-    book_no: 0,
-    bill_no: 0,
   }
-  const existing = await pb.collection('misc_expenses').getFirstListItem(filter).catch(() => null)
+  const existing = await pb.collection('brass_rates').getFirstListItem(`date = "${day}"`).catch(() => null)
   if (existing) {
-    await pb.collection('misc_expenses').update(existing.id, payload)
+    await pb.collection('brass_rates').update(existing.id, payload)
     return
   }
-  await pb.collection('misc_expenses').create(payload)
+  await pb.collection('brass_rates').create({
+    ...payload,
+    honey_gulf: 0,
+    honey_europe: 0,
+  })
 }
 
 async function loadMarketRateDayRecord(dateIso: string) {
-  const filter = `type = "market_rate" && date = "${dateIso}"`
   try {
-    const record = await pb.collection('misc_expenses').getFirstListItem(filter)
-    const amount = Number(record.amount ?? 0)
+    const record = await pb.collection('brass_rates').getFirstListItem(`date = "${dateIso}"`)
+    const amount = Number(record.vilaity ?? 0)
     if (!Number.isFinite(amount) || amount <= 0) return null
     return {
       rate: amount,
@@ -111,15 +111,15 @@ async function loadMarketRateDayRecord(dateIso: string) {
   }
 }
 
-async function loadLatestMarketRateRecord() {
+async function loadNearestMarketRateRecord(dateIso: string) {
   try {
-    const page = await pb.collection('misc_expenses').getList(1, 1, {
-      filter: 'type = "market_rate"',
+    const page = await pb.collection('brass_rates').getList(1, 1, {
+      filter: `date <= "${dateIso}"`,
       sort: '-date,-updated',
     })
     const record = page.items[0]
     if (!record) return null
-    const amount = Number(record.amount ?? 0)
+    const amount = Number(record.vilaity ?? 0)
     if (!Number.isFinite(amount) || amount <= 0) return null
     return {
       rate: amount,
@@ -165,24 +165,25 @@ function saveCachedMarketRate(next: MarketRateState) {
   }
 }
 
-export function useMarketRate() {
+export function useMarketRate(targetDate = getTodayLocalIso()) {
   const [state, setState] = useState<MarketRateState>({
     rate: 0,
     rateDate: 'Not refreshed yet',
     status: 'Market rate not fetched yet.',
     source: '',
   })
-  const refresh = useCallback(async (options?: { isAuto?: boolean }) => {
+  const refresh = useCallback(async (options?: { isAuto?: boolean; targetDate?: string }) => {
     const isAuto = Boolean(options?.isAuto)
+    const requestedDate = options?.targetDate || targetDate || getTodayLocalIso()
     setState((prev) => ({ ...prev, status: isAuto ? 'Auto update in progress...' : 'Refreshing...' }))
     const fetched = await fetchMarketRateViaProxy()
     if (!fetched.text) {
-      const latest = await loadLatestMarketRateRecord()
-      if (latest) {
+      const nearest = await loadNearestMarketRateRecord(requestedDate)
+      if (nearest) {
         const fallback: MarketRateState = {
-          rate: latest.rate,
-          rateDate: latest.rateDate,
-          status: `Using last saved rate (${latest.rateDate})`,
+          rate: nearest.rate,
+          rateDate: nearest.rateDate,
+          status: `Using saved rate for ${formatFullDate(nearest.rateDate)}`,
           source: 'db-fallback',
         }
         setState(fallback)
@@ -210,38 +211,50 @@ export function useMarketRate() {
       // Saving is non-blocking for bill creation UX.
     })
     return true
-  }, [])
+  }, [targetDate])
 
   useEffect(() => {
-    const today = getTodayLocalIso()
-    loadCachedMarketRate(setState)
+    const requestedDate = targetDate || getTodayLocalIso()
+    if (requestedDate === getTodayLocalIso()) {
+      loadCachedMarketRate(setState)
+    }
     void (async () => {
-      const dbToday = await loadMarketRateDayRecord(today)
-      if (dbToday) {
+      const exactDay = await loadMarketRateDayRecord(requestedDate)
+      if (exactDay) {
         const next: MarketRateState = {
-          rate: dbToday.rate,
-          rateDate: dbToday.rateDate,
-          status: 'Loaded from today record',
+          rate: exactDay.rate,
+          rateDate: exactDay.rateDate,
+          status: `Loaded for ${formatFullDate(requestedDate)}`,
           source: 'db',
         }
         setState(next)
-        saveCachedMarketRate(next)
+        if (requestedDate === getTodayLocalIso()) saveCachedMarketRate(next)
         return
       }
-      const latest = await loadLatestMarketRateRecord()
-      if (latest) {
+      const nearest = await loadNearestMarketRateRecord(requestedDate)
+      if (nearest) {
         const next: MarketRateState = {
-          rate: latest.rate,
-          rateDate: latest.rateDate,
-          status: `Loaded from last saved record (${latest.rateDate})`,
+          rate: nearest.rate,
+          rateDate: nearest.rateDate,
+          status: `Loaded nearest saved rate (${formatFullDate(nearest.rateDate)})`,
           source: 'db',
         }
         setState(next)
-        saveCachedMarketRate(next)
+        if (requestedDate === getTodayLocalIso()) saveCachedMarketRate(next)
+        return
       }
-      void refresh({ isAuto: true })
+      if (requestedDate === getTodayLocalIso()) {
+        void refresh({ isAuto: true, targetDate: requestedDate })
+        return
+      }
+      setState({
+        rate: 0,
+        rateDate: requestedDate,
+        status: `No saved market rate found for ${formatFullDate(requestedDate)}`,
+        source: 'db',
+      })
     })()
-  }, [refresh])
+  }, [refresh, targetDate])
 
   return { marketRate: state, refreshMarketRate: refresh }
 }
