@@ -16,6 +16,7 @@
 
 - `operations/deploy/`
 - `operations/incident-notes.md`
+- `operations/audits/`
 
 ## Data & Migrations
 
