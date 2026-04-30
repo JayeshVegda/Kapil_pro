@@ -46,10 +46,20 @@ export async function recalculateAndPersistBillStatusesForCustomer(customerId: s
     })),
   })
 
+  const updates = billsTyped
+    .map((bill) => ({
+      id: bill.id,
+      nextStatus: (statuses.get(bill.id) ?? 'pending').toLowerCase(),
+      currentStatus: String(bill.status ?? 'pending').toLowerCase(),
+    }))
+    .filter((entry) => entry.nextStatus !== entry.currentStatus)
+
+  if (updates.length === 0) return
+
   await Promise.all(
-    billsTyped.map((bill) =>
-      pb.collection('bills').update(bill.id, {
-        status: statuses.get(bill.id) ?? 'pending',
+    updates.map((entry) =>
+      pb.collection('bills').update(entry.id, {
+        status: entry.nextStatus,
       }),
     ),
   )

@@ -2,6 +2,7 @@ import { pb } from '@/data/pocketbase'
 import { recalculateAndPersistBillStatusesForCustomer } from '@/data/bill-statuses'
 import { runDataOperation } from '@/data/reliability'
 import type { BillSnapshot, PaymentSnapshot } from '@/domain/transactions'
+import { BAGS_PER_KG } from '@/shared/constants'
 
 type PBRecord = Record<string, unknown> & { id: string }
 
@@ -10,7 +11,6 @@ const num = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-const BAGS_PER_KG = 1 / 50
 const bagsFromQtyKg = (qtyKg: number) => {
   if (!(qtyKg > 0)) return 0
   return Math.round(qtyKg * BAGS_PER_KG)

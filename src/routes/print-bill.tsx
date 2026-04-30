@@ -1,12 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import html2canvas from 'html2canvas'
 import { Download, Printer, Search, Share2 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { formatFullDate } from '@/lib/date'
+import { exportNodeAsJpg, exportNodeAsJpgBlob } from '@/lib/image-export'
 import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/print-bill')({
@@ -45,10 +45,35 @@ const num = (value: unknown) => {
 }
 
 const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
+const BILL_PAGE_WIDTH_CM = 14
+
+function printHtmlWithoutPopup(html: string) {
+  const frame = document.createElement('iframe')
+  frame.style.position = 'fixed'
+  frame.style.right = '0'
+  frame.style.bottom = '0'
+  frame.style.width = '0'
+  frame.style.height = '0'
+  frame.style.border = '0'
+  frame.setAttribute('aria-hidden', 'true')
+  document.body.appendChild(frame)
+  const frameDoc = frame.contentDocument
+  if (!frameDoc) return false
+  frameDoc.open()
+  frameDoc.write(html)
+  frameDoc.close()
+  window.setTimeout(() => {
+    frame.contentWindow?.focus()
+    frame.contentWindow?.print()
+    window.setTimeout(() => frame.remove(), 500)
+  }, 80)
+  return true
+}
 
 function PrintBillPage() {
   const [search, setSearch] = useState('')
   const [selectedBillId, setSelectedBillId] = useState('')
+  const [actionStatus, setActionStatus] = useState('')
   const previewRef = useRef<HTMLDivElement>(null)
 
   const printQuery = useQuery({
@@ -206,39 +231,58 @@ function PrintBillPage() {
 
   function printPreview() {
     if (!previewRef.current) return
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=800')
-    if (!printWindow) return
-    printWindow.document.write(`
+    const printHtml = `
       <html>
         <head>
           <title>Print Bill</title>
           <style>
-            body { margin: 0; padding: 12px; font-family: Arial, sans-serif; color: #0f172a; background: #fff; }
-            table { border-collapse: collapse; width: 100%; font-size: 12px; }
+            @page { margin: 0.25cm; }
+            body { margin: 0; padding: 0.25cm; font-family: Arial, sans-serif; color: #0f172a; background: #fff; }
+            .preview-print { width: ${BILL_PAGE_WIDTH_CM - 0.5}cm; margin: 0 auto; }
+            table { border-collapse: collapse; width: 100%; font-size: 11px; }
             th, td { border: 1px solid #cbd5e1; padding: 6px; text-align: left; }
             .amount { text-align: right; font-family: monospace; }
           </style>
         </head>
-        <body>${previewRef.current.innerHTML}</body>
+        <body><div class="preview-print">${previewRef.current.innerHTML}</div></body>
       </html>
-    `)
+    `
+    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=800')
+    if (!printWindow) {
+      const usedIframeFallback = printHtmlWithoutPopup(printHtml)
+      setActionStatus(
+        usedIframeFallback
+          ? 'Popup blocked. Used in-page print fallback.'
+          : 'Print is blocked by browser settings. Please allow print popups.',
+      )
+      return
+    }
+    printWindow.document.write(printHtml)
     printWindow.document.close()
-    printWindow.focus()
-    printWindow.print()
+    window.setTimeout(() => {
+      printWindow.focus()
+      printWindow.print()
+    }, 50)
+    setActionStatus('')
   }
 
   async function exportAsJpg() {
     if (!previewRef.current || !preview) return
-    const canvas = await html2canvas(previewRef.current, { scale: 2, backgroundColor: '#ffffff' })
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.95)
-    const link = document.createElement('a')
-    link.href = dataUrl
-    link.download = `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`
-    link.click()
+    try {
+      await exportNodeAsJpg(previewRef.current, {
+        filename: `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`,
+        quality: 0.95,
+        preferredWidthPx: 1080,
+        maxHeightPx: 2800,
+      })
+      setActionStatus('')
+    } catch {
+      setActionStatus('Unable to save JPG in this browser session. Please refresh once and retry.')
+    }
   }
 
-  function shareOnWhatsApp() {
-    if (!preview) return
+  async function shareOnWhatsApp() {
+    if (!preview || !previewRef.current) return
     const message = [
       `Bill ${preview.selectedBill.bookNo}/${preview.selectedBill.billNo}`,
       `Date: ${formatFullDate(preview.selectedBill.date)}`,
@@ -250,7 +294,37 @@ function PrintBillPage() {
       ...preview.periodCreditEntries.map((entry) => `Credited on ${formatFullDate(entry.date)}: ${formatInrInteger(entry.amount)}`),
       `Amount Due: ${formatInrInteger(preview.finalTotal)}`,
     ].join('\n')
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
+
+    try {
+      if (typeof navigator.share === 'function') {
+        const blob = await exportNodeAsJpgBlob(previewRef.current, {
+          quality: 0.95,
+          preferredWidthPx: 1080,
+          maxHeightPx: 2800,
+        })
+        const filename = `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`
+        const file = new File([blob], filename, { type: 'image/jpeg' })
+        const sharePayload: ShareData = { text: message, files: [file] }
+        if (!navigator.canShare || navigator.canShare(sharePayload)) {
+          await navigator.share(sharePayload)
+          setActionStatus('')
+          return
+        }
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setActionStatus('')
+        return
+      }
+      // Fall through to WhatsApp text sharing fallback.
+    }
+
+    const shareWindow = window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
+    if (!shareWindow) {
+      setActionStatus('Could not open share options. Please allow popups and retry.')
+      return
+    }
+    setActionStatus('Image share is not supported in this browser. WhatsApp opened with text.')
   }
 
   return (
@@ -346,8 +420,13 @@ function PrintBillPage() {
                   </button>
                 </div>
               </div>
+              {actionStatus && <p className="mb-2 text-xs text-slate-500">{actionStatus}</p>}
               <div className="max-h-[70vh] overflow-auto rounded-lg border border-slate-100 p-1">
-                <div ref={previewRef} className="mx-auto max-w-[760px] rounded-lg border border-slate-300 bg-white p-4">
+                <div
+                  ref={previewRef}
+                  className="mx-auto rounded-lg border border-slate-300 bg-white p-4"
+                  style={{ width: `${BILL_PAGE_WIDTH_CM}cm` }}
+                >
                   <div className="mb-2 flex items-start justify-between">
                     <div>
                       <p className="text-sm font-semibold text-slate-900">Kapil Products</p>

@@ -28,6 +28,15 @@ Core product areas:
 - **Backend:** PocketBase
 - **Build/Tooling:** Vite, TypeScript, Vitest
 
+## Authentication and Access Model
+
+- App uses PocketBase `users` auth (email/password).
+- Login UI is password-only; email is configured by env (`VITE_LOGIN_EMAIL`).
+- Successful login writes PocketBase auth state (`pb.authStore`) and a 90-day local session marker.
+- On app boot, expired/missing session or invalid auth shows login gate before routing/screens render.
+- Business collection access rules require `@request.auth.id != ""` for list/view/create/update/delete.
+- Network hardening expects direct container ports blocked externally (`8088`, `8090`) with access via domain proxy only.
+
 ## Data Model (PocketBase)
 
 Main collections used by app:

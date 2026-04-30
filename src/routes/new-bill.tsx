@@ -1,6 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import html2canvas from 'html2canvas'
 import { Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
@@ -12,6 +11,7 @@ import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billin
 import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
 import { useMarketRate } from '@/domain/market-rate'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
+import { exportNodeAsJpg, exportNodeAsJpgBlob } from '@/lib/image-export'
 import { formatInQty, formatInrInteger, parseNonNegativeNumber, parsePositiveIntInput } from '@/lib/inr-format'
 import { filterRankedNameMatches, findBestNameMatch, normalizeSearchText } from '@/lib/search'
 
@@ -35,6 +35,30 @@ const bagsFromQtyKg = (qtyKg: number) => {
   if (!(qtyKg > 0)) return 0
   return Math.round(qtyKg / 50)
 }
+const BILL_PAGE_WIDTH_CM = 14
+function printHtmlWithoutPopup(html: string) {
+  const frame = document.createElement('iframe')
+  frame.style.position = 'fixed'
+  frame.style.right = '0'
+  frame.style.bottom = '0'
+  frame.style.width = '0'
+  frame.style.height = '0'
+  frame.style.border = '0'
+  frame.setAttribute('aria-hidden', 'true')
+  document.body.appendChild(frame)
+  const frameDoc = frame.contentDocument
+  if (!frameDoc) return false
+  frameDoc.open()
+  frameDoc.write(html)
+  frameDoc.close()
+  window.setTimeout(() => {
+    frame.contentWindow?.focus()
+    frame.contentWindow?.print()
+    window.setTimeout(() => frame.remove(), 500)
+  }, 80)
+  return true
+}
+
 const COMPANY_NAME = 'Kapil Trading Co.'
 const submitRowSchema = z.object({
   itemName: z.string().trim().min(1),
@@ -370,19 +394,14 @@ function NewBillPage() {
   function printPreview() {
     const previewElement = previewRef.current
     if (!previewElement) return
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=800')
-    if (!printWindow) {
-      setStatusText('Unable to open print window')
-      return
-    }
-    printWindow.document.write(`
+    const printHtml = `
       <html>
         <head>
           <title>Bill Preview</title>
           <style>
-            @page { size: 11cm 18cm; margin: 0.25cm; }
+            @page { margin: 0.25cm; }
             body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #0f172a; background: #fff; }
-            .preview-print { width: 10.5cm; min-height: 17.5cm; margin: 0 auto; }
+            .preview-print { width: ${BILL_PAGE_WIDTH_CM - 0.5}cm; margin: 0 auto; }
             table { border-collapse: collapse; width: 100%; font-size: 10px; }
             th, td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; vertical-align: top; }
             .amount { text-align: right; font-family: monospace; }
@@ -390,24 +409,45 @@ function NewBillPage() {
         </head>
         <body><div class="preview-print">${previewElement.innerHTML}</div></body>
       </html>
-    `)
+    `
+    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=800')
+    if (!printWindow) {
+      const usedIframeFallback = printHtmlWithoutPopup(printHtml)
+      setStatusText(
+        usedIframeFallback
+          ? 'Popup blocked. Used in-page print fallback.'
+          : 'Print is blocked by browser settings. Please allow print popups.',
+      )
+      return
+    }
+    printWindow.document.write(printHtml)
     printWindow.document.close()
-    printWindow.focus()
-    printWindow.print()
+    window.setTimeout(() => {
+      printWindow.focus()
+      printWindow.print()
+    }, 50)
+    setStatusText('')
   }
 
   async function savePreviewAsJpg() {
     const previewElement = previewRef.current
     if (!previewElement) return
-    const canvas = await html2canvas(previewElement, { scale: 2, backgroundColor: '#ffffff' })
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-    const link = document.createElement('a')
-    link.href = dataUrl
-    link.download = `bill-preview-${bookNo}-${billNo}.jpg`
-    link.click()
+    try {
+      await exportNodeAsJpg(previewElement, {
+        filename: `bill-preview-${bookNo}-${billNo}.jpg`,
+        quality: 0.92,
+        preferredWidthPx: 1080,
+        maxHeightPx: 2800,
+      })
+      setStatusText('')
+    } catch {
+      setStatusText('Unable to save JPG in this browser session. Please refresh once and retry.')
+    }
   }
 
-  function shareOnWhatsApp() {
+  async function shareOnWhatsApp() {
+    const previewElement = previewRef.current
+    if (!previewElement) return
     const billRef = `${String(bookNo).padStart(3, '0')}/${String(billNo).padStart(3, '0')}`
     const message = [
       `${COMPANY_NAME}`,
@@ -419,7 +459,37 @@ function NewBillPage() {
       ...validCredits.map((entry) => `Credited on ${formatFullDate(entry.date)}: ${formatInrInteger(entry.amount)}`),
       `${payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}: ${formatInrInteger(Math.abs(payableAfterAdjustments))}`,
     ].join('\n')
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
+
+    try {
+      if (typeof navigator.share === 'function') {
+        const blob = await exportNodeAsJpgBlob(previewElement, {
+          quality: 0.92,
+          preferredWidthPx: 1080,
+          maxHeightPx: 2800,
+        })
+        const filename = `bill-preview-${bookNo}-${billNo}.jpg`
+        const file = new File([blob], filename, { type: 'image/jpeg' })
+        const sharePayload: ShareData = { text: message, files: [file] }
+        if (!navigator.canShare || navigator.canShare(sharePayload)) {
+          await navigator.share(sharePayload)
+          setStatusText('')
+          return
+        }
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setStatusText('')
+        return
+      }
+      // Fall through to WhatsApp text sharing fallback.
+    }
+
+    const shareWindow = window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
+    if (!shareWindow) {
+      setStatusText('Could not open share options. Please allow popups and retry.')
+      return
+    }
+    setStatusText('Image share is not supported in this browser. WhatsApp opened with text.')
   }
 
   useEffect(() => {
@@ -764,7 +834,7 @@ function NewBillPage() {
               <div
                 ref={previewRef}
                 className="mx-auto rounded-md border border-slate-300 bg-white p-2 text-[10px] text-slate-800"
-                style={{ width: '11cm', minHeight: '18cm' }}
+                style={{ width: `${BILL_PAGE_WIDTH_CM}cm` }}
               >
                 <div className="mb-1 border-b border-slate-300 pb-1 text-center text-[12px] font-semibold tracking-wide">
                   {COMPANY_NAME}

@@ -2,8 +2,8 @@ import { recalculateAndPersistBillStatusesForCustomer } from '@/data/bill-status
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
 import { calculateBillTotals, type BillItemInput } from '@/domain/billing-calculations'
+import { BAGS_PER_KG } from '@/shared/constants'
 
-const BAGS_PER_KG = 1 / 50
 const bagsFromQtyKg = (qtyKg: number) => {
   if (!(qtyKg > 0)) return 0
   return Math.round(qtyKg * BAGS_PER_KG)
