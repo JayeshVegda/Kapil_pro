@@ -463,15 +463,16 @@ function NewBillPage() {
     try {
       if (typeof navigator.share === 'function') {
         const blob = await exportNodeAsJpgBlob(previewElement, {
-          quality: 0.92,
+          quality: 0.88,
           preferredWidthPx: 1080,
-          maxHeightPx: 2800,
+          maxHeightPx: 2200,
         })
         const filename = `bill-preview-${bookNo}-${billNo}.jpg`
         const file = new File([blob], filename, { type: 'image/jpeg' })
-        const sharePayload: ShareData = { text: message, files: [file] }
-        if (!navigator.canShare || navigator.canShare(sharePayload)) {
-          await navigator.share(sharePayload)
+        const attempts: ShareData[] = [{ files: [file] }, { files: [file], text: message }]
+        for (const payload of attempts) {
+          if (navigator.canShare && !navigator.canShare(payload)) continue
+          await navigator.share(payload)
           setStatusText('')
           return
         }
@@ -481,7 +482,7 @@ function NewBillPage() {
         setStatusText('')
         return
       }
-      // Fall through to WhatsApp text sharing fallback.
+      setStatusText('Native image share failed on this phone. Opening WhatsApp text fallback.')
     }
 
     const shareWindow = window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
@@ -841,7 +842,7 @@ function NewBillPage() {
                 </div>
                 <div className="mb-1 flex items-center justify-between border-b border-slate-300 pb-1 text-[11px]">
                   <div>No. <span className="font-semibold">{String(bookNo).padStart(3, '0')}/{String(billNo).padStart(3, '0')}</span></div>
-                  <div>Date : <span className="font-semibold">{formatFullDate(date)}</span></div>
+                  <div>Date : <span className="font-bold">{formatFullDate(date)}</span></div>
                 </div>
                 <div className="mb-1 border-b border-slate-300 pb-1">
                   <span className="mr-1 font-semibold">M/s.</span>
@@ -884,10 +885,13 @@ function NewBillPage() {
                   </tbody>
                 </table>
 
-                <div className="mt-2 flex items-start justify-between">
-                  <div className="space-y-1">
-                    <p>Weight : <span className="font-semibold">{formatInQty(totals.totalQty, 'kg')}</span></p>
-                    <p>Bags : <span className="font-semibold">{bagsFromQtyKg(totals.totalQty)}</span></p>
+                <div className="mt-2 flex items-start justify-between gap-2">
+                  <div className="space-y-0.5 text-[10px] leading-tight">
+                    <div className="flex items-center gap-2">
+                      <p className="whitespace-nowrap">Weight : <span className="font-semibold">{formatInQty(totals.totalQty, 'kg')}</span></p>
+                      <p className="whitespace-nowrap">Bags : <span className="font-semibold">{bagsFromQtyKg(totals.totalQty)}</span></p>
+                      <p className="min-w-0 truncate">LR No. <span className="font-semibold">{lrList.length > 0 ? lrList.join(', ') : '-'}</span></p>
+                    </div>
                     {previousBalanceAmount !== 0 && (
                       <p>{previousBalanceAmount >= 0 ? 'Prev Bal' : 'Prev Advance'} [{previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)}] : <span className="font-semibold">{Math.round(Math.abs(previousBalanceAmount)).toLocaleString('en-IN')}</span></p>
                     )}
@@ -897,11 +901,8 @@ function NewBillPage() {
                       </p>
                     ))}
                     {validCredits.length === 0 && <p>No credited entries in this period</p>}
-                    <p className="mt-2 inline-block rounded-md border border-slate-400 px-2 py-1">
-                      LR No. <span className="font-semibold">{lrList.length > 0 ? lrList.join(', ') : '-'}</span>
-                    </p>
                   </div>
-                  <div className="flex h-8 w-24 items-center justify-center rounded-full border border-slate-400 text-[11px] text-slate-500">
+                  <div className="flex h-7 w-20 items-center justify-center rounded-full border border-slate-400 text-[10px] text-slate-500">
                     Signature
                   </div>
                 </div>

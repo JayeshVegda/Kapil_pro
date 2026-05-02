@@ -298,15 +298,16 @@ function PrintBillPage() {
     try {
       if (typeof navigator.share === 'function') {
         const blob = await exportNodeAsJpgBlob(previewRef.current, {
-          quality: 0.95,
+          quality: 0.88,
           preferredWidthPx: 1080,
-          maxHeightPx: 2800,
+          maxHeightPx: 2200,
         })
         const filename = `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`
         const file = new File([blob], filename, { type: 'image/jpeg' })
-        const sharePayload: ShareData = { text: message, files: [file] }
-        if (!navigator.canShare || navigator.canShare(sharePayload)) {
-          await navigator.share(sharePayload)
+        const attempts: ShareData[] = [{ files: [file] }, { files: [file], text: message }]
+        for (const payload of attempts) {
+          if (navigator.canShare && !navigator.canShare(payload)) continue
+          await navigator.share(payload)
           setActionStatus('')
           return
         }
@@ -316,7 +317,7 @@ function PrintBillPage() {
         setActionStatus('')
         return
       }
-      // Fall through to WhatsApp text sharing fallback.
+      setActionStatus('Native image share failed on this phone. Opening WhatsApp text fallback.')
     }
 
     const shareWindow = window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
@@ -433,7 +434,7 @@ function PrintBillPage() {
                       <p className="text-xs text-slate-600">MKT: {preview.selectedBill.mkt}</p>
                     </div>
                     <div className="text-right text-xs text-slate-600">
-                      <p>Date: {formatFullDate(preview.selectedBill.date)}</p>
+                      <p>Date: <span className="font-semibold text-slate-800">{formatFullDate(preview.selectedBill.date)}</span></p>
                       <p>No: {preview.selectedBill.bookNo}/{preview.selectedBill.billNo}</p>
                     </div>
                   </div>
@@ -511,7 +512,7 @@ function PrintBillPage() {
                     </div>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                  <div className="mt-2 grid grid-cols-3 gap-1 text-[11px] leading-tight">
                     <div>
                       <p className="text-slate-500">Weight</p>
                       <p className="font-semibold text-slate-800">{Math.round(preview.totalQty)} kg</p>
