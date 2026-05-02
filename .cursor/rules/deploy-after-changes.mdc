@@ -1,0 +1,16 @@
+---
+description: After editing Kapil_pro app code, rebuild Docker web image and redeploy to kapil.cosearch.me (low-RAM path).
+alwaysApply: true
+---
+
+# Deploy after code changes
+
+When you **modify** application source under `Kapil_pro` (anything that ships in the frontend or affects the billed Docker web image—including `src/`, Dockerfile, nginx config used by that image)—finish by **deploying** so https://kapil.cosearch.me reflects the changes:
+
+```bash
+APP_DIR=/home/ubuntu/Kapil_pro bash /home/ubuntu/Kapil_pro/scripts/deploy-low-ram.sh
+```
+
+Skip only if the change is purely local docs/scripts that do not alter the deployed web stack, or the user explicitly says not to deploy.
+
+If the deploy step fails briefly with `curl`/`502`, wait a few seconds and re-verify the public URL—the container often restarts during the swap.

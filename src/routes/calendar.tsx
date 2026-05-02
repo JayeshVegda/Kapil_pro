@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { loadCalendarMonthData } from '@/data/calendar-month'
 import type { PBRecord } from '@/data/dashboard'
@@ -75,6 +75,8 @@ type DayBill = {
   id: string
   bookNo: number
   billNo: number
+  /** Display ref; prefers PocketBase bill_ref when set. */
+  billRefDisplay: string
   customerId: string
   customerName: string
   total: number
@@ -92,6 +94,17 @@ type DayPayment = {
 function sortDayBills(a: DayBill, b: DayBill) {
   if (a.bookNo !== b.bookNo) return a.bookNo - b.bookNo
   return a.billNo - b.billNo
+}
+
+/** Matches new-bill / printed ref style when bill_ref is missing. */
+function formatBillRefFallback(bookNo: number, billNo: number) {
+  return `${String(bookNo).padStart(3, '0')}/${String(billNo).padStart(3, '0')}`
+}
+
+function billsRefDisplay(pbRef: unknown, bookNo: number, billNo: number) {
+  const raw = str(pbRef).trim()
+  if (raw.length > 0) return raw
+  return formatBillRefFallback(bookNo, billNo)
 }
 
 function CalendarPage() {
@@ -115,6 +128,7 @@ function CalendarPage() {
 
   const aggregates = useMemo(() => {
     const data = calendarQuery.data
+    const clipFutureToToday = monthKey === today.slice(0, 7)
     if (!data) {
       return {
         dailySales: new Map<string, number>(),
@@ -126,10 +140,13 @@ function CalendarPage() {
         monthSales: 0,
         monthCollections: 0,
         monthBillCount: 0,
+        monthAvgMarketRate: null as number | null,
+        monthAvgMarketRateDays: 0,
+        marketRateVsPrev: null as number | null,
       }
     }
 
-    const { billsRaw, billItemsRaw, paymentsRaw, ratesRaw, rangeStart: rs, rangeEnd: re } = data
+    const { billsRaw, billItemsRaw, paymentsRaw, ratesRaw, prevRatesRaw, rangeStart: rs, rangeEnd: re } = data
     const itemSumByBill = new Map<string, number>()
     for (const item of billItemsRaw as PBRecord[]) {
       const billId = str(item.bill)
@@ -142,16 +159,20 @@ function CalendarPage() {
 
     for (const bill of billsRaw as PBRecord[]) {
       const billDate = str(bill.date).slice(0, 10)
-      if (!billDate || billDate > today) continue
+      if (!billDate) continue
+      if (clipFutureToToday && billDate > today) continue
       if (billDate < rs || billDate > re) continue
       const base = itemSumByBill.get(bill.id) ?? 0
       const total = calculateBillTotalFromBase(base, num(bill.transport), num(bill.gst_rate))
       dailySales.set(billDate, (dailySales.get(billDate) ?? 0) + total)
       dailyBillCount.set(billDate, (dailyBillCount.get(billDate) ?? 0) + 1)
+      const bookNoVal = num(bill.book_no)
+      const billNoVal = num(bill.bill_no)
       const row: DayBill = {
         id: bill.id,
-        bookNo: num(bill.book_no),
-        billNo: num(bill.bill_no),
+        bookNo: bookNoVal,
+        billNo: billNoVal,
+        billRefDisplay: billsRefDisplay(bill.bill_ref, bookNoVal, billNoVal),
         customerId: str(bill.customer),
         customerName: str(bill.customer_name),
         total,
@@ -165,7 +186,8 @@ function CalendarPage() {
     const paymentsByDate = new Map<string, DayPayment[]>()
     for (const payment of paymentsRaw as PBRecord[]) {
       const paymentDate = str(payment.date).slice(0, 10)
-      if (!paymentDate || paymentDate > today) continue
+      if (!paymentDate) continue
+      if (clipFutureToToday && paymentDate > today) continue
       if (paymentDate < rs || paymentDate > re) continue
       const amount = num(payment.amount)
       dailyCollections.set(paymentDate, (dailyCollections.get(paymentDate) ?? 0) + amount)
@@ -196,6 +218,20 @@ function CalendarPage() {
     for (const v of dailyCollections.values()) monthCollections += v
     for (const v of dailyBillCount.values()) monthBillCount += v
 
+    const thisMonthRates = (ratesRaw as PBRecord[])
+      .map((r) => num(r.vilaity))
+      .filter((v) => v > 0)
+    const monthAvgMarketRate =
+      thisMonthRates.length > 0 ? thisMonthRates.reduce((a, b) => a + b, 0) / thisMonthRates.length : null
+    const monthAvgMarketRateDays = thisMonthRates.length
+
+    const prevRates = (prevRatesRaw as PBRecord[])
+      .map((r) => num(r.vilaity))
+      .filter((v) => v > 0)
+    const prevAvg = prevRates.length > 0 ? prevRates.reduce((a, b) => a + b, 0) / prevRates.length : null
+    const marketRateVsPrev =
+      monthAvgMarketRate != null && prevAvg != null ? monthAvgMarketRate - prevAvg : null
+
     return {
       dailySales,
       dailyCollections,
@@ -206,8 +242,11 @@ function CalendarPage() {
       monthSales,
       monthCollections,
       monthBillCount,
+      monthAvgMarketRate,
+      monthAvgMarketRateDays,
+      marketRateVsPrev,
     }
-  }, [calendarQuery.data, today])
+  }, [calendarQuery.data, monthKey, today])
 
   const gridWeeks = useMemo(() => {
     const [y, m] = monthKey.split('-').map(Number)
@@ -232,64 +271,67 @@ function CalendarPage() {
     return [...(aggregates.billsByDate.get(selectedDay) ?? [])].sort(sortDayBills)
   }, [aggregates.billsByDate, selectedDay])
 
-  const selectedPayments = selectedDay ? aggregates.paymentsByDate.get(selectedDay) ?? [] : []
+  const selectedPayments = useMemo(() => {
+    if (!selectedDay) return []
+    const list = aggregates.paymentsByDate.get(selectedDay) ?? []
+    return [...list].sort((a, b) => {
+      const nameCmp = a.customerName.localeCompare(b.customerName, undefined, { sensitivity: 'base' })
+      if (nameCmp !== 0) return nameCmp
+      return b.amount - a.amount
+    })
+  }, [aggregates.paymentsByDate, selectedDay])
 
   const selectedDaySales = selectedDay ? aggregates.dailySales.get(selectedDay) ?? 0 : 0
   const selectedDayCollections = selectedDay ? aggregates.dailyCollections.get(selectedDay) ?? 0 : 0
   const selectedDayRate = selectedDay ? aggregates.rateByDate.get(selectedDay) : undefined
 
   return (
-    <div className="w-full max-w-6xl space-y-4 px-3 pb-10 pt-3 sm:mx-auto sm:px-4 lg:px-6">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex items-start gap-3">
-              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-blue-600 text-white">
-                <CalendarIcon size={20} />
-              </div>
-              <div>
-                <h1 className="text-lg font-semibold tracking-tight text-slate-900">Calendar</h1>
-                <p className="mt-0.5 max-w-xl text-sm text-slate-600">
-                  Month view of sales (bill totals), collections, and saved Jamnagar Vilaity rate. Matches Company Report totals for the same dates.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-center gap-1 sm:justify-end">
-              <button
-                type="button"
-                aria-label="Previous month"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                onClick={() => setMonthKey(shiftMonth(monthKey, -1))}
-              >
-                <ChevronLeft size={18} />
-              </button>
-              <div className="min-w-[10rem] px-2 text-center">
-                <p className="text-base font-semibold tabular-nums text-slate-900">{formatMonthYear(monthKey)}</p>
-                {monthKey === today.slice(0, 7) && <p className="text-[11px] text-slate-500">This month</p>}
-              </div>
-              <button
-                type="button"
-                aria-label="Next month"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                onClick={() => setMonthKey(shiftMonth(monthKey, 1))}
-              >
-                <ChevronRight size={18} />
-              </button>
-              <button
-                type="button"
-                className="ml-1 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-100"
-                onClick={() => setMonthKey(today.slice(0, 7))}
-              >
-                Today
-              </button>
-            </div>
+    <div className="w-full space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+          <div className="flex flex-wrap gap-1.5">
+            <LayerToggle
+              label="Sales"
+              active={showSales}
+              onToggle={() => setShowSales((v) => !v)}
+              accent="blue"
+            />
+            <LayerToggle
+              label="Collections"
+              active={showCollections}
+              onToggle={() => setShowCollections((v) => !v)}
+              accent="emerald"
+            />
+            <LayerToggle label="Market rate" active={showMarket} onToggle={() => setShowMarket((v) => !v)} accent="amber" />
           </div>
-
-          <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4">
-            <LayerToggle label="Sales" active={showSales} onToggle={() => setShowSales((v) => !v)} color="bg-blue-500" />
-            <LayerToggle label="Collections" active={showCollections} onToggle={() => setShowCollections((v) => !v)} color="bg-emerald-500" />
-            <LayerToggle label="Market rate" active={showMarket} onToggle={() => setShowMarket((v) => !v)} color="bg-amber-500" />
+          <div className="flex flex-wrap items-center justify-center gap-0.5 sm:justify-end">
+            <button
+              type="button"
+              aria-label="Previous month"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              onClick={() => setMonthKey(shiftMonth(monthKey, -1))}
+            >
+              <ChevronLeft size={17} />
+            </button>
+            <div className="min-w-[9.5rem] px-1.5 text-center">
+              <p className="text-sm font-semibold tabular-nums text-slate-900">{formatMonthYear(monthKey)}</p>
+              {monthKey === today.slice(0, 7) && <p className="text-[10px] leading-tight text-slate-500">This month</p>}
+            </div>
+            <button
+              type="button"
+              aria-label="Next month"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              onClick={() => setMonthKey(shiftMonth(monthKey, 1))}
+            >
+              <ChevronRight size={17} />
+            </button>
+            <button
+              type="button"
+              className="ml-0.5 rounded-md border border-slate-300 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100"
+              onClick={() => setMonthKey(today.slice(0, 7))}
+            >
+              Today
+            </button>
           </div>
         </div>
       </section>
@@ -303,20 +345,52 @@ function CalendarPage() {
 
       {!calendarQuery.isLoading && !calendarQuery.isError && (
         <>
-          <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <section className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3 xl:grid-cols-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm ring-1 ring-slate-100 sm:p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Month sales</p>
-              <p className="mt-1 font-mono text-lg font-semibold text-blue-800 tabular-nums">{formatInrInteger(aggregates.monthSales)}</p>
-              <p className="text-xs text-slate-500">{aggregates.monthBillCount} bills in view</p>
+              <p className="mt-1.5 font-mono text-lg font-semibold text-blue-800 tabular-nums">{formatInrInteger(aggregates.monthSales)}</p>
+              <p className="mt-0.5 text-xs text-slate-500">{aggregates.monthBillCount} bills in view</p>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm ring-1 ring-slate-100 sm:p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Month collections</p>
-              <p className="mt-1 font-mono text-lg font-semibold text-emerald-800 tabular-nums">{formatInrInteger(aggregates.monthCollections)}</p>
+              <p className="mt-1.5 font-mono text-lg font-semibold text-emerald-800 tabular-nums">{formatInrInteger(aggregates.monthCollections)}</p>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Net (collections − sales)</p>
+            <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm ring-1 ring-slate-100 sm:p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Avg market rate</p>
+              <p className="mt-0.5 text-[11px] font-normal text-slate-400">Mean of saved daily rates · this month</p>
+              {aggregates.monthAvgMarketRate != null ? (
+                <>
+                  <p className="mt-1.5 font-mono text-lg font-semibold text-amber-900 tabular-nums">
+                    {formatInrInteger(Math.round(aggregates.monthAvgMarketRate))}
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {aggregates.monthAvgMarketRateDays} day{aggregates.monthAvgMarketRateDays !== 1 ? 's' : ''} with rate
+                  </p>
+                  {aggregates.marketRateVsPrev != null ? (
+                    <p className="mt-1 text-xs text-slate-600">
+                      <span
+                        className={
+                          aggregates.marketRateVsPrev >= 0 ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-800'
+                        }
+                      >
+                        {aggregates.marketRateVsPrev >= 0 ? '+' : '−'}
+                        {formatInrInteger(Math.round(Math.abs(aggregates.marketRateVsPrev)))}
+                      </span>
+                      <span className="text-slate-400"> vs last month</span>
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[11px] text-slate-400">No last month rate data</p>
+                  )}
+                </>
+              ) : (
+                <p className="mt-1.5 text-sm text-slate-500">No rates this month</p>
+              )}
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm ring-1 ring-slate-100 sm:p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Net position</p>
+              <p className="mt-0.5 text-[11px] font-normal text-slate-400">Collections − sales · this month</p>
               <p
-                className={`mt-1 font-mono text-lg font-semibold tabular-nums ${
+                className={`mt-1.5 font-mono text-lg font-semibold tabular-nums ${
                   aggregates.monthCollections - aggregates.monthSales >= 0 ? 'text-emerald-800' : 'text-amber-800'
                 }`}
               >
@@ -344,52 +418,69 @@ function CalendarPage() {
                   const billsN = aggregates.dailyBillCount.get(iso) ?? 0
                   const rate = aggregates.rateByDate.get(iso)
                   const intensity = maxSalesInMonth > 0 ? Math.min(1, sales / maxSalesInMonth) : 0
-                  const salesBg =
-                    showSales && sales > 0
-                      ? intensity > 0.66
-                        ? 'bg-blue-100'
-                        : intensity > 0.33
-                          ? 'bg-blue-50'
-                          : 'bg-white'
-                      : 'bg-white'
+                  const hasActivity = sales > 0 || col > 0
+
+                  let cellBg = 'bg-white'
+                  if (hasActivity && sales > 0 && showSales) {
+                    cellBg = intensity > 0.66 ? 'bg-blue-100' : intensity > 0.33 ? 'bg-blue-50' : 'bg-blue-50/60'
+                  } else if (hasActivity && sales > 0 && !showSales) {
+                    cellBg = 'bg-blue-50/55'
+                  } else if (hasActivity && col > 0 && sales === 0) {
+                    cellBg = 'bg-emerald-50/65'
+                  } else if (showMarket && (rate ?? 0) > 0 && !hasActivity && inMonth) {
+                    cellBg = 'bg-amber-50/45'
+                  }
 
                   const isSelected = selectedDay === iso
+                  const showRateInCell = showMarket && rate != null && rate > 0
 
                   return (
                     <button
                       key={iso}
                       type="button"
                       onClick={() => setSelectedDay(iso)}
-                      className={`flex min-h-[7.5rem] flex-col p-2 text-left transition hover:brightness-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 ${salesBg} ${
+                      className={`flex min-h-[6.75rem] flex-col p-1.5 text-left transition-colors hover:brightness-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 sm:min-h-[7rem] sm:p-2 ${cellBg} ${
                         !inMonth ? 'opacity-50' : ''
-                      } ${isSelected ? 'z-[1] ring-2 ring-inset ring-blue-500' : ''} ${isToday && !isSelected ? 'ring-1 ring-inset ring-slate-400' : ''}`}
+                      } ${isSelected ? 'z-[1] ring-2 ring-inset ring-blue-600' : ''}`}
                     >
                       <span
                         className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold tabular-nums ${
-                          isToday ? 'bg-blue-600 text-white' : inMonth ? 'text-slate-900' : 'text-slate-400'
+                          isToday
+                            ? 'bg-blue-600 text-white shadow-sm'
+                            : isSelected && !isToday
+                              ? 'bg-slate-200 text-slate-800 ring-1 ring-slate-300'
+                              : inMonth
+                                ? 'text-slate-800'
+                                : 'text-slate-400'
                         }`}
                       >
                         {date.getDate()}
                       </span>
-                      <div className="mt-1 flex min-h-0 flex-1 flex-col gap-1 text-[10px] leading-snug text-slate-700">
+                      <div className="mt-0.5 flex min-h-0 flex-1 flex-col gap-0.5 text-[10px] leading-tight">
+                        {showRateInCell && (
+                          <span className="line-clamp-1 font-mono font-semibold text-amber-700" title={`Mkt rate ${formatInrInteger(rate)}`}>
+                            Rate {formatInrInteger(rate)}
+                          </span>
+                        )}
                         {showSales && sales > 0 && (
-                          <span className="line-clamp-2 font-mono text-blue-800" title={`Sales ${formatInrInteger(sales)}`}>
+                          <span
+                            className="line-clamp-2 font-mono font-semibold text-blue-700"
+                            title={`Sales ${formatInrInteger(sales)}`}
+                          >
                             Sales {formatInrInteger(sales)}
                           </span>
                         )}
                         {showSales && sales > 0 && billsN > 0 && (
-                          <span className="text-slate-500">
+                          <span className="text-[10px] font-normal text-blue-700/65">
                             {billsN} bill{billsN !== 1 ? 's' : ''}
                           </span>
                         )}
                         {showCollections && col > 0 && (
-                          <span className="line-clamp-2 font-mono text-emerald-800" title={`Collections ${formatInrInteger(col)}`}>
+                          <span
+                            className="line-clamp-2 font-mono font-semibold text-emerald-700"
+                            title={`Collections ${formatInrInteger(col)}`}
+                          >
                             Coll. {formatInrInteger(col)}
-                          </span>
-                        )}
-                        {showMarket && rate != null && rate > 0 && (
-                          <span className="line-clamp-1 font-mono text-amber-900" title={`Vilaity ${formatInrInteger(rate)}`}>
-                            Rate {formatInrInteger(rate)}
                           </span>
                         )}
                       </div>
@@ -398,51 +489,45 @@ function CalendarPage() {
                 })}
               </div>
             ))}
-            <p className="border-t border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-500">
-              <span className="font-medium text-slate-600">Legend:</span> Sales and collections use the same rules as the Company Report. Market rate shows stored Vilaity for that date (if any).
-            </p>
           </section>
 
-          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <div className="flex flex-col gap-2 border-b border-slate-100 pb-3 sm:flex-row sm:items-end sm:justify-between">
+          <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+            <div className="flex flex-col gap-2 border-b border-slate-100 pb-2.5 sm:flex-row sm:items-end sm:justify-between sm:pb-3">
               <div>
-                <h2 className="text-base font-semibold text-slate-900">{selectedDay ? formatFullDate(selectedDay) : 'Day detail'}</h2>
-                {!selectedDay && <p className="mt-1 text-sm text-slate-500">Choose a date in the grid above.</p>}
+                <h2 className="text-sm font-semibold text-slate-900 sm:text-base">{selectedDay ? formatFullDate(selectedDay) : 'Day detail'}</h2>
+                {!selectedDay && <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">Choose a date in the grid.</p>}
               </div>
               {selectedDay && (
-                <div className="flex flex-wrap gap-2">
-                  <DayChip label="Sales" value={formatInrInteger(selectedDaySales)} className="border-blue-200 bg-blue-50 text-blue-900" />
-                  <DayChip label="Collections" value={formatInrInteger(selectedDayCollections)} className="border-emerald-200 bg-emerald-50 text-emerald-900" />
+                <div className="flex flex-wrap gap-1.5">
                   <DayChip
-                    label="Vilaity"
+                    label="Mkt rate"
                     value={selectedDayRate != null && selectedDayRate > 0 ? formatInrInteger(selectedDayRate) : '—'}
                     className="border-amber-200 bg-amber-50 text-amber-950"
                   />
+                  <DayChip label="Sales" value={formatInrInteger(selectedDaySales)} className="border-blue-200 bg-blue-50 text-blue-900" />
+                  <DayChip label="Collections" value={formatInrInteger(selectedDayCollections)} className="border-emerald-200 bg-emerald-50 text-emerald-900" />
                 </div>
               )}
             </div>
 
             {selectedDay && (
-              <div className="mt-4 grid gap-6 lg:grid-cols-2 lg:gap-8">
+              <div className="mt-3 grid gap-4 lg:grid-cols-2 lg:gap-6">
                 <div className="min-w-0">
                   <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bills ({selectedBills.length})</p>
                   {selectedBills.length === 0 && <p className="mt-2 text-sm text-slate-500">No bills on this date.</p>}
                   <ul className="mt-3 space-y-2">
                     {selectedBills.map((b) => (
-                      <li
-                        key={b.id}
-                        className="flex items-start justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50/90 px-3 py-2"
-                      >
+                      <li key={b.id} className="group flex items-start justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50/90 px-3 py-2">
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium text-slate-800">{b.customerName}</p>
                           <p className="font-mono text-xs text-slate-600">
-                            {b.bookNo}/{b.billNo} · {formatInrInteger(b.total)}
+                            {b.billRefDisplay} · {formatInrInteger(b.total)}
                           </p>
                         </div>
                         <Link
                           to="/ledger"
                           search={{ customerId: b.customerId, focus: '' }}
-                          className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                          className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 opacity-100 transition-opacity hover:bg-slate-100 focus-visible:opacity-100 sm:pointer-events-auto sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
                         >
                           Ledger
                         </Link>
@@ -455,10 +540,7 @@ function CalendarPage() {
                   {selectedPayments.length === 0 && <p className="mt-2 text-sm text-slate-500">No payments on this date.</p>}
                   <ul className="mt-3 space-y-2">
                     {selectedPayments.map((p) => (
-                      <li
-                        key={p.id}
-                        className="flex items-start justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50/90 px-3 py-2"
-                      >
+                      <li key={p.id} className="group flex items-start justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50/90 px-3 py-2">
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium text-slate-800">{p.customerName}</p>
                           <p className="font-mono text-xs text-emerald-800">{formatInrInteger(p.amount)}</p>
@@ -473,7 +555,7 @@ function CalendarPage() {
                         <Link
                           to="/ledger"
                           search={{ customerId: p.customerId, focus: '' }}
-                          className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                          className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 opacity-100 transition-opacity hover:bg-slate-100 focus-visible:opacity-100 sm:pointer-events-auto sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
                         >
                           Ledger
                         </Link>
@@ -499,27 +581,51 @@ function DayChip({ label, value, className }: { label: string; value: string; cl
   )
 }
 
+const layerAccent = {
+  blue: {
+    on: 'border-blue-400 bg-blue-50 text-blue-950 shadow-sm',
+    dot: 'bg-blue-500',
+    offDot: 'bg-slate-300',
+  },
+  emerald: {
+    on: 'border-emerald-400 bg-emerald-50 text-emerald-950 shadow-sm',
+    dot: 'bg-emerald-500',
+    offDot: 'bg-slate-300',
+  },
+  amber: {
+    on: 'border-amber-400 bg-amber-50 text-amber-950 shadow-sm',
+    dot: 'bg-amber-500',
+    offDot: 'bg-slate-300',
+  },
+} as const
+
 function LayerToggle({
   label,
   active,
   onToggle,
-  color,
+  accent,
 }: {
   label: string
   active: boolean
   onToggle: () => void
-  color: string
+  accent: keyof typeof layerAccent
 }) {
+  const p = layerAccent[accent]
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={active}
+      aria-label={`${label} layer ${active ? 'on' : 'off'}`}
       onClick={onToggle}
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-        active ? 'border-slate-800 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+        active
+          ? p.on
+          : 'border border-dashed border-slate-200 bg-white text-slate-400 opacity-70 shadow-none saturate-50 hover:opacity-100 hover:saturate-100'
       }`}
     >
-      <span className={`h-2 w-2 rounded-full ${color}`} />
-      {label}
+      <span className={`h-2 w-2 shrink-0 rounded-full shadow-sm transition-all ${active ? p.dot + ' opacity-100' : p.offDot + ' opacity-45'}`} aria-hidden />
+      <span>{label}</span>
     </button>
   )
 }

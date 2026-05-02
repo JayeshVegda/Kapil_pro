@@ -111,17 +111,19 @@ async function ensureBrassRatesCollection() {
   ]
   const indexes = ['CREATE UNIQUE INDEX idx_brass_rates_date ON brass_rates (date)']
 
+  const apiRule = '@request.auth.id != ""'
+
   if (!existing) {
     await pb.collections.create({
       name: 'brass_rates',
       type: 'base',
       fields,
       indexes,
-      listRule: null,
-      viewRule: null,
-      createRule: null,
-      updateRule: null,
-      deleteRule: null,
+      listRule: apiRule,
+      viewRule: apiRule,
+      createRule: apiRule,
+      updateRule: apiRule,
+      deleteRule: apiRule,
     })
     console.log('Created brass_rates collection')
     return
@@ -131,6 +133,11 @@ async function ensureBrassRatesCollection() {
     ...existing,
     fields: mergeCustomFields(existing.fields ?? [], fields),
     indexes,
+    listRule: apiRule,
+    viewRule: apiRule,
+    createRule: apiRule,
+    updateRule: apiRule,
+    deleteRule: apiRule,
   })
   console.log('Updated brass_rates collection schema')
 }

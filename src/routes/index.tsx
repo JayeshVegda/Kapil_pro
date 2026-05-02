@@ -1,5 +1,5 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { AlertTriangle, ArrowRight, IndianRupee, Receipt, TrendingDown, TrendingUp, Users } from 'lucide-react'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import { AlertTriangle, ArrowRight, Calendar, IndianRupee, Receipt, TrendingDown, TrendingUp, Users } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useDashboardData } from '@/domain/dashboard'
 import { formatFullDate } from '@/lib/date'
@@ -59,12 +59,31 @@ function DashboardPage() {
           <p className="mt-2 text-[11px] text-blue-100/80">Includes opening balances + billed - collected</p>
           <p className="mt-2 text-sm text-blue-100/80">vs last month: <span className="font-semibold text-white">{trendText(data.kpis.salesVsLastMonth)}</span></p>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm xl:col-span-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">This Month Performance</p>
-          <div className="mt-4 grid grid-cols-2 gap-4">
-            <MiniMetric label="Sales" value={fmtMoneyCompact(data.kpis.thisMonthSales)} trend={`${trendText(data.kpis.salesVsLastMonth)} vs last month`} icon={<IndianRupee size={13} />} />
-            <MiniMetric label="Collection" value={fmtMoneyCompact(data.kpis.thisMonthCollection)} trend={`${trendText(data.kpis.collectionVsLastMonth)} vs last month`} icon={<Receipt size={13} />} />
+        <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:col-span-4">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">This month</p>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <MiniMetric
+              label="Sales"
+              value={fmtMoneyCompact(data.kpis.thisMonthSales)}
+              trend={`${trendText(data.kpis.salesVsLastMonth)} vs LM`}
+              icon={<IndianRupee size={12} className="shrink-0" />}
+              to="/print-bill"
+            />
+            <MiniMetric
+              label="Collection"
+              value={fmtMoneyCompact(data.kpis.thisMonthCollection)}
+              trend={`${trendText(data.kpis.collectionVsLastMonth)} vs LM`}
+              icon={<Receipt size={12} className="shrink-0" />}
+            />
           </div>
+          <Link
+            to="/calendar"
+            className="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-md border border-slate-200 bg-slate-50/90 px-2 py-1.5 text-[11px] font-semibold text-slate-800 transition hover:bg-slate-100 sm:w-auto sm:justify-start"
+          >
+            <Calendar size={13} className="text-slate-600" />
+            Calendar
+            <ArrowRight size={11} className="text-slate-400" />
+          </Link>
         </div>
       </section>
 
@@ -171,8 +190,47 @@ function DashboardPage() {
   )
 }
 
-function MiniMetric({ label, value, trend, icon }: { label: string; value: string; trend: string; icon: ReactNode }) {
-  return <div className="rounded-lg bg-slate-50 p-3"><div className="inline-flex items-center gap-1 text-xs text-slate-600">{icon}{label}</div><p className="mt-1 font-mono text-xl font-bold text-slate-900">{value}</p><p className="text-xs text-slate-500">{trend}</p></div>
+function MiniMetric({
+  label,
+  value,
+  trend,
+  icon,
+  to,
+}: {
+  label: string
+  value: string
+  trend: string
+  icon: ReactNode
+  /** When set, the whole tile is clickable (e.g. Sales → Print bill). */
+  to?: '/print-bill'
+}) {
+  const body = (
+    <>
+      <div className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600">
+        {icon}
+        <span>{label}</span>
+      </div>
+      <p className="mt-0.5 font-mono text-base font-bold leading-tight tracking-tight text-slate-900">{value}</p>
+      <p className="line-clamp-2 text-[10px] leading-snug text-slate-500">{trend}</p>
+    </>
+  )
+
+  const tileClass =
+    'block min-h-[4.75rem] rounded-lg border bg-slate-50/95 p-2 transition sm:min-h-0 ' +
+    (to != null
+      ? 'cursor-pointer border-slate-200/80 hover:border-blue-300 hover:bg-blue-50/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500'
+      : 'border-transparent')
+
+  if (to != null) {
+    return (
+      <Link to={to} className={tileClass} aria-label={`${label}: open print bill`}
+      >
+        {body}
+      </Link>
+    )
+  }
+
+  return <div className={tileClass}>{body}</div>
 }
 
 function AnalyticsTile({ title, value, positive, hint, className, progress }: { title: string; value: string; positive: boolean; hint: string; className?: string; progress?: number }) {

@@ -11,6 +11,7 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/transactions': { title: 'Logs', subtitle: 'Manage recent bills and payments with CRUD actions' },
   '/ledger': { title: 'Party', subtitle: 'Single-party ledger and analytics' },
   '/monthly-report': { title: 'Report', subtitle: 'Company-level performance insights' },
+  '/calendar': { title: 'Calendar', subtitle: 'Month view of sales, collections, and market rate' },
   '/customers': { title: 'Customers', subtitle: 'Manage customer master data' },
   '/items': { title: 'Items', subtitle: 'Manage item master and defaults' },
   '/backup': { title: 'Backup', subtitle: 'Export and validate data snapshots' },
