@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import type { ComponentType } from 'react'
-import { BookOpen, Boxes, CalendarDays, CreditCard, Database, FilePlus2, LayoutDashboard, Printer, ScrollText, Users, X } from 'lucide-react'
+import { BookOpen, Boxes, Calendar, CalendarDays, CreditCard, Database, FilePlus2, LayoutDashboard, Printer, ScrollText, Users, X } from 'lucide-react'
 
 type NavGroup = {
   label: string
@@ -28,6 +28,7 @@ const groups: NavGroup[] = [
   {
     label: 'Reports',
     items: [
+      { to: '/calendar', title: 'Calendar', icon: Calendar },
       { to: '/monthly-report', title: 'Company Report', icon: CalendarDays },
     ],
   },
