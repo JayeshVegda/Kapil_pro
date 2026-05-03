@@ -12,7 +12,13 @@ import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billin
 import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
 import { useMarketRate } from '@/domain/market-rate'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
-import { exportNodeAsJpg, exportNodeAsJpgBlob } from '@/lib/image-export'
+import {
+  BILL_PREVIEW_CARD_CLASS,
+  BILL_PRINT_DOCUMENT_TITLE,
+  downloadBillLayoutAsJpg,
+  printBillLayoutFromElement,
+  shareBillLayoutImageWithWhatsAppFallback,
+} from '@/lib/bill-print-export'
 import { formatInQty, formatInrInteger, parseNonNegativeNumber, parsePositiveIntInput } from '@/lib/inr-format'
 import { findBestNameMatch } from '@/lib/search'
 
@@ -36,29 +42,6 @@ const bagsFromQtyKg = (qtyKg: number) => {
   if (!(qtyKg > 0)) return 0
   return Math.round(qtyKg / 50)
 }
-function printHtmlWithoutPopup(html: string) {
-  const frame = document.createElement('iframe')
-  frame.style.position = 'fixed'
-  frame.style.right = '0'
-  frame.style.bottom = '0'
-  frame.style.width = '0'
-  frame.style.height = '0'
-  frame.style.border = '0'
-  frame.setAttribute('aria-hidden', 'true')
-  document.body.appendChild(frame)
-  const frameDoc = frame.contentDocument
-  if (!frameDoc) return false
-  frameDoc.open()
-  frameDoc.write(html)
-  frameDoc.close()
-  window.setTimeout(() => {
-    frame.contentWindow?.focus()
-    frame.contentWindow?.print()
-    window.setTimeout(() => frame.remove(), 500)
-  }, 80)
-  return true
-}
-
 const COMPANY_NAME = 'Kapil Products'
 const submitRowSchema = z.object({
   itemName: z.string().trim().min(1),
@@ -409,51 +392,14 @@ function NewBillPage() {
   function printPreview() {
     const previewElement = previewRef.current
     if (!previewElement) return
-    const printHtml = `
-      <html>
-        <head>
-          <title>Bill Preview</title>
-          <style>
-            @page { margin: 0.25cm; }
-            body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #0f172a; background: #fff; }
-            .preview-print { width: ${BILL_PRINT_PAGE_WIDTH_CM - 0.5}cm; margin: 0 auto; }
-            table { border-collapse: collapse; width: 100%; font-size: 10px; }
-            th, td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; vertical-align: top; }
-            .amount { text-align: right; font-family: monospace; }
-          </style>
-        </head>
-        <body><div class="preview-print">${previewElement.innerHTML}</div></body>
-      </html>
-    `
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=800')
-    if (!printWindow) {
-      const usedIframeFallback = printHtmlWithoutPopup(printHtml)
-      setStatusText(
-        usedIframeFallback
-          ? 'Popup blocked. Used in-page print fallback.'
-          : 'Print is blocked by browser settings. Please allow print popups.',
-      )
-      return
-    }
-    printWindow.document.write(printHtml)
-    printWindow.document.close()
-    window.setTimeout(() => {
-      printWindow.focus()
-      printWindow.print()
-    }, 50)
-    setStatusText('')
+    printBillLayoutFromElement(previewElement, BILL_PRINT_DOCUMENT_TITLE, setStatusText)
   }
 
   async function savePreviewAsJpg() {
     const previewElement = previewRef.current
     if (!previewElement) return
     try {
-      await exportNodeAsJpg(previewElement, {
-        filename: `bill-preview-${bookNo}-${billNo}.jpg`,
-        quality: 0.92,
-        preferredWidthPx: 1080,
-        maxHeightPx: 2800,
-      })
+      await downloadBillLayoutAsJpg(previewElement, `bill-preview-${bookNo}-${billNo}.jpg`)
       setStatusText('')
     } catch {
       setStatusText('Unable to save JPG in this browser session. Please refresh once and retry.')
@@ -475,37 +421,12 @@ function NewBillPage() {
       `${payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}: ${formatInrInteger(Math.abs(payableAfterAdjustments))}`,
     ].join('\n')
 
-    try {
-      if (typeof navigator.share === 'function') {
-        const blob = await exportNodeAsJpgBlob(previewElement, {
-          quality: 0.88,
-          preferredWidthPx: 1080,
-          maxHeightPx: 2200,
-        })
-        const filename = `bill-preview-${bookNo}-${billNo}.jpg`
-        const file = new File([blob], filename, { type: 'image/jpeg' })
-        const attempts: ShareData[] = [{ files: [file] }, { files: [file], text: message }]
-        for (const payload of attempts) {
-          if (navigator.canShare && !navigator.canShare(payload)) continue
-          await navigator.share(payload)
-          setStatusText('')
-          return
-        }
-      }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        setStatusText('')
-        return
-      }
-      setStatusText('Native image share failed on this phone. Opening WhatsApp text fallback.')
-    }
-
-    const shareWindow = window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
-    if (!shareWindow) {
-      setStatusText('Could not open share options. Please allow popups and retry.')
-      return
-    }
-    setStatusText('Image share is not supported in this browser. WhatsApp opened with text.')
+    await shareBillLayoutImageWithWhatsAppFallback({
+      element: previewElement,
+      imageFilename: `bill-preview-${bookNo}-${billNo}.jpg`,
+      message,
+      setStatus: setStatusText,
+    })
   }
 
   useEffect(() => {
@@ -849,16 +770,18 @@ function NewBillPage() {
               </button>
             </div>
             <div className="max-h-[70vh] overflow-auto p-4">
-              <div
-                ref={previewRef}
-                className="mx-auto rounded-lg border border-slate-300 bg-white p-4 text-slate-800"
-                style={{ width: `${BILL_PRINT_PAGE_WIDTH_CM}cm` }}
-              >
+              <div className="flex justify-center">
+                <div
+                  ref={previewRef}
+                  className={BILL_PREVIEW_CARD_CLASS}
+                  style={{ width: `${BILL_PRINT_PAGE_WIDTH_CM}cm`, maxWidth: '100%' }}
+                >
                 {draftPrintProps ? (
                   <BillPrintLayout {...draftPrintProps} />
                 ) : (
                   <p className="p-4 text-sm text-slate-500">Unable to build preview.</p>
                 )}
+                </div>
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">

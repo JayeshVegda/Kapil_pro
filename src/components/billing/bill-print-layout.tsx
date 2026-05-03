@@ -1,7 +1,7 @@
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
-/** Printable bill width (cm); keep in sync with print / new-bill pages. */
+/** Phone / narrow-receipt width for preview, print, PDF, and JPG (shared with print CSS). */
 export const BILL_PRINT_PAGE_WIDTH_CM = 14
 
 export type BillPrintLineRow = {
@@ -36,7 +36,8 @@ export type BillPrintLayoutProps = {
 }
 
 /**
- * Single source of truth for on-screen and print bill layout (matches Print Bill page).
+ * Single source of truth for on-screen and print bill layout.
+ * Uses `bill-print-*` classes so copied HTML + getBillPrintPopupStyles() works without Tailwind.
  */
 export function BillPrintLayout({
   bookNo,
@@ -59,113 +60,120 @@ export function BillPrintLayout({
   lrList,
 }: BillPrintLayoutProps) {
   return (
-    <>
-      <div className="mb-2 flex items-start justify-between">
+    <div className="bill-print-root">
+      <div className="bill-print-header">
         <div>
-          <p className="text-sm font-semibold text-slate-900">Kapil Products</p>
-          <p className="text-xs text-slate-600">MKT: {mkt}</p>
+          <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Kapil Products</p>
+          <p style={{ margin: '4px 0 0', fontSize: 11, color: '#475569' }}>MKT: {mkt}</p>
         </div>
-        <div className="text-right text-xs text-slate-600">
-          <p>
-            Date: <span className="font-semibold text-slate-800">{formatFullDate(date)}</span>
+        <div className="bill-print-header-meta">
+          <p style={{ margin: 0 }}>
+            Date: <strong>{formatFullDate(date)}</strong>
           </p>
-          <p>
+          <p style={{ margin: '4px 0 0' }}>
             No: {bookNo}/{billNo}
           </p>
         </div>
       </div>
 
-      <p className="mb-2 text-sm text-slate-700">
-        M/s. <span className="font-semibold text-slate-900">{customerName}</span>
+      <p className="bill-print-party">
+        M/s. <strong>{customerName}</strong>
       </p>
 
-      <table className="w-full border-collapse text-xs">
+      <table className="bill-print-table">
+        <colgroup>
+          <col style={{ width: '34%' }} />
+          <col style={{ width: '18%' }} />
+          <col style={{ width: '22%' }} />
+          <col style={{ width: '26%' }} />
+        </colgroup>
         <thead>
-          <tr className="bg-slate-50">
-            <th className="border border-slate-300 px-2 py-1 text-left">Particulars</th>
-            <th className="border border-slate-300 px-2 py-1 text-right">Qty</th>
-            <th className="border border-slate-300 px-2 py-1 text-right">Rate</th>
-            <th className="border border-slate-300 px-2 py-1 text-right">Amount</th>
+          <tr>
+            <th>Particulars</th>
+            <th className="bill-print-col-qty">Qty</th>
+            <th className="bill-print-col-rate">Rate</th>
+            <th className="bill-print-col-amt">Amount</th>
           </tr>
         </thead>
         <tbody>
           {itemRows.map((row, index) => (
             <tr key={`${row.itemName}-${index}`}>
-              <td className="border border-slate-300 px-2 py-1">{row.itemName}</td>
-              <td className="border border-slate-300 px-2 py-1 text-right">{row.qty} kg</td>
-              <td className="border border-slate-300 px-2 py-1 text-right">{formatInrInteger(row.rate)}</td>
-              <td className="border border-slate-300 px-2 py-1 text-right">{formatInrInteger(row.amount)}</td>
+              <td>{row.itemName}</td>
+              <td className="bill-print-col-qty">{row.qty} kg</td>
+              <td className="bill-print-col-rate">{formatInrInteger(row.rate)}</td>
+              <td className="bill-print-col-amt">{formatInrInteger(row.amount)}</td>
             </tr>
           ))}
           {gstAmount > 0 && (
             <tr>
-              <td className="border border-slate-300 px-2 py-1">GST ({gstRate}%)</td>
-              <td className="border border-slate-300 px-2 py-1" />
-              <td className="border border-slate-300 px-2 py-1" />
-              <td className="border border-slate-300 px-2 py-1 text-right">{formatInrInteger(gstAmount)}</td>
+              <td>GST ({gstRate}%)</td>
+              <td className="bill-print-col-qty" />
+              <td className="bill-print-col-rate" />
+              <td className="bill-print-col-amt">{formatInrInteger(gstAmount)}</td>
             </tr>
           )}
           {transport > 0 && (
             <tr>
-              <td className="border border-slate-300 px-2 py-1">Transport</td>
-              <td className="border border-slate-300 px-2 py-1" />
-              <td className="border border-slate-300 px-2 py-1" />
-              <td className="border border-slate-300 px-2 py-1 text-right">+ {formatInrInteger(transport)}</td>
+              <td>Transport</td>
+              <td className="bill-print-col-qty" />
+              <td className="bill-print-col-rate" />
+              <td className="bill-print-col-amt">+ {formatInrInteger(transport)}</td>
             </tr>
           )}
         </tbody>
       </table>
 
-      <div className="my-3 border-t border-slate-300" />
-      <div className="space-y-1.5 text-xs">
-        {currentBillTotal !== 0 && (
-          <div className="flex items-center justify-between">
-            <span>Current Bill Total</span>
-            <span className="font-mono font-semibold">{formatInrInteger(currentBillTotal)}</span>
-          </div>
-        )}
+      <hr className="bill-print-divider" />
+
+      <div className="bill-print-summary">
+        <div className="bill-print-summary-line">
+          <span className="bill-print-summary-label">Current Bill Total</span>
+          <span className="bill-print-summary-value">{formatInrInteger(currentBillTotal)}</span>
+        </div>
         {previousBalance !== 0 && (
-          <div className="flex items-center justify-between">
-            <span>
+          <div className="bill-print-summary-line">
+            <span className="bill-print-summary-label">
               Previous Balance [dt. {previousBillDate === 'Opening' ? 'Opening' : formatFullDate(previousBillDate)}]
             </span>
-            <span className="font-mono">+ {formatInrInteger(previousBalance)}</span>
+            <span className="bill-print-summary-value">+ {formatInrInteger(previousBalance)}</span>
           </div>
         )}
-        <div className="flex items-center justify-between">
-          <span>Sub Total</span>
-          <span className="font-mono">{formatInrInteger(subtotal)}</span>
+        <div className="bill-print-summary-line">
+          <span className="bill-print-summary-label">Sub Total</span>
+          <span className="bill-print-summary-value">{formatInrInteger(subtotal)}</span>
         </div>
         {periodCreditEntries.length > 0 && (
-          <div className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
+          <div className="bill-print-credits">
             {periodCreditEntries.map((entry, index) => (
-              <div key={`${entry.date}-${entry.amount}-${index}`} className="flex items-center justify-between text-[11px] text-slate-600">
+              <div key={`${entry.date}-${entry.amount}-${index}`} className="bill-print-credit-line">
                 <span>Credited on {formatFullDate(entry.date)}</span>
-                <span className="font-mono">- {formatInrInteger(entry.amount)}</span>
+                <span className="bill-print-summary-value" style={{ fontSize: 11 }}>
+                  − {formatInrInteger(entry.amount)}
+                </span>
               </div>
             ))}
           </div>
         )}
-        <div className="flex items-center justify-between border-t border-slate-300 pt-1.5 text-base font-bold">
+        <div className="bill-print-total">
           <span>Total</span>
-          <span className="font-mono">{formatInrInteger(finalTotal)}</span>
+          <span className="bill-print-summary-value">{formatInrInteger(finalTotal)}</span>
         </div>
       </div>
 
-      <div className="mt-2 grid grid-cols-3 gap-1 text-[11px] leading-tight">
+      <div className="bill-print-footer">
         <div>
-          <p className="text-slate-500">Weight</p>
-          <p className="font-semibold text-slate-800">{Math.round(totalQty)} kg</p>
+          <p className="bill-print-footer-label">Weight</p>
+          <p className="bill-print-footer-value">{Math.round(totalQty)} kg</p>
         </div>
         <div>
-          <p className="text-slate-500">Bags</p>
-          <p className="font-semibold text-slate-800">{Math.round(totalBags)}</p>
+          <p className="bill-print-footer-label">Bags</p>
+          <p className="bill-print-footer-value">{Math.round(totalBags)}</p>
         </div>
         <div>
-          <p className="text-slate-500">LR No.</p>
-          <p className="font-semibold text-slate-800">{lrList.length ? lrList.join(', ') : '-'}</p>
+          <p className="bill-print-footer-label">LR No.</p>
+          <p className="bill-print-footer-value">{lrList.length ? lrList.join(', ') : '—'}</p>
         </div>
       </div>
-    </>
+    </div>
   )
 }

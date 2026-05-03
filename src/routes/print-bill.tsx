@@ -7,7 +7,13 @@ import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { formatFullDate } from '@/lib/date'
-import { exportNodeAsJpg, exportNodeAsJpgBlob } from '@/lib/image-export'
+import {
+  BILL_PREVIEW_CARD_CLASS,
+  BILL_PRINT_DOCUMENT_TITLE,
+  downloadBillLayoutAsJpg,
+  printBillLayoutFromElement,
+  shareBillLayoutImageWithWhatsAppFallback,
+} from '@/lib/bill-print-export'
 import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/print-bill')({
@@ -46,28 +52,6 @@ const num = (value: unknown) => {
 }
 
 const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
-function printHtmlWithoutPopup(html: string) {
-  const frame = document.createElement('iframe')
-  frame.style.position = 'fixed'
-  frame.style.right = '0'
-  frame.style.bottom = '0'
-  frame.style.width = '0'
-  frame.style.height = '0'
-  frame.style.border = '0'
-  frame.setAttribute('aria-hidden', 'true')
-  document.body.appendChild(frame)
-  const frameDoc = frame.contentDocument
-  if (!frameDoc) return false
-  frameDoc.open()
-  frameDoc.write(html)
-  frameDoc.close()
-  window.setTimeout(() => {
-    frame.contentWindow?.focus()
-    frame.contentWindow?.print()
-    window.setTimeout(() => frame.remove(), 500)
-  }, 80)
-  return true
-}
 
 function PrintBillPage() {
   const [search, setSearch] = useState('')
@@ -230,50 +214,16 @@ function PrintBillPage() {
 
   function printPreview() {
     if (!previewRef.current) return
-    const printHtml = `
-      <html>
-        <head>
-          <title>Print Bill</title>
-          <style>
-            @page { margin: 0.25cm; }
-            body { margin: 0; padding: 0.25cm; font-family: Arial, sans-serif; color: #0f172a; background: #fff; }
-            .preview-print { width: ${BILL_PRINT_PAGE_WIDTH_CM - 0.5}cm; margin: 0 auto; }
-            table { border-collapse: collapse; width: 100%; font-size: 11px; }
-            th, td { border: 1px solid #cbd5e1; padding: 6px; text-align: left; }
-            .amount { text-align: right; font-family: monospace; }
-          </style>
-        </head>
-        <body><div class="preview-print">${previewRef.current.innerHTML}</div></body>
-      </html>
-    `
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=800')
-    if (!printWindow) {
-      const usedIframeFallback = printHtmlWithoutPopup(printHtml)
-      setActionStatus(
-        usedIframeFallback
-          ? 'Popup blocked. Used in-page print fallback.'
-          : 'Print is blocked by browser settings. Please allow print popups.',
-      )
-      return
-    }
-    printWindow.document.write(printHtml)
-    printWindow.document.close()
-    window.setTimeout(() => {
-      printWindow.focus()
-      printWindow.print()
-    }, 50)
-    setActionStatus('')
+    printBillLayoutFromElement(previewRef.current, BILL_PRINT_DOCUMENT_TITLE, setActionStatus)
   }
 
   async function exportAsJpg() {
     if (!previewRef.current || !preview) return
     try {
-      await exportNodeAsJpg(previewRef.current, {
-        filename: `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`,
-        quality: 0.95,
-        preferredWidthPx: 1080,
-        maxHeightPx: 2800,
-      })
+      await downloadBillLayoutAsJpg(
+        previewRef.current,
+        `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`,
+      )
       setActionStatus('')
     } catch {
       setActionStatus('Unable to save JPG in this browser session. Please refresh once and retry.')
@@ -294,37 +244,12 @@ function PrintBillPage() {
       `Amount Due: ${formatInrInteger(preview.finalTotal)}`,
     ].join('\n')
 
-    try {
-      if (typeof navigator.share === 'function') {
-        const blob = await exportNodeAsJpgBlob(previewRef.current, {
-          quality: 0.88,
-          preferredWidthPx: 1080,
-          maxHeightPx: 2200,
-        })
-        const filename = `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`
-        const file = new File([blob], filename, { type: 'image/jpeg' })
-        const attempts: ShareData[] = [{ files: [file] }, { files: [file], text: message }]
-        for (const payload of attempts) {
-          if (navigator.canShare && !navigator.canShare(payload)) continue
-          await navigator.share(payload)
-          setActionStatus('')
-          return
-        }
-      }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        setActionStatus('')
-        return
-      }
-      setActionStatus('Native image share failed on this phone. Opening WhatsApp text fallback.')
-    }
-
-    const shareWindow = window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
-    if (!shareWindow) {
-      setActionStatus('Could not open share options. Please allow popups and retry.')
-      return
-    }
-    setActionStatus('Image share is not supported in this browser. WhatsApp opened with text.')
+    await shareBillLayoutImageWithWhatsAppFallback({
+      element: previewRef.current,
+      imageFilename: `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`,
+      message,
+      setStatus: setActionStatus,
+    })
   }
 
   return (
@@ -422,31 +347,33 @@ function PrintBillPage() {
               </div>
               {actionStatus && <p className="mb-2 text-xs text-slate-500">{actionStatus}</p>}
               <div className="max-h-[70vh] overflow-auto rounded-lg border border-slate-100 p-1">
-                <div
-                  ref={previewRef}
-                  className="mx-auto rounded-lg border border-slate-300 bg-white p-4"
-                  style={{ width: `${BILL_PRINT_PAGE_WIDTH_CM}cm` }}
-                >
-                  <BillPrintLayout
-                    bookNo={preview.selectedBill.bookNo}
-                    billNo={preview.selectedBill.billNo}
-                    date={preview.selectedBill.date}
-                    customerName={preview.selectedBill.customerName}
-                    mkt={preview.selectedBill.mkt}
-                    itemRows={preview.itemRows}
-                    gstAmount={preview.gstAmount}
-                    transport={preview.selectedBill.transport}
-                    gstRate={preview.selectedBill.gstRate}
-                    currentBillTotal={preview.currentBillTotal}
-                    previousBalance={preview.previousBalance}
-                    previousBillDate={preview.previousBillDate}
-                    periodCreditEntries={preview.periodCreditEntries}
-                    subtotal={preview.subtotal}
-                    finalTotal={preview.finalTotal}
-                    totalQty={preview.totalQty}
-                    totalBags={preview.totalBags}
-                    lrList={preview.lrList}
-                  />
+                <div className="flex justify-center px-1 py-2">
+                  <div
+                    ref={previewRef}
+                    className={BILL_PREVIEW_CARD_CLASS}
+                    style={{ width: `${BILL_PRINT_PAGE_WIDTH_CM}cm`, maxWidth: '100%' }}
+                  >
+                    <BillPrintLayout
+                      bookNo={preview.selectedBill.bookNo}
+                      billNo={preview.selectedBill.billNo}
+                      date={preview.selectedBill.date}
+                      customerName={preview.selectedBill.customerName}
+                      mkt={preview.selectedBill.mkt}
+                      itemRows={preview.itemRows}
+                      gstAmount={preview.gstAmount}
+                      transport={preview.selectedBill.transport}
+                      gstRate={preview.selectedBill.gstRate}
+                      currentBillTotal={preview.currentBillTotal}
+                      previousBalance={preview.previousBalance}
+                      previousBillDate={preview.previousBillDate}
+                      periodCreditEntries={preview.periodCreditEntries}
+                      subtotal={preview.subtotal}
+                      finalTotal={preview.finalTotal}
+                      totalQty={preview.totalQty}
+                      totalBags={preview.totalBags}
+                      lrList={preview.lrList}
+                    />
+                  </div>
                 </div>
               </div>
             </>
