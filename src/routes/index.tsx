@@ -87,6 +87,34 @@ function DashboardPage() {
         </div>
       </section>
 
+      {data.thisMonthItemBags.length > 0 && (
+        <section className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">This month · bags by item</h2>
+            <span className="text-[11px] text-slate-500">Primary: bags · small: kg</span>
+          </div>
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {data.thisMonthItemBags.map((row) => (
+              <li
+                key={row.itemName}
+                className="flex items-baseline justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/90 px-3 py-2"
+              >
+                <span className="min-w-0 truncate text-sm font-medium text-slate-800" title={row.itemName}>
+                  {row.itemName}
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="font-mono text-base font-bold tabular-nums text-slate-900">{row.bags}</span>
+                  <span className="ml-1 text-[11px] font-medium text-slate-500">bags</span>
+                  {row.kg > 0 && (
+                    <span className="ml-2 font-mono text-[11px] tabular-nums text-slate-500">{Math.round(row.kg)} kg</span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
         <AnalyticsTile title="Collection Progress" value={`${data.kpis.collectionRate.toFixed(1)}%`} positive={data.kpis.collectionRate >= 70} hint="Overall collected vs billed" className="xl:col-span-4" progress={data.kpis.collectionRate} />
         <AnalyticsTile title="Avg Pending per Party" value={fmtMoneyCompact(data.kpis.pendingParties > 0 ? data.kpis.outstanding / data.kpis.pendingParties : 0)} positive={false} hint="Average pending among due parties" className="xl:col-span-4" />

@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Download, Printer, Search, Share2 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM } from '@/components/billing/bill-print-layout'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
@@ -45,8 +46,6 @@ const num = (value: unknown) => {
 }
 
 const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
-const BILL_PAGE_WIDTH_CM = 14
-
 function printHtmlWithoutPopup(html: string) {
   const frame = document.createElement('iframe')
   frame.style.position = 'fixed'
@@ -238,7 +237,7 @@ function PrintBillPage() {
           <style>
             @page { margin: 0.25cm; }
             body { margin: 0; padding: 0.25cm; font-family: Arial, sans-serif; color: #0f172a; background: #fff; }
-            .preview-print { width: ${BILL_PAGE_WIDTH_CM - 0.5}cm; margin: 0 auto; }
+            .preview-print { width: ${BILL_PRINT_PAGE_WIDTH_CM - 0.5}cm; margin: 0 auto; }
             table { border-collapse: collapse; width: 100%; font-size: 11px; }
             th, td { border: 1px solid #cbd5e1; padding: 6px; text-align: left; }
             .amount { text-align: right; font-family: monospace; }
@@ -426,106 +425,28 @@ function PrintBillPage() {
                 <div
                   ref={previewRef}
                   className="mx-auto rounded-lg border border-slate-300 bg-white p-4"
-                  style={{ width: `${BILL_PAGE_WIDTH_CM}cm` }}
+                  style={{ width: `${BILL_PRINT_PAGE_WIDTH_CM}cm` }}
                 >
-                  <div className="mb-2 flex items-start justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">Kapil Products</p>
-                      <p className="text-xs text-slate-600">MKT: {preview.selectedBill.mkt}</p>
-                    </div>
-                    <div className="text-right text-xs text-slate-600">
-                      <p>Date: <span className="font-semibold text-slate-800">{formatFullDate(preview.selectedBill.date)}</span></p>
-                      <p>No: {preview.selectedBill.bookNo}/{preview.selectedBill.billNo}</p>
-                    </div>
-                  </div>
-
-                  <p className="mb-2 text-sm text-slate-700">M/s. <span className="font-semibold text-slate-900">{preview.selectedBill.customerName}</span></p>
-
-                  <table className="w-full border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-slate-50">
-                        <th className="border border-slate-300 px-2 py-1 text-left">Particulars</th>
-                        <th className="border border-slate-300 px-2 py-1 text-right">Qty</th>
-                        <th className="border border-slate-300 px-2 py-1 text-right">Rate</th>
-                        <th className="border border-slate-300 px-2 py-1 text-right">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {preview.itemRows.map((row, index) => (
-                        <tr key={`${row.itemName}-${index}`}>
-                          <td className="border border-slate-300 px-2 py-1">{row.itemName}</td>
-                          <td className="border border-slate-300 px-2 py-1 text-right">{row.qty} kg</td>
-                          <td className="border border-slate-300 px-2 py-1 text-right">{formatInrInteger(row.rate)}</td>
-                          <td className="border border-slate-300 px-2 py-1 text-right">{formatInrInteger(row.amount)}</td>
-                        </tr>
-                      ))}
-                      {preview.gstAmount > 0 && (
-                        <tr>
-                          <td className="border border-slate-300 px-2 py-1">GST ({preview.selectedBill.gstRate}%)</td>
-                          <td className="border border-slate-300 px-2 py-1" />
-                          <td className="border border-slate-300 px-2 py-1" />
-                          <td className="border border-slate-300 px-2 py-1 text-right">{formatInrInteger(preview.gstAmount)}</td>
-                        </tr>
-                      )}
-                      {preview.selectedBill.transport > 0 && (
-                        <tr>
-                          <td className="border border-slate-300 px-2 py-1">Transport</td>
-                          <td className="border border-slate-300 px-2 py-1" />
-                          <td className="border border-slate-300 px-2 py-1" />
-                          <td className="border border-slate-300 px-2 py-1 text-right">+ {formatInrInteger(preview.selectedBill.transport)}</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-
-                  <div className="my-3 border-t border-slate-300" />
-                  <div className="space-y-1.5 text-xs">
-                    {preview.currentBillTotal !== 0 && (
-                      <div className="flex items-center justify-between">
-                        <span>Current Bill Total</span>
-                        <span className="font-mono font-semibold">{formatInrInteger(preview.currentBillTotal)}</span>
-                      </div>
-                    )}
-                    {preview.previousBalance !== 0 && (
-                      <div className="flex items-center justify-between">
-                        <span>Previous Balance [dt. {preview.previousBillDate === 'Opening' ? 'Opening' : formatFullDate(preview.previousBillDate)}]</span>
-                        <span className="font-mono">+ {formatInrInteger(preview.previousBalance)}</span>
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between">
-                      <span>Sub Total</span>
-                      <span className="font-mono">{formatInrInteger(preview.subtotal)}</span>
-                    </div>
-                    {preview.periodCreditEntries.length > 0 && (
-                      <div className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
-                        {preview.periodCreditEntries.map((entry, index) => (
-                          <div key={`${entry.date}-${entry.amount}-${index}`} className="flex items-center justify-between text-[11px] text-slate-600">
-                            <span>Credited on {formatFullDate(entry.date)}</span>
-                            <span className="font-mono">- {formatInrInteger(entry.amount)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between border-t border-slate-300 pt-1.5 text-base font-bold">
-                      <span>Total</span>
-                      <span className="font-mono">{formatInrInteger(preview.finalTotal)}</span>
-                    </div>
-                  </div>
-
-                  <div className="mt-2 grid grid-cols-3 gap-1 text-[11px] leading-tight">
-                    <div>
-                      <p className="text-slate-500">Weight</p>
-                      <p className="font-semibold text-slate-800">{Math.round(preview.totalQty)} kg</p>
-                    </div>
-                    <div>
-                      <p className="text-slate-500">Bags</p>
-                      <p className="font-semibold text-slate-800">{Math.round(preview.totalBags)}</p>
-                    </div>
-                    <div>
-                      <p className="text-slate-500">LR No.</p>
-                      <p className="font-semibold text-slate-800">{preview.lrList.length ? preview.lrList.join(', ') : '-'}</p>
-                    </div>
-                  </div>
+                  <BillPrintLayout
+                    bookNo={preview.selectedBill.bookNo}
+                    billNo={preview.selectedBill.billNo}
+                    date={preview.selectedBill.date}
+                    customerName={preview.selectedBill.customerName}
+                    mkt={preview.selectedBill.mkt}
+                    itemRows={preview.itemRows}
+                    gstAmount={preview.gstAmount}
+                    transport={preview.selectedBill.transport}
+                    gstRate={preview.selectedBill.gstRate}
+                    currentBillTotal={preview.currentBillTotal}
+                    previousBalance={preview.previousBalance}
+                    previousBillDate={preview.previousBillDate}
+                    periodCreditEntries={preview.periodCreditEntries}
+                    subtotal={preview.subtotal}
+                    finalTotal={preview.finalTotal}
+                    totalQty={preview.totalQty}
+                    totalBags={preview.totalBags}
+                    lrList={preview.lrList}
+                  />
                 </div>
               </div>
             </>

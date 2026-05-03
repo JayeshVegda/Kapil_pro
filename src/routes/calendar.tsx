@@ -80,6 +80,8 @@ type DayBill = {
   customerId: string
   customerName: string
   total: number
+  /** Single truncated line: item qty kg · … */
+  kgSummaryLine: string
 }
 
 type DayPayment = {
@@ -105,6 +107,29 @@ function billsRefDisplay(pbRef: unknown, bookNo: number, billNo: number) {
   const raw = str(pbRef).trim()
   if (raw.length > 0) return raw
   return formatBillRefFallback(bookNo, billNo)
+}
+
+function mergeQtyByItemName(rows: Array<{ itemName: string; qty: number }>) {
+  const m = new Map<string, number>()
+  for (const r of rows) {
+    const name = r.itemName.trim()
+    if (!name || !(r.qty > 0)) continue
+    m.set(name, (m.get(name) ?? 0) + r.qty)
+  }
+  return [...m.entries()].map(([itemName, qty]) => ({ itemName, qty }))
+}
+
+/** One line, kg only; truncated for list rows. */
+function billKgSummaryOneLine(rows: Array<{ itemName: string; qty: number }>, maxLen = 72) {
+  const merged = mergeQtyByItemName(rows)
+  if (merged.length === 0) return ''
+  const parts = merged.map((r) => {
+    const short = r.itemName.length > 14 ? `${r.itemName.slice(0, 13)}…` : r.itemName
+    return `${short} ${Math.round(r.qty)}kg`
+  })
+  const s = parts.join(' · ')
+  if (s.length <= maxLen) return s
+  return `${s.slice(0, maxLen - 1)}…`
 }
 
 function CalendarPage() {
@@ -148,9 +173,13 @@ function CalendarPage() {
 
     const { billsRaw, billItemsRaw, paymentsRaw, ratesRaw, prevRatesRaw, rangeStart: rs, rangeEnd: re } = data
     const itemSumByBill = new Map<string, number>()
+    const itemLinesByBill = new Map<string, Array<{ itemName: string; qty: number }>>()
     for (const item of billItemsRaw as PBRecord[]) {
       const billId = str(item.bill)
       itemSumByBill.set(billId, (itemSumByBill.get(billId) ?? 0) + num(item.amount))
+      const lines = itemLinesByBill.get(billId) ?? []
+      lines.push({ itemName: str(item.item_name), qty: num(item.qty) })
+      itemLinesByBill.set(billId, lines)
     }
 
     const dailySales = new Map<string, number>()
@@ -176,6 +205,7 @@ function CalendarPage() {
         customerId: str(bill.customer),
         customerName: str(bill.customer_name),
         total,
+        kgSummaryLine: billKgSummaryOneLine(itemLinesByBill.get(str(bill.id)) ?? []),
       }
       const list = billsByDate.get(billDate) ?? []
       list.push(row)
@@ -523,6 +553,11 @@ function CalendarPage() {
                           <p className="font-mono text-xs text-slate-600">
                             {b.billRefDisplay} · {formatInrInteger(b.total)}
                           </p>
+                          {b.kgSummaryLine && (
+                            <p className="truncate font-mono text-[11px] text-slate-500" title={b.kgSummaryLine}>
+                              {b.kgSummaryLine}
+                            </p>
+                          )}
                         </div>
                         <Link
                           to="/ledger"

@@ -1,7 +1,7 @@
 import { useIsFetching, useQueryClient } from '@tanstack/react-query'
 import { Outlet, useRouterState } from '@tanstack/react-router'
 import { AlertTriangle, CheckCircle2, Clock3, Loader2, Menu, RefreshCw, Search } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { SidebarNavPanel } from './sidebar-nav'
 
 const pageMeta: Record<string, { title: string; subtitle: string }> = {
@@ -18,10 +18,16 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/print-bill': { title: 'Print Bill', subtitle: 'Filter, preview, and print bills' },
 }
 
+const DOC_TITLE_SUFFIX = 'Kapil Billing'
+
 export function AppShell() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const meta = pageMeta[pathname] ?? { title: 'Kapil Billing', subtitle: 'Business billing workspace' }
+
+  useEffect(() => {
+    document.title = `${meta.title} – ${DOC_TITLE_SUFFIX}`
+  }, [meta.title])
   const queryClient = useQueryClient()
   const fetchCount = useIsFetching()
   const isSyncing = fetchCount > 0

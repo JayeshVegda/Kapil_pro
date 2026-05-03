@@ -4,6 +4,7 @@ import { Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
+import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { saveBillWithItems } from '@/data/bills'
 import { pb } from '@/data/pocketbase'
@@ -13,7 +14,7 @@ import { useMarketRate } from '@/domain/market-rate'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { exportNodeAsJpg, exportNodeAsJpgBlob } from '@/lib/image-export'
 import { formatInQty, formatInrInteger, parseNonNegativeNumber, parsePositiveIntInput } from '@/lib/inr-format'
-import { filterRankedNameMatches, findBestNameMatch, normalizeSearchText } from '@/lib/search'
+import { findBestNameMatch } from '@/lib/search'
 
 export const Route = createFileRoute('/new-bill')({
   component: NewBillPage,
@@ -35,7 +36,6 @@ const bagsFromQtyKg = (qtyKg: number) => {
   if (!(qtyKg > 0)) return 0
   return Math.round(qtyKg / 50)
 }
-const BILL_PAGE_WIDTH_CM = 14
 function printHtmlWithoutPopup(html: string) {
   const frame = document.createElement('iframe')
   frame.style.position = 'fixed'
@@ -59,7 +59,7 @@ function printHtmlWithoutPopup(html: string) {
   return true
 }
 
-const COMPANY_NAME = 'Kapil Trading Co.'
+const COMPANY_NAME = 'Kapil Products'
 const submitRowSchema = z.object({
   itemName: z.string().trim().min(1),
   qty: z.number().positive(),
@@ -269,41 +269,56 @@ function NewBillPage() {
   const totalCredits = validCredits.reduce((sum, entry) => sum + entry.amount, 0)
   const subTotalBeforeCredits = totals.grandTotal + previousBalanceAmount
   const payableAfterAdjustments = totals.grandTotal + previousBalanceAmount - totalCredits
-  const previewLineItems = useMemo(
-    () => [
-      { particulars: `MKT : ${Math.round(mktRate) || 0}`, qty: '', rate: '', amount: '', isMeta: true },
-      ...validRows.map((row) => ({
-        particulars: row.itemName,
-        qty: `${row.qty} kg`,
-        rate: `${Math.round(row.rate)}`,
-        amount: `${Math.round(row.qty * row.rate)}`,
-        isMeta: false,
-      })),
-      ...(totals.transport > 0
-        ? [{ particulars: 'Transport', qty: '', rate: '+', amount: `${Math.round(totals.transport)}`, isMeta: true as const }]
-        : []),
-      ...(totals.gstAmount > 0
-        ? [{ particulars: `GST ${gstRate}%`, qty: '', rate: '+', amount: `${Math.round(totals.gstAmount)}`, isMeta: true as const }]
-        : []),
-      {
-        particulars: `Pre [${previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)}]`,
-        qty: '',
-        rate: previousBalanceAmount >= 0 ? '+' : '-',
-        amount: `${Math.round(Math.abs(previousBalanceAmount))}`,
-        isMeta: true as const,
-      },
-      ...(validCredits.length > 0
-        ? validCredits.map((entry) => ({
-            particulars: `Credited on ${formatFullDate(entry.date)}`,
-            qty: '',
-            rate: '-',
-            amount: `${Math.round(entry.amount)}`,
-            isMeta: true as const,
-          }))
-        : [{ particulars: 'No credited entries in this period', qty: '', rate: '-', amount: '0', isMeta: true as const }]),
-    ],
-    [mktRate, validRows, totals.transport, totals.gstAmount, gstRate, previousBalanceAmount, previousBalanceDate, validCredits],
-  )
+
+  const draftPrintProps = useMemo((): BillPrintLayoutProps | null => {
+    if (!customerId || validRows.length === 0) return null
+    const itemRows = validRows.map((r) => ({
+      itemName: r.itemName,
+      qty: r.qty,
+      rate: r.rate,
+      amount: r.qty * r.rate,
+      bags: bagsFromQtyKg(r.qty),
+    }))
+    return {
+      bookNo,
+      billNo,
+      date,
+      customerName: selectedCustomerName,
+      mkt: mktRate,
+      itemRows,
+      gstAmount: totals.gstAmount,
+      transport,
+      gstRate,
+      currentBillTotal: totals.grandTotal,
+      previousBalance: previousBalanceAmount,
+      previousBillDate: previousBalanceDate,
+      periodCreditEntries: validCredits.map((c) => ({ date: c.date, amount: c.amount })),
+      subtotal: subTotalBeforeCredits,
+      finalTotal: payableAfterAdjustments,
+      totalQty: totals.totalQty,
+      totalBags: itemRows.reduce((s, r) => s + r.bags, 0),
+      lrList,
+    }
+  }, [
+    customerId,
+    validRows,
+    bookNo,
+    billNo,
+    date,
+    selectedCustomerName,
+    mktRate,
+    totals.gstAmount,
+    totals.grandTotal,
+    totals.totalQty,
+    transport,
+    gstRate,
+    previousBalanceAmount,
+    previousBalanceDate,
+    validCredits,
+    subTotalBeforeCredits,
+    payableAfterAdjustments,
+    lrList,
+  ])
 
   function resetForm() {
     setDate(today)
@@ -401,7 +416,7 @@ function NewBillPage() {
           <style>
             @page { margin: 0.25cm; }
             body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #0f172a; background: #fff; }
-            .preview-print { width: ${BILL_PAGE_WIDTH_CM - 0.5}cm; margin: 0 auto; }
+            .preview-print { width: ${BILL_PRINT_PAGE_WIDTH_CM - 0.5}cm; margin: 0 auto; }
             table { border-collapse: collapse; width: 100%; font-size: 10px; }
             th, td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; vertical-align: top; }
             .amount { text-align: right; font-family: monospace; }
@@ -707,29 +722,31 @@ function NewBillPage() {
                 return (
                   <tr key={i} className="border-t border-slate-100">
                     <td className="px-3 py-2.5 align-middle">
-                      <input
+                      <select
                         className={inputClass}
-                        list={`bill-item-options-${i}`}
-                        value={row.itemName}
+                        value={(itemsQuery.data ?? []).find((it) => it.name === row.itemName)?.id ?? ''}
                         disabled={itemsQuery.isLoading || itemsQuery.isError}
                         onChange={(e) => {
-                          const itemName = e.target.value
-                          const selected = findExactNameMatch(itemsQuery.data ?? [], itemName)
+                          const id = e.target.value
+                          const selected = (itemsQuery.data ?? []).find((it) => it.id === id)
+                          if (!selected) {
+                            updateRow(i, { itemName: '', rate: 0, manualRateEdited: false })
+                            return
+                          }
                           updateRow(i, {
-                            itemName,
-                            rate: selected ? selected.defaultRate + mktRate : row.rate,
-                            manualRateEdited: selected ? false : row.manualRateEdited,
+                            itemName: selected.name,
+                            rate: selected.defaultRate + mktRate,
+                            manualRateEdited: false,
                           })
                         }}
-                        placeholder={itemsQuery.isLoading ? 'Loading items...' : 'Type to search item...'}
-                      />
-                      <datalist id={`bill-item-options-${i}`}>
-                        {filterRankedNameMatches(itemsQuery.data ?? [], row.itemName, (item) => item.name)
-                          .slice(0, 20)
-                          .map((item) => (
-                            <option key={item.id} value={item.name} />
-                          ))}
-                      </datalist>
+                      >
+                        <option value="">{itemsQuery.isLoading ? 'Loading items…' : 'Select item…'}</option>
+                        {(itemsQuery.data ?? []).map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                     <td className="px-3 py-2.5 align-middle">
                       <input
@@ -834,78 +851,14 @@ function NewBillPage() {
             <div className="max-h-[70vh] overflow-auto p-4">
               <div
                 ref={previewRef}
-                className="mx-auto rounded-md border border-slate-300 bg-white p-2 text-[10px] text-slate-800"
-                style={{ width: `${BILL_PAGE_WIDTH_CM}cm` }}
+                className="mx-auto rounded-lg border border-slate-300 bg-white p-4 text-slate-800"
+                style={{ width: `${BILL_PRINT_PAGE_WIDTH_CM}cm` }}
               >
-                <div className="mb-1 border-b border-slate-300 pb-1 text-center text-[12px] font-semibold tracking-wide">
-                  {COMPANY_NAME}
-                </div>
-                <div className="mb-1 flex items-center justify-between border-b border-slate-300 pb-1 text-[11px]">
-                  <div>No. <span className="font-semibold">{String(bookNo).padStart(3, '0')}/{String(billNo).padStart(3, '0')}</span></div>
-                  <div>Date : <span className="font-bold">{formatFullDate(date)}</span></div>
-                </div>
-                <div className="mb-1 border-b border-slate-300 pb-1">
-                  <span className="mr-1 font-semibold">M/s.</span>
-                  <span>{selectedCustomerName}</span>
-                </div>
-
-                <table className="w-full border-collapse text-[10px]">
-                  <thead>
-                    <tr className="bg-slate-50">
-                      <th className="w-[7%] border border-slate-300 px-1 py-1 text-left">Sr.</th>
-                      <th className="w-[46%] border border-slate-300 px-1 py-1 text-left">Particulars</th>
-                      <th className="w-[16%] border border-slate-300 px-1 py-1 text-right">Qty.</th>
-                      <th className="w-[13%] border border-slate-300 px-1 py-1 text-right">Rate</th>
-                      <th className="w-[18%] border border-slate-300 px-1 py-1 text-right">Amount Rs.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Array.from({ length: 14 }).map((_, idx) => {
-                      const row = previewLineItems[idx]
-                      return (
-                        <tr key={idx}>
-                          <td className="border border-slate-300 px-1 py-1 align-top text-[9px] text-slate-500">{row && !row.isMeta ? idx + 1 : ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 align-top">{row?.particulars ?? ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 text-right align-top font-mono">{row?.qty ?? ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 text-right align-top font-mono">{row?.rate ?? ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 text-right align-top font-mono">{row?.amount ?? ''}</td>
-                        </tr>
-                      )
-                    })}
-                    {totals.grandTotal !== 0 && (
-                      <tr>
-                        <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">Current Bill Total</td>
-                        <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[11px] font-semibold">{Math.round(totals.grandTotal).toLocaleString('en-IN')}</td>
-                      </tr>
-                    )}
-                    <tr>
-                      <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">{payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}</td>
-                      <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[12px] font-bold">{Math.round(Math.abs(payableAfterAdjustments)).toLocaleString('en-IN')}</td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <div className="mt-2 flex items-start justify-between gap-2">
-                  <div className="space-y-0.5 text-[10px] leading-tight">
-                    <div className="flex items-center gap-2">
-                      <p className="whitespace-nowrap">Weight : <span className="font-semibold">{formatInQty(totals.totalQty, 'kg')}</span></p>
-                      <p className="whitespace-nowrap">Bags : <span className="font-semibold">{bagsFromQtyKg(totals.totalQty)}</span></p>
-                      <p className="min-w-0 truncate">LR No. <span className="font-semibold">{lrList.length > 0 ? lrList.join(', ') : '-'}</span></p>
-                    </div>
-                    {previousBalanceAmount !== 0 && (
-                      <p>{previousBalanceAmount >= 0 ? 'Prev Bal' : 'Prev Advance'} [{previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)}] : <span className="font-semibold">{Math.round(Math.abs(previousBalanceAmount)).toLocaleString('en-IN')}</span></p>
-                    )}
-                    {validCredits.map((entry, index) => (
-                      <p key={`${entry.date}-${entry.amount}-${index}`}>
-                        Credited on {formatFullDate(entry.date)} : <span className="font-semibold">-{Math.round(entry.amount).toLocaleString('en-IN')}</span>
-                      </p>
-                    ))}
-                    {validCredits.length === 0 && <p>No credited entries in this period</p>}
-                  </div>
-                  <div className="flex h-7 w-20 items-center justify-center rounded-full border border-slate-400 text-[10px] text-slate-500">
-                    Signature
-                  </div>
-                </div>
+                {draftPrintProps ? (
+                  <BillPrintLayout {...draftPrintProps} />
+                ) : (
+                  <p className="p-4 text-sm text-slate-500">Unable to build preview.</p>
+                )}
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
@@ -1067,12 +1020,6 @@ function parseQuickCommandLine(
 
 function resolveByName<T extends { name: string }>(token: string, records: T[]) {
   return findBestNameMatch(records, token, (record) => record.name) ?? null
-}
-
-function findExactNameMatch<T extends { name: string }>(records: T[], value: string) {
-  const normalized = normalizeSearchText(value)
-  if (!normalized) return undefined
-  return records.find((record) => normalizeSearchText(record.name) === normalized)
 }
 
 function parseQuickDateToken(value: string, today: string) {

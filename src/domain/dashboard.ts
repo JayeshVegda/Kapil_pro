@@ -27,7 +27,15 @@ type DashboardPayment = CanonicalPaymentRecord & {
   status: 'Collected'
 }
 
+export type ThisMonthItemBagsRow = {
+  itemName: string
+  bags: number
+  kg: number
+}
+
 export type DashboardData = {
+  /** Bill lines in the current calendar month: bags primary, kg for context. */
+  thisMonthItemBags: ThisMonthItemBagsRow[]
   kpis: {
     outstanding: number
     thisMonthSales: number
@@ -118,6 +126,30 @@ export async function fetchDashboardData(): Promise<DashboardData> {
   )
 
   const nowMonth = monthKey(getLocalIsoDate())
+  const billDateById = new Map<string, string>()
+  for (const row of billsRaw) {
+    const d = datePart(row.date)
+    if (d <= asOfDate) billDateById.set(String(row.id), d)
+  }
+  const thisMonthItemAgg = new Map<string, { bags: number; kg: number }>()
+  for (const row of billItemsRaw) {
+    const billId = String(row.bill ?? '')
+    const billDate = billDateById.get(billId)
+    if (!billDate || monthKey(billDate) !== nowMonth) continue
+    const name = String(row.item_name ?? '').trim()
+    if (!name) continue
+    const bags = num(row.bags)
+    const kg = num(row.qty)
+    const cur = thisMonthItemAgg.get(name) ?? { bags: 0, kg: 0 }
+    cur.bags += bags
+    cur.kg += kg
+    thisMonthItemAgg.set(name, cur)
+  }
+  const thisMonthItemBags: ThisMonthItemBagsRow[] = [...thisMonthItemAgg.entries()]
+    .map(([itemName, v]) => ({ itemName, bags: v.bags, kg: v.kg }))
+    .sort((a, b) => b.bags - a.bags || b.kg - a.kg)
+    .slice(0, 12)
+
   const prev = new Date()
   prev.setMonth(prev.getMonth() - 1)
   const prevMonth = monthKey(getLocalIsoDate(prev))
@@ -164,6 +196,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
   }))
 
   return {
+    thisMonthItemBags,
     kpis: {
       outstanding,
       thisMonthSales,
