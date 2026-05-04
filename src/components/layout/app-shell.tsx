@@ -25,6 +25,7 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/casting': { title: 'Casting Overview', subtitle: 'Production summary and recent cost trends' },
   '/casting/new-session': { title: 'New Casting Session', subtitle: 'Daily furnace inputs, outputs, cost per kg' },
   '/casting/log': { title: 'Casting Log', subtitle: 'History of casting sessions' },
+  '/casting/materials': { title: 'Casting Materials', subtitle: 'Material master for casting analysis and control' },
 }
 
 const DOC_TITLE_SUFFIX = 'Kapil Billing'

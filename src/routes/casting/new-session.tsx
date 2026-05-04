@@ -4,9 +4,9 @@ import { Plus, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
-import { loadLatestMaterialRates, saveCastingSession } from '@/data/casting'
+import { loadCastingMaterials, loadLatestMaterialRates, loadMarketRateForDate, saveCastingSession } from '@/data/casting'
 import { calculateCastingCost, type CastingInputRow } from '@/domain/casting-calculations'
-import { getLocalIsoDate } from '@/lib/date'
+import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/casting/new-session')({
@@ -14,6 +14,7 @@ export const Route = createFileRoute('/casting/new-session')({
 })
 
 const LATEST_RATES_KEY = ['latest-material-rates'] as const
+const CASTING_MATERIALS_KEY = ['casting-materials'] as const
 
 type UiMaterialRow = CastingInputRow & { clientId: string }
 
@@ -71,20 +72,42 @@ function CastingNewSessionPage() {
   const [rows, setRows] = useState<UiMaterialRow[]>(() => defaultRows())
   const [statusText, setStatusText] = useState('')
   const [ratesHint, setRatesHint] = useState<string | null>(null)
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const ratesAppliedRef = useRef(false)
+  const previewRef = useRef<HTMLDivElement>(null)
 
   const ratesQuery = useQuery({
     queryKey: LATEST_RATES_KEY,
     queryFn: loadLatestMaterialRates,
     staleTime: 60_000,
   })
+  const materialsQuery = useQuery({
+    queryKey: CASTING_MATERIALS_KEY,
+    queryFn: loadCastingMaterials,
+    staleTime: 60_000,
+  })
+  const marketRateQuery = useQuery({
+    queryKey: ['casting-market-rate', date],
+    queryFn: () => loadMarketRateForDate(date),
+    staleTime: 60_000,
+  })
+  const materialOptions = useMemo(
+    () => {
+      const set = new Set<string>(DEFAULT_MATERIALS)
+      for (const m of materialsQuery.data ?? []) {
+        if (m.isActive && m.name.trim()) set.add(m.name.trim())
+      }
+      return [...set].map((name) => ({ id: name, name }))
+    },
+    [materialsQuery.data],
+  )
 
   useEffect(() => {
     if (!ratesQuery.isSuccess || ratesAppliedRef.current) return
     const map = ratesQuery.data ?? {}
     const anyRate = Object.values(map).some((v) => v > 0)
     ratesAppliedRef.current = true
-    setRatesHint(anyRate ? 'Rates auto-filled from latest scrap purchases' : 'No purchase data found — enter rates manually')
+    setRatesHint(anyRate ? 'Rates auto-filled from latest casting session' : 'No previous casting rates found — enter rates manually')
     if (!anyRate) return
     setRows((prev) =>
       prev.map((r) => {
@@ -97,6 +120,10 @@ function CastingNewSessionPage() {
   }, [ratesQuery.isSuccess, ratesQuery.data])
 
   const cost = useMemo(() => calculateCastingCost(rows), [rows])
+  const validRows = useMemo(
+    () => rows.filter((r) => r.materialName.trim().length > 0 && r.qty > 0 && r.rate > 0),
+    [rows],
+  )
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -163,7 +190,39 @@ function CastingNewSessionPage() {
     })
   }
 
-  const helperStatus = statusText || (saveMutation.isPending ? 'Saving...' : 'Fill session details and material inputs, then save.')
+  const helperStatus = statusText || (saveMutation.isPending ? 'Saving...' : '')
+
+  function validateBeforePreview() {
+    const parsed = saveSchema.safeParse({
+      date,
+      unit,
+      wireOut,
+      wastage,
+      cholIn,
+      note,
+      rows: validRows.map(({ materialName, qty, rate }) => ({ materialName, qty, rate })),
+    })
+    if (!parsed.success) {
+      setStatusText(parsed.error.issues[0]?.message ?? 'Validation failed')
+      return false
+    }
+    return true
+  }
+
+  function openPreview() {
+    if (!validateBeforePreview()) return
+    setStatusText('')
+    setIsPreviewOpen(true)
+  }
+
+  async function confirmAndSave() {
+    try {
+      await saveMutation.mutateAsync()
+      setIsPreviewOpen(false)
+    } catch {
+      // saveMutation already sets user-friendly status text.
+    }
+  }
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
@@ -176,6 +235,7 @@ function CastingNewSessionPage() {
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Date *">
             <input className={inputClass} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <p className="mt-1 text-[11px] text-slate-500">Format: dd-mm-yyyy</p>
           </Field>
           <Field label="Unit (batches)">
             <input className={inputClass} type="number" min={0} step={1} value={unit || ''} onChange={(e) => setUnit(parseNonNegativeNumber(e.target.value))} />
@@ -220,7 +280,18 @@ function CastingNewSessionPage() {
                 return (
                   <tr key={r.clientId} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                     <td className="px-3 py-2">
-                      <input className={inputClass} value={r.materialName} onChange={(e) => updateRow(r.clientId, { materialName: e.target.value })} />
+                      <input
+                        className={inputClass}
+                        list={`casting-material-options-${r.clientId}`}
+                        value={r.materialName}
+                        onChange={(e) => updateRow(r.clientId, { materialName: e.target.value })}
+                        placeholder="Material (free text allowed)"
+                      />
+                      <datalist id={`casting-material-options-${r.clientId}`}>
+                        {materialOptions.map((opt) => (
+                          <option key={opt.id} value={opt.name} />
+                        ))}
+                      </datalist>
                     </td>
                     <td className="px-3 py-2">
                       <input
@@ -259,9 +330,7 @@ function CastingNewSessionPage() {
             </tbody>
           </table>
         </div>
-        <p className="mt-2 text-xs text-slate-500">
-          Rates will auto-fill from scrap purchases once Buying module is set up. Enter manually for now.
-        </p>
+        <p className="mt-2 text-xs text-slate-500">Rates auto-fill from latest casting log session when available.</p>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -271,11 +340,34 @@ function CastingNewSessionPage() {
           <Metric label="Total input cost" value={formatInrInteger(cost.totalInputCost)} />
         </div>
 
-        <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-5">
-          <div className="text-left sm:text-right">
-            <p className="text-xs text-slate-400">Cost per kg (input basis)</p>
-            <p className="mt-1 font-mono text-3xl font-bold tabular-nums text-slate-900">{cost.costPerKg > 0 ? `₹${cost.costPerKg.toFixed(2)}` : '—'}</p>
+        <div className="mt-6 grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-5">
+            <div className="text-left sm:text-right">
+              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-amber-700">Primary KPI · Cost/kg (input weighted)</p>
+              <p className="mt-1 font-mono text-3xl font-bold tabular-nums text-amber-900">{cost.costPerKg > 0 ? `₹${cost.costPerKg.toFixed(2)}` : '—'}</p>
+            </div>
           </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+            <div className="text-left sm:text-right">
+              <p className="text-xs text-slate-500">Effective ₹/kg on wire output</p>
+              <p className="mt-1 font-mono text-2xl font-semibold tabular-nums text-slate-900">{wireOut > 0 ? `₹${(cost.totalInputCost / wireOut).toFixed(2)}` : '—'}</p>
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+          <Metric
+            label={`Day market rate${marketRateQuery.data?.rateDate ? ` (${marketRateQuery.data.rateDate})` : ''}`}
+            value={marketRateQuery.data?.rate ? `₹${marketRateQuery.data.rate.toFixed(2)}` : '—'}
+          />
+          <Metric
+            label="Cost/kg vs market"
+            value={
+              marketRateQuery.data?.rate && cost.costPerKg > 0
+                ? `${cost.costPerKg >= marketRateQuery.data.rate ? '+' : ''}${(cost.costPerKg - marketRateQuery.data.rate).toFixed(2)}`
+                : '—'
+            }
+            emphasized
+          />
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -286,13 +378,82 @@ function CastingNewSessionPage() {
           <button
             type="button"
             className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={() => void saveMutation.mutateAsync()}
+            onClick={openPreview}
             disabled={saveMutation.isPending}
           >
             {saveMutation.isPending ? 'Saving...' : 'Save session'}
           </button>
         </div>
       </section>
+
+      {isPreviewOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h3 className="text-base font-semibold text-slate-900">Casting Session Preview & Confirmation</h3>
+              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsPreviewOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="max-h-[70vh] overflow-auto bg-slate-50 p-4">
+              <div className="mx-auto w-full max-w-3xl rounded-lg border border-slate-300 bg-white p-5 shadow-sm" ref={previewRef}>
+                <div className="mb-4 border-b border-slate-200 pb-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Kapil Products</p>
+                  <h4 className="text-lg font-semibold text-slate-900">Casting Session Slip</h4>
+                  <p className="text-sm text-slate-600">{formatFullDate(date)}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                  <Metric label="Unit (batches)" value={String(unit)} />
+                  <Metric label="Wire out (kg)" value={wireOut.toFixed(3)} />
+                  <Metric label="Wastage (kg)" value={wastage.toFixed(3)} />
+                  <Metric label="Chol IN (kg)" value={cholIn.toFixed(3)} />
+                </div>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full min-w-[560px] text-sm">
+                    <thead>
+                      <tr className="bg-slate-50">
+                        <th className="px-2 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Material</th>
+                        <th className="px-2 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Qty (kg)</th>
+                        <th className="px-2 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Rate (₹/kg)</th>
+                        <th className="px-2 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {validRows.map((r, idx) => (
+                        <tr key={`${r.clientId}-${idx}`} className="border-t border-slate-100">
+                          <td className="px-2 py-1.5 font-medium text-slate-800">{r.materialName}</td>
+                          <td className="px-2 py-1.5 text-right font-mono tabular-nums">{r.qty.toFixed(3)}</td>
+                          <td className="px-2 py-1.5 text-right font-mono tabular-nums">₹{r.rate.toFixed(2)}</td>
+                          <td className="px-2 py-1.5 text-right font-mono tabular-nums">{formatInrInteger(r.qty * r.rate)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <Metric label="Total input kg" value={cost.totalInputKg.toFixed(3)} />
+                  <Metric label="Total input cost" value={formatInrInteger(cost.totalInputCost)} />
+                  <Metric label="Primary KPI · Cost/kg" value={cost.costPerKg > 0 ? `₹${cost.costPerKg.toFixed(2)}` : '—'} emphasized />
+                  <Metric label="Note" value={note.trim() || '—'} />
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsPreviewOpen(false)}>
+                Back to Edit
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void confirmAndSave()}
+                disabled={saveMutation.isPending}
+              >
+                {saveMutation.isPending ? 'Saving...' : 'Confirm & Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

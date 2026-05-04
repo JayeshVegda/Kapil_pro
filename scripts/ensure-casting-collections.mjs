@@ -1,5 +1,5 @@
 /**
- * One-time / CI PocketBase admin migration: casting_sessions + casting_inputs.
+ * One-time / CI PocketBase admin migration: casting_sessions + casting_materials + casting_inputs.
  * Usage: PB_URL=... PB_ADMIN_EMAIL=... PB_ADMIN_PASSWORD=... node scripts/ensure-casting-collections.mjs
  */
 import PocketBase from 'pocketbase'
@@ -23,7 +23,9 @@ async function main() {
 
   await ensureCastingSessions()
   const sessionsCol = await pb.collections.getOne('casting_sessions')
-  await ensureCastingInputs(sessionsCol.id)
+  await ensureCastingMaterials()
+  const materialsCol = await pb.collections.getOne('casting_materials')
+  await ensureCastingInputs(sessionsCol.id, materialsCol.id)
   console.log('Casting collections are ready.')
 }
 
@@ -100,7 +102,54 @@ async function ensureCastingSessions() {
   console.log('Updated casting_sessions schema')
 }
 
-async function ensureCastingInputs(sessionsCollectionId) {
+async function ensureCastingMaterials() {
+  const existing = await pb.collections.getOne('casting_materials').catch(() => null)
+  const fields = [
+    textField('name', true),
+    textField('code', false),
+    textField('category', false),
+    {
+      name: 'is_active',
+      type: 'bool',
+      required: false,
+    },
+  ]
+  const indexes = [
+    'CREATE UNIQUE INDEX idx_casting_materials_name ON casting_materials (name)',
+    'CREATE INDEX idx_casting_materials_active ON casting_materials (is_active)',
+  ]
+  const apiRule = '@request.auth.id != ""'
+
+  if (!existing) {
+    await pb.collections.create({
+      name: 'casting_materials',
+      type: 'base',
+      fields,
+      indexes,
+      listRule: apiRule,
+      viewRule: apiRule,
+      createRule: apiRule,
+      updateRule: apiRule,
+      deleteRule: apiRule,
+    })
+    console.log('Created casting_materials')
+    return
+  }
+
+  await pb.collections.update(existing.id, {
+    ...existing,
+    fields: mergeCustomFields(existing.fields ?? [], fields),
+    indexes,
+    listRule: apiRule,
+    viewRule: apiRule,
+    createRule: apiRule,
+    updateRule: apiRule,
+    deleteRule: apiRule,
+  })
+  console.log('Updated casting_materials schema')
+}
+
+async function ensureCastingInputs(sessionsCollectionId, materialsCollectionId) {
   const existing = await pb.collections.getOne('casting_inputs').catch(() => null)
   const fields = [
     {
@@ -111,12 +160,24 @@ async function ensureCastingInputs(sessionsCollectionId) {
       collectionId: sessionsCollectionId,
       cascadeDelete: true,
     },
+    {
+      name: 'material',
+      type: 'relation',
+      required: false,
+      maxSelect: 1,
+      collectionId: materialsCollectionId,
+      cascadeDelete: false,
+    },
     textField('material_name', true),
     numberField('qty', false),
     numberField('rate', false),
     numberField('amount', false),
   ]
-  const indexes = ['CREATE INDEX idx_casting_inputs_session ON casting_inputs (session)']
+  const indexes = [
+    'CREATE INDEX idx_casting_inputs_session ON casting_inputs (session)',
+    'CREATE INDEX idx_casting_inputs_material ON casting_inputs (material)',
+    'CREATE INDEX idx_casting_inputs_material_name ON casting_inputs (material_name)',
+  ]
   const apiRule = '@request.auth.id != ""'
 
   if (!existing) {

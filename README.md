@@ -6,8 +6,32 @@ Production billing and ledger application for Kapil Trading workflows. The stack
 
 - bill creation, payment entry, transaction editing, customer and item management
 - dashboard, ledger, reports, and print-friendly bill flows
+- casting module (overview, new session, log, materials master)
+- scrap buying module shell and navigation grouping
 - PocketBase-backed business data with production-oriented utility scripts
 - deployment and operations notes for the current VPS-based hosting model
+
+## Branch Notes (`casting-and-scrape`)
+
+This branch adds an operational Casting workflow and Buying module structure on top of the billing system.
+
+- module switcher in sidebar (`Selling`, `Buying`, `Casting`) with route-aware highlighting
+- casting data model (`casting_sessions`, `casting_inputs`, `casting_materials`) and admin setup script
+- casting pages:
+  - `casting/index` - month-first operational dashboard
+  - `casting/new-session` - save flow with preview-confirm step and cost/kg emphasis
+  - `casting/log` - history, edit, soft delete/restore, export, analytics
+  - `casting/materials` - material master with sync and usage visibility
+- market-rate context integrated into casting cost views
+
+Key files for this branch work:
+
+- `src/data/casting.ts`
+- `src/routes/casting/index.tsx`
+- `src/routes/casting/new-session.tsx`
+- `src/routes/casting/log.tsx`
+- `src/routes/casting/materials.tsx`
+- `scripts/ensure-casting-collections.mjs`
 
 ## Repository Structure
 

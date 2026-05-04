@@ -4,11 +4,12 @@ import { Download, Edit3, Plus, RotateCcw, Search, Trash2, X } from 'lucide-reac
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
-import { deleteCastingSession, loadCastingSessions, saveCastingSession, updateCastingSession } from '@/data/casting'
+import { deleteCastingSession, loadCastingMaterials, loadCastingSessions, saveCastingSession, updateCastingSession } from '@/data/casting'
+import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import type { CastingInputRow } from '@/domain/casting-calculations'
 import type { CastingSessionTrashSnapshot, CastingSessionWithInputs, CastingTrashEntry } from '@/domain/casting-types'
 import { cleanupExpiredCastingTrash } from '@/domain/casting-trash'
-import { getLocalIsoDate } from '@/lib/date'
+import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/casting/log')({
@@ -18,6 +19,7 @@ export const Route = createFileRoute('/casting/log')({
 const CASTING_TRASH_KEY = 'kapil-casting-trash-v1'
 const CASTING_SESSIONS_KEY = ['casting-sessions'] as const
 const CASTING_LOG_KEY = ['casting-log'] as const
+const CASTING_MATERIALS_KEY = ['casting-materials'] as const
 const pollMs = 60_000
 
 const STANDARD_MATERIALS = ['Brass', 'Chol', 'Plate', 'Zinc', 'Lead'] as const
@@ -63,21 +65,12 @@ function formatTimeLeft(deletedAt: number) {
   return `${hours}h ${minutes}m left`
 }
 
-function firstOfMonthIso() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
-}
-
 function matchesSearch(session: CastingSessionWithInputs, q: string) {
   const needle = q.trim().toLowerCase()
   if (!needle) return true
   if (session.date.includes(needle)) return true
   if (session.note.toLowerCase().includes(needle)) return true
   return session.inputs.some((i) => i.materialName.toLowerCase().includes(needle))
-}
-
-function inRange(iso: string, from: string, to: string) {
-  return iso >= from && iso <= to
 }
 
 function weekBucketLabel(iso: string) {
@@ -130,8 +123,8 @@ const editSchema = z
 function CastingLogPage() {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
-  const [dateFrom, setDateFrom] = useState(() => firstOfMonthIso())
-  const [dateTo, setDateTo] = useState(() => getLocalIsoDate())
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [viewMode, setViewMode] = useState<'active' | 'deleted'>('active')
   const [trashEntries, setTrashEntries] = useState<CastingTrashEntry[]>(() => readTrash())
   const [statusText, setStatusText] = useState('')
@@ -145,9 +138,25 @@ function CastingLogPage() {
   const [editRows, setEditRows] = useState<UiRow[]>([])
 
   const sessionsQuery = useQuery({
-    queryKey: CASTING_LOG_KEY,
-    queryFn: loadCastingSessions,
+    queryKey: [...CASTING_LOG_KEY, dateFrom, dateTo],
+    queryFn: () =>
+      loadCastingSessions({
+        ...(dateFrom ? { from: dateFrom } : {}),
+        ...(dateTo ? { to: dateTo } : {}),
+      }),
   })
+  const materialsQuery = useQuery({
+    queryKey: CASTING_MATERIALS_KEY,
+    queryFn: loadCastingMaterials,
+    staleTime: 60_000,
+  })
+  const materialOptions = useMemo(() => {
+    const set = new Set<string>(STANDARD_MATERIALS)
+    for (const m of materialsQuery.data ?? []) {
+      if (m.isActive && m.name.trim()) set.add(m.name.trim())
+    }
+    return [...set].map((name) => ({ id: name, name }))
+  }, [materialsQuery.data])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -170,9 +179,8 @@ function CastingLogPage() {
 
   const filteredSessions = useMemo(() => {
     return baseSessions
-      .filter((s) => inRange(s.date, dateFrom, dateTo))
       .filter((s) => matchesSearch(s, search))
-  }, [baseSessions, dateFrom, dateTo, search])
+  }, [baseSessions, search])
 
   const visibleRows = useMemo(() => {
     if (viewMode === 'active') return filteredSessions.filter((s) => !trashMap.has(`casting:${s.id}`))
@@ -356,6 +364,23 @@ function CastingLogPage() {
     }
   }, [visibleRows])
 
+  const costKgStats = useMemo(() => {
+    let latest: { date: string; value: number } | null = null
+    let min = Number.POSITIVE_INFINITY
+    let max = 0
+    for (const s of visibleRows) {
+      if (!(s.costPerKg > 0)) continue
+      if (!latest || s.date > latest.date) latest = { date: s.date, value: s.costPerKg }
+      if (s.costPerKg < min) min = s.costPerKg
+      if (s.costPerKg > max) max = s.costPerKg
+    }
+    return {
+      latest,
+      min: Number.isFinite(min) ? min : 0,
+      max,
+    }
+  }, [visibleRows])
+
   const weekly = useMemo(() => {
     const map = new Map<string, { sessions: number; kg: number; cost: number; wire: number }>()
     for (const s of visibleRows) {
@@ -483,6 +508,7 @@ function CastingLogPage() {
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-3 text-sm font-semibold text-slate-900">Filters & Actions</h3>
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <div className="relative min-w-[200px] flex-1">
             <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -499,6 +525,38 @@ function CastingLogPage() {
           <Field label="To">
             <input className={inputClass} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </Field>
+          <div className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white p-1">
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+              onClick={() => {
+                setDateFrom(firstOfCurrentMonthIso())
+                setDateTo(getLocalIsoDate())
+              }}
+            >
+              This Month
+            </button>
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+              onClick={() => {
+                setDateFrom(subtractMonthsIso(2))
+                setDateTo(getLocalIsoDate())
+              }}
+            >
+              Last 3 Months
+            </button>
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+              onClick={() => {
+                setDateFrom('')
+                setDateTo('')
+              }}
+            >
+              All Time
+            </button>
+          </div>
           <div className="inline-flex rounded-md border border-slate-300 bg-slate-50 p-0.5 text-xs">
             <button type="button" className={`rounded px-3 py-1.5 ${viewMode === 'active' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`} onClick={() => setViewMode('active')}>
               Active
@@ -511,10 +569,11 @@ function CastingLogPage() {
             <Download size={14} /> Export CSV
           </button>
         </div>
-        <p className="text-xs text-slate-500">{statusText || 'Casting history with edit, soft delete, restore, and analytics.'}</p>
+        {statusText ? <p className="text-xs text-slate-500">{statusText}</p> : null}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="rounded-xl border border-blue-200 bg-blue-50/40 p-5 shadow-sm">
+        <h3 className="mb-3 text-sm font-semibold text-slate-900">Session Table</h3>
         {sessionsQuery.isLoading && <p className="text-sm text-slate-500">Loading sessions...</p>}
         {sessionsQuery.isError && <p className="text-sm text-red-600">Unable to load casting sessions.</p>}
         {!sessionsQuery.isLoading && !sessionsQuery.isError && (
@@ -543,11 +602,15 @@ function CastingLogPage() {
                 )}
                 {visibleRows.map((row, index) => (
                   <tr key={`${row.id}-${index}`} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-                    <td className="px-3 py-3 font-medium text-slate-800">{row.date}</td>
+                    <td className="px-3 py-3 font-medium text-slate-800">{formatFullDate(row.date)}</td>
                     <td className="px-3 py-3 text-right tabular-nums">{row.unit}</td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">{row.totalInputKg.toFixed(3)}</td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">{formatInrInteger(row.totalInputCost)}</td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums">{row.costPerKg > 0 ? `₹${row.costPerKg.toFixed(2)}` : '—'}</td>
+                    <td className="px-3 py-3 text-right font-mono tabular-nums">
+                      <span className={`rounded px-1.5 py-0.5 ${row.costPerKg > totals.avgCostKg ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                        {row.costPerKg > 0 ? `₹${row.costPerKg.toFixed(2)}` : '—'}
+                      </span>
+                    </td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">{row.wireOut.toFixed(3)}</td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">{row.wastage.toFixed(3)}</td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">{row.cholIn.toFixed(3)}</td>
@@ -596,14 +659,19 @@ function CastingLogPage() {
         )}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-3 text-sm font-semibold text-slate-900">Summary and analytics</h3>
+      <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-5 shadow-sm">
+        <h3 className="mb-3 text-sm font-semibold text-slate-900">Summary and Analytics</h3>
         <div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-5">
           <SummaryTile label="Sessions" value={String(totals.sessions)} />
           <SummaryTile label="Total input kg" value={totals.inputKg.toFixed(3)} />
           <SummaryTile label="Total input cost" value={formatInrInteger(totals.inputCost)} />
           <SummaryTile label="Total wire out" value={totals.wire.toFixed(3)} />
-          <SummaryTile label="Avg cost/kg (weighted)" value={totals.avgCostKg > 0 ? `₹${totals.avgCostKg.toFixed(2)}` : '—'} emphasized />
+          <SummaryTile label="Primary KPI · Avg cost/kg (weighted)" value={totals.avgCostKg > 0 ? `₹${totals.avgCostKg.toFixed(2)}` : '—'} emphasized />
+        </div>
+        <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-3">
+          <SummaryTile label="Latest cost/kg" value={costKgStats.latest ? `₹${costKgStats.latest.value.toFixed(2)} (${formatFullDate(costKgStats.latest.date)})` : '—'} />
+          <SummaryTile label="Min cost/kg" value={costKgStats.min > 0 ? `₹${costKgStats.min.toFixed(2)}` : '—'} />
+          <SummaryTile label="Max cost/kg" value={costKgStats.max > 0 ? `₹${costKgStats.max.toFixed(2)}` : '—'} />
         </div>
 
         <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Weekly breakdown</h4>
@@ -742,7 +810,14 @@ function CastingLogPage() {
                         return (
                           <tr key={r.clientId} className="border-t border-slate-100">
                             <td className="px-2 py-1">
-                              <input className={inputClass} value={r.materialName} onChange={(e) => updateEditRow(r.clientId, { materialName: e.target.value })} />
+                              <SearchableCombobox
+                                options={materialOptions}
+                                value={r.materialName}
+                                onChange={(nextId) => updateEditRow(r.clientId, { materialName: nextId })}
+                                inputClassName={inputClass}
+                                placeholder="Select material"
+                                emptyText="No matching material."
+                              />
                             </td>
                             <td className="px-2 py-1">
                               <input className={`${inputClass} text-right tabular-nums`} type="number" min={0} value={r.qty || ''} onChange={(e) => updateEditRow(r.clientId, { qty: parseNonNegativeNumber(e.target.value) })} />
@@ -781,6 +856,17 @@ function CastingLogPage() {
 
 function getLocalIsoDateFromDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function firstOfCurrentMonthIso() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+}
+
+function subtractMonthsIso(monthsBack: number) {
+  const now = new Date()
+  const d = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

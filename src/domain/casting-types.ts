@@ -5,10 +5,19 @@ export type CastingSessionId = string
 export type CastingInputRecord = {
   id: string
   sessionId: string
+  materialId?: string
   materialName: string
   qty: number
   rate: number
   amount: number
+}
+
+export type CastingMaterialRecord = {
+  id: string
+  name: string
+  code: string
+  category: string
+  isActive: boolean
 }
 
 export type CastingSessionRecord = {

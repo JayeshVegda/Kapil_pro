@@ -22,7 +22,9 @@ import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as BuyingRouteImport } from './routes/buying'
 import { Route as BackupRouteImport } from './routes/backup'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CastingIndexRouteImport } from './routes/casting/index'
 import { Route as CastingNewSessionRouteImport } from './routes/casting/new-session'
+import { Route as CastingMaterialsRouteImport } from './routes/casting/materials'
 import { Route as CastingLogRouteImport } from './routes/casting/log'
 import { Route as BuyingSuppliersRouteImport } from './routes/buying/suppliers'
 import { Route as BuyingSupplierPaymentsRouteImport } from './routes/buying/supplier-payments'
@@ -95,9 +97,19 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CastingIndexRoute = CastingIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => CastingRoute,
+} as any)
 const CastingNewSessionRoute = CastingNewSessionRouteImport.update({
   id: '/new-session',
   path: '/new-session',
+  getParentRoute: () => CastingRoute,
+} as any)
+const CastingMaterialsRoute = CastingMaterialsRouteImport.update({
+  id: '/materials',
+  path: '/materials',
   getParentRoute: () => CastingRoute,
 } as any)
 const CastingLogRoute = CastingLogRouteImport.update({
@@ -151,14 +163,15 @@ export interface FileRoutesByFullPath {
   '/buying/supplier-payments': typeof BuyingSupplierPaymentsRoute
   '/buying/suppliers': typeof BuyingSuppliersRoute
   '/casting/log': typeof CastingLogRoute
+  '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/casting/': typeof CastingIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
   '/buying': typeof BuyingRouteWithChildren
   '/calendar': typeof CalendarRoute
-  '/casting': typeof CastingRouteWithChildren
   '/customers': typeof CustomersRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
@@ -173,7 +186,9 @@ export interface FileRoutesByTo {
   '/buying/supplier-payments': typeof BuyingSupplierPaymentsRoute
   '/buying/suppliers': typeof BuyingSuppliersRoute
   '/casting/log': typeof CastingLogRoute
+  '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/casting': typeof CastingIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -196,7 +211,9 @@ export interface FileRoutesById {
   '/buying/supplier-payments': typeof BuyingSupplierPaymentsRoute
   '/buying/suppliers': typeof BuyingSuppliersRoute
   '/casting/log': typeof CastingLogRoute
+  '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/casting/': typeof CastingIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -220,14 +237,15 @@ export interface FileRouteTypes {
     | '/buying/supplier-payments'
     | '/buying/suppliers'
     | '/casting/log'
+    | '/casting/materials'
     | '/casting/new-session'
+    | '/casting/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/backup'
     | '/buying'
     | '/calendar'
-    | '/casting'
     | '/customers'
     | '/items'
     | '/ledger'
@@ -242,7 +260,9 @@ export interface FileRouteTypes {
     | '/buying/supplier-payments'
     | '/buying/suppliers'
     | '/casting/log'
+    | '/casting/materials'
     | '/casting/new-session'
+    | '/casting'
   id:
     | '__root__'
     | '/'
@@ -264,7 +284,9 @@ export interface FileRouteTypes {
     | '/buying/supplier-payments'
     | '/buying/suppliers'
     | '/casting/log'
+    | '/casting/materials'
     | '/casting/new-session'
+    | '/casting/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -376,11 +398,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/casting/': {
+      id: '/casting/'
+      path: '/'
+      fullPath: '/casting/'
+      preLoaderRoute: typeof CastingIndexRouteImport
+      parentRoute: typeof CastingRoute
+    }
     '/casting/new-session': {
       id: '/casting/new-session'
       path: '/new-session'
       fullPath: '/casting/new-session'
       preLoaderRoute: typeof CastingNewSessionRouteImport
+      parentRoute: typeof CastingRoute
+    }
+    '/casting/materials': {
+      id: '/casting/materials'
+      path: '/materials'
+      fullPath: '/casting/materials'
+      preLoaderRoute: typeof CastingMaterialsRouteImport
       parentRoute: typeof CastingRoute
     }
     '/casting/log': {
@@ -449,12 +485,16 @@ const BuyingRouteWithChildren =
 
 interface CastingRouteChildren {
   CastingLogRoute: typeof CastingLogRoute
+  CastingMaterialsRoute: typeof CastingMaterialsRoute
   CastingNewSessionRoute: typeof CastingNewSessionRoute
+  CastingIndexRoute: typeof CastingIndexRoute
 }
 
 const CastingRouteChildren: CastingRouteChildren = {
   CastingLogRoute: CastingLogRoute,
+  CastingMaterialsRoute: CastingMaterialsRoute,
   CastingNewSessionRoute: CastingNewSessionRoute,
+  CastingIndexRoute: CastingIndexRoute,
 }
 
 const CastingRouteWithChildren =

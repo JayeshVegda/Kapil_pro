@@ -98,7 +98,10 @@ const castingGroups: NavGroup[] = [
   },
   {
     label: 'Records',
-    items: [{ to: '/casting/log', title: 'Casting Log', icon: ClipboardList }],
+    items: [
+      { to: '/casting/log', title: 'Casting Log', icon: ClipboardList },
+      { to: '/casting/materials', title: 'Materials', icon: Boxes },
+    ],
   },
 ]
 
@@ -162,6 +165,7 @@ function NavGroupsList({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?
                 key={item.to}
                 to={item.to}
                 onClick={onNavigate}
+                activeOptions={{ exact: true }}
                 className="mb-0.5 flex items-center gap-2 rounded-md border-l-2 border-transparent px-3 py-2 text-[13px] text-slate-300 transition hover:bg-white/5 hover:text-slate-100"
                 activeProps={{ className: 'border-l-blue-400 bg-blue-500/20 font-semibold text-white' }}
               >
