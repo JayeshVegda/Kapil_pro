@@ -16,6 +16,15 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/items': { title: 'Items', subtitle: 'Manage item master and defaults' },
   '/backup': { title: 'Backup', subtitle: 'Export and validate data snapshots' },
   '/print-bill': { title: 'Print Bill', subtitle: 'Filter, preview, and print bills' },
+  '/buying': { title: 'Buying Overview', subtitle: 'Procurement summary for suppliers and payable flow' },
+  '/buying/suppliers': { title: 'Suppliers', subtitle: 'Supplier master and procurement context' },
+  '/buying/new-purchase': { title: 'New Purchase', subtitle: 'Record scrap purchase with deductions' },
+  '/buying/supplier-payments': { title: 'Supplier Payments', subtitle: 'Pay suppliers and reduce payable' },
+  '/buying/purchase-logs': { title: 'Purchase Logs', subtitle: 'Purchases and supplier payment activity' },
+  '/buying/supplier-ledger': { title: 'Supplier Ledger', subtitle: 'Supplier-wise payable movements' },
+  '/casting': { title: 'Casting Overview', subtitle: 'Production summary and recent cost trends' },
+  '/casting/new-session': { title: 'New Casting Session', subtitle: 'Daily furnace inputs, outputs, cost per kg' },
+  '/casting/log': { title: 'Casting Log', subtitle: 'History of casting sessions' },
 }
 
 const DOC_TITLE_SUFFIX = 'Kapil Billing'
