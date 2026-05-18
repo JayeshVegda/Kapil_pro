@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Edit3, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { z } from 'zod'
+import { toUserMessage } from '@/app/errors'
 import { createItem, deleteItem, loadItemsWithUsage, updateItem } from '@/data/items'
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
@@ -50,7 +51,7 @@ function ItemsPage() {
       await queryClient.invalidateQueries({ queryKey: ['items-options'] })
     },
     onError: (error) => {
-      setStatusText(error instanceof Error ? error.message : 'Failed to save item')
+      setStatusText(toUserMessage(error))
     },
   })
 
@@ -64,7 +65,7 @@ function ItemsPage() {
       await queryClient.invalidateQueries({ queryKey: ['items-options'] })
     },
     onError: (error) => {
-      setStatusText(error instanceof Error ? error.message : 'Failed to delete item')
+      setStatusText(toUserMessage(error))
     },
   })
 

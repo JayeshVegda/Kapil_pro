@@ -23,7 +23,7 @@ export type BackupSnapshot = {
 
 export async function buildBackupSnapshot(): Promise<BackupSnapshot> {
   const [customers, items, bills, billItems, payments] = await Promise.all([
-    pb.collection('customers').getFullList({ sort: 'name' }),
+    pb.collection('customers').getFullList({ sort: 'company_name,name' }),
     pb.collection('items').getFullList({ sort: 'name' }),
     pb.collection('bills').getFullList({ sort: 'date,bill_no' }),
     pb.collection('bill_items').getFullList(),

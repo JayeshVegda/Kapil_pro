@@ -1,5 +1,5 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { AlertTriangle, ArrowRight, IndianRupee, Receipt, TrendingDown, TrendingUp, Users } from 'lucide-react'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import { IndianRupee, Receipt, Users } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useDashboardData } from '@/domain/dashboard'
 import { formatFullDate } from '@/lib/date'
@@ -37,40 +37,113 @@ function DashboardPage() {
 
   return (
     <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
-      <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-sm xl:col-span-4">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-amber-700">Action Required</p>
-            <AlertTriangle size={16} className="text-amber-600" />
-          </div>
-          <p className="mt-3 font-mono text-3xl font-bold tracking-tight text-amber-900">{fmtMoneyCompact(data.actionRequired.pendingAmount)}</p>
-          <p className="mt-2 text-sm text-amber-800">{data.actionRequired.pendingParties} parties pending, {data.actionRequired.highRiskParties} high-risk accounts.</p>
-          <button
-            type="button"
-            className="mt-4 inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
-            onClick={() => navigate({ to: '/ledger', search: { customerId: '', focus: '' } })}
-          >
-            Open Party view <ArrowRight size={13} />
-          </button>
-        </div>
-        <div className="rounded-xl bg-blue-700 p-5 text-white shadow-sm xl:col-span-4">
+      <section className="mb-4 grid grid-cols-1 gap-4 xl:flex xl:items-stretch">
+        <div className="rounded-xl bg-blue-700 p-5 text-white shadow-sm xl:w-fit xl:min-w-[25rem] xl:flex-none">
           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-blue-100/85">Outstanding Balance</p>
           <p className="mt-3 font-mono text-4xl font-bold tracking-tight">{fmtMoneyCompact(data.kpis.outstanding)}</p>
-          <p className="mt-3 text-sm text-blue-100/80">vs last month: <span className="font-semibold text-white">{trendText(data.kpis.salesVsLastMonth)}</span></p>
+          <p className="mt-2 text-sm text-blue-100/85">
+            Active Party: <span className="font-semibold text-white">{data.kpis.activeCustomers}</span>
+            {' '}|{' '}
+            Total Count bill: <span className="font-semibold text-white">{data.kpis.totalBills}</span>
+          </p>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm xl:col-span-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">This Month Performance</p>
-          <div className="mt-4 grid grid-cols-2 gap-4">
-            <MiniMetric label="Sales" value={fmtMoneyCompact(data.kpis.thisMonthSales)} trend={`${trendText(data.kpis.salesVsLastMonth)} vs last month`} icon={<IndianRupee size={13} />} />
-            <MiniMetric label="Collection" value={fmtMoneyCompact(data.kpis.thisMonthCollection)} trend={`${trendText(data.kpis.collectionVsLastMonth)} vs last month`} icon={<Receipt size={13} />} />
+        <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:min-w-0 xl:flex-1">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">ALL Time Record</p>
+          <div className="mt-2 grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <MiniMetric
+              label="Sales"
+              value={fmtMoneyCompact(data.kpis.allTimeSales)}
+              trend="All time billed"
+              icon={<IndianRupee size={12} className="shrink-0" />}
+            />
+            <MiniMetric
+              label="Collection"
+              value={fmtMoneyCompact(data.kpis.allTimeCollection)}
+              trend="All time collected"
+              icon={<Receipt size={12} className="shrink-0" />}
+            />
+            <MiniMetric
+              label="Spindle Bags"
+              value={String(Math.round(data.kpis.allTimeSpindleBags))}
+              trend={`${Math.round(data.kpis.allTimeSpindleKg)} kg`}
+              icon={<Receipt size={12} className="shrink-0" />}
+            />
+            <MiniMetric
+              label="Tapper Plug Bags"
+              value={String(Math.round(data.kpis.allTimeTapperPlugBags))}
+              trend="All time"
+              icon={<Receipt size={12} className="shrink-0" />}
+            />
           </div>
         </div>
       </section>
 
-      <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <AnalyticsTile title="Collection Progress" value={`${data.kpis.collectionRate.toFixed(1)}%`} positive={data.kpis.collectionRate >= 70} hint="Overall collected vs billed" className="xl:col-span-4" progress={data.kpis.collectionRate} />
-        <AnalyticsTile title="Avg Pending per Party" value={fmtMoneyCompact(data.kpis.pendingParties > 0 ? data.kpis.outstanding / data.kpis.pendingParties : 0)} positive={false} hint="Average pending among due parties" className="xl:col-span-4" />
-        <AnalyticsTile title="Total Bills" value={String(data.kpis.totalBills)} positive hint={`${data.kpis.activeCustomers} active customers`} className="xl:col-span-4" />
+      <section className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-slate-900">This Month Only</h2>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-6">
+          <MiniMetric
+            label="Sales"
+            value={fmtMoneyCompact(data.thisMonthSummary.sales)}
+            trend={
+              data.thisMonthSummary.lastSale
+                ? `Last: ${formatFullDate(data.thisMonthSummary.lastSale.date)} · ${fmtMoneyCompact(data.thisMonthSummary.lastSale.amount)} · ${data.thisMonthSummary.lastSale.customerName}`
+                : 'No sale yet this month'
+            }
+            icon={<IndianRupee size={12} className="shrink-0" />}
+          />
+          <MiniMetric
+            label="Collection"
+            value={fmtMoneyCompact(data.thisMonthSummary.collection)}
+            trend={
+              data.thisMonthSummary.lastCollection
+                ? `Last: ${formatFullDate(data.thisMonthSummary.lastCollection.date)} · ${fmtMoneyCompact(data.thisMonthSummary.lastCollection.amount)} · ${data.thisMonthSummary.lastCollection.customerName}`
+                : 'No collection yet this month'
+            }
+            icon={<Receipt size={12} className="shrink-0" />}
+          />
+          <MiniMetric
+            label="Spindle Bags"
+            value={String(Math.round(data.thisMonthSummary.spindleBags))}
+            trend={`${Math.round(data.thisMonthSummary.spindleKg)} kg`}
+            icon={<Receipt size={12} className="shrink-0" />}
+          />
+          <MiniMetric
+            label="Tapper Plug Bags"
+            value={String(Math.round(data.thisMonthSummary.tapperPlugBags))}
+            trend={`${Math.round(data.thisMonthSummary.tapperPlugKg)} kg`}
+            icon={<Receipt size={12} className="shrink-0" />}
+          />
+          <MiniMetric
+            label="Avg Market Rate"
+            value={data.thisMonthSummary.avgMarketRate > 0 ? `₹${data.thisMonthSummary.avgMarketRate.toFixed(2)}` : '—'}
+            trend={
+              data.thisMonthSummary.avgMarketRateVsLastMonth !== 0
+                ? `${data.thisMonthSummary.avgMarketRateVsLastMonth > 0 ? '+' : ''}₹${data.thisMonthSummary.avgMarketRateVsLastMonth.toFixed(2)} vs last month`
+                : 'No last-month comparison'
+            }
+            icon={<IndianRupee size={12} className="shrink-0" />}
+          />
+          <div className="block min-h-[4.75rem] min-w-[10rem] rounded-lg border border-transparent bg-slate-50/95 p-2 transition">
+            <div className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600">
+              <Users size={12} className="shrink-0" />
+              <span>Top Buyer</span>
+            </div>
+            {data.thisMonthSummary.topBuyer ? (
+              <>
+                <p className="mt-0.5 truncate font-mono text-base font-bold leading-tight tracking-tight text-slate-900" title={data.thisMonthSummary.topBuyer.customerName}>
+                  {data.thisMonthSummary.topBuyer.customerName}
+                </p>
+                <p className="line-clamp-2 text-[10px] leading-snug text-slate-500">
+                  {fmtMoneyCompact(data.thisMonthSummary.topBuyer.sales)} | {data.thisMonthSummary.topBuyer.bills} bills | avg {fmtMoneyCompact(data.thisMonthSummary.topBuyer.avgBillValue)} | {data.thisMonthSummary.topBuyer.sharePct.toFixed(1)}% share
+                </p>
+              </>
+            ) : (
+              <p className="line-clamp-2 text-[10px] leading-snug text-slate-500">No buyer data this month.</p>
+            )}
+          </div>
+        </div>
       </section>
 
       <section className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -113,11 +186,11 @@ function DashboardPage() {
                     tabIndex={0}
                     aria-label={`Open bill ${bill.bookNo}/${bill.billNo}`}
                   >
-                    <td className="px-4 py-2.5 text-sm text-slate-600">{formatFullDate(bill.date)}</td>
+                    <td className="px-4 py-2.5 text-sm text-slate-600">{formatFullDate(bill.businessDate ?? bill.date ?? '')}</td>
                     <td className="px-4 py-2.5 text-sm font-medium text-slate-800">{bill.customerName}</td>
                     <td className="px-4 py-2.5 text-sm text-slate-600">{bill.bookNo}/{bill.billNo}</td>
                     <td className="px-4 py-2.5"><StatusBadge status={bill.status} /></td>
-                    <td className="px-4 py-2.5 text-right text-sm font-semibold text-slate-900">{fmtMoney(bill.total)}</td>
+                    <td className="px-4 py-2.5 text-right text-sm font-semibold text-slate-900">{fmtMoney(bill.total ?? 0)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -155,7 +228,7 @@ function DashboardPage() {
                     tabIndex={0}
                     aria-label={`Open payment from ${payment.customerName}`}
                   >
-                    <td className="px-4 py-2.5 text-sm text-slate-600">{formatFullDate(payment.date)}</td>
+                    <td className="px-4 py-2.5 text-sm text-slate-600">{formatFullDate(payment.businessDate ?? payment.date ?? '')}</td>
                     <td className="px-4 py-2.5 text-sm font-medium text-slate-800">{payment.customerName}</td>
                     <td className="px-4 py-2.5 text-sm text-slate-600"><span className="mr-2">{payment.mode}</span><StatusBadge status={payment.status} /></td>
                     <td className="px-4 py-2.5 text-right text-sm font-semibold text-slate-900">{fmtMoney(payment.amount)}</td>
@@ -170,23 +243,47 @@ function DashboardPage() {
   )
 }
 
-function MiniMetric({ label, value, trend, icon }: { label: string; value: string; trend: string; icon: ReactNode }) {
-  return <div className="rounded-lg bg-slate-50 p-3"><div className="inline-flex items-center gap-1 text-xs text-slate-600">{icon}{label}</div><p className="mt-1 font-mono text-xl font-bold text-slate-900">{value}</p><p className="text-xs text-slate-500">{trend}</p></div>
-}
-
-function AnalyticsTile({ title, value, positive, hint, className, progress }: { title: string; value: string; positive: boolean; hint: string; className?: string; progress?: number }) {
-  const safeProgress = Math.max(0, Math.min(100, progress ?? 0))
-  return (
-    <div className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${className ?? ''}`}>
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{title}</p>
-        <span className={positive ? 'text-emerald-600' : 'text-amber-600'}>{positive ? <TrendingUp size={15} /> : <TrendingDown size={15} />}</span>
+function MiniMetric({
+  label,
+  value,
+  trend,
+  icon,
+  to,
+}: {
+  label: string
+  value: string
+  trend: string
+  icon: ReactNode
+  /** When set, the whole tile is clickable (e.g. Sales → Print bill). */
+  to?: '/print-bill'
+}) {
+  const body = (
+    <>
+      <div className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+        {icon}
+        <span>{label}</span>
       </div>
-      <p className="mt-2 font-mono text-2xl font-bold tracking-tight text-slate-900">{value}</p>
-      {progress !== undefined && <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-blue-600" style={{ width: `${safeProgress}%` }} /></div>}
-      <p className="mt-1 text-xs text-slate-500">{hint}</p>
-    </div>
+      <p className="mt-1 font-mono text-xl font-bold leading-tight tracking-tight text-slate-900">{value}</p>
+      <p className="mt-1 line-clamp-2 text-xs leading-snug text-slate-500">{trend}</p>
+    </>
   )
+
+  const tileClass =
+    'block h-full min-h-[5.5rem] min-w-0 rounded-lg border border-slate-200 bg-white p-3 transition ' +
+    (to != null
+      ? 'cursor-pointer hover:border-blue-300 hover:bg-blue-50/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500'
+      : '')
+
+  if (to != null) {
+    return (
+      <Link to={to} className={tileClass} aria-label={`${label}: open print bill`}
+      >
+        {body}
+      </Link>
+    )
+  }
+
+  return <div className={tileClass}>{body}</div>
 }
 
 function TrendChart({ months }: { months: Array<{ month: string; sales: number; collection: number }> }) {
@@ -217,4 +314,3 @@ function StatusBadge({ status }: { status: string }) {
 
 const fmtMoney = (v: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v)
 const fmtMoneyCompact = (v: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', notation: 'compact', maximumFractionDigits: 1 }).format(v)
-const trendText = (v: number) => `${v >= 0 ? '+' : '-'}${fmtMoneyCompact(Math.abs(v))}`

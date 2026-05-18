@@ -1,25 +1,33 @@
 import { useIsFetching, useQueryClient } from '@tanstack/react-query'
 import { Outlet, useRouterState } from '@tanstack/react-router'
 import { AlertTriangle, CheckCircle2, Clock3, Loader2, Menu, RefreshCw, Search } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { SidebarNavPanel } from './sidebar-nav'
 
 const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Dashboard', subtitle: 'Live business overview and pending actions' },
   '/new-bill': { title: 'Bills', subtitle: 'Create and preview new sale bills' },
   '/new-payment': { title: 'Payments', subtitle: 'Record collections and adjustments' },
+  '/transactions': { title: 'Logs', subtitle: 'Manage recent bills and payments with CRUD actions' },
   '/ledger': { title: 'Party', subtitle: 'Single-party ledger and analytics' },
   '/monthly-report': { title: 'Report', subtitle: 'Company-level performance insights' },
+  '/calendar': { title: 'Calendar', subtitle: 'Month view of sales, collections, and market rate' },
   '/customers': { title: 'Customers', subtitle: 'Manage customer master data' },
   '/items': { title: 'Items', subtitle: 'Manage item master and defaults' },
   '/backup': { title: 'Backup', subtitle: 'Export and validate data snapshots' },
   '/print-bill': { title: 'Print Bill', subtitle: 'Filter, preview, and print bills' },
 }
 
+const DOC_TITLE_SUFFIX = 'Kapil Billing'
+
 export function AppShell() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const meta = pageMeta[pathname] ?? { title: 'Kapil Billing', subtitle: 'Business billing workspace' }
+
+  useEffect(() => {
+    document.title = `${meta.title} – ${DOC_TITLE_SUFFIX}`
+  }, [meta.title])
   const queryClient = useQueryClient()
   const fetchCount = useIsFetching()
   const isSyncing = fetchCount > 0

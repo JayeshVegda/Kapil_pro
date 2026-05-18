@@ -1,4 +1,5 @@
 import { pb } from '@/data/pocketbase'
+import { runDataOperation } from '@/data/reliability'
 
 type PBRecord = Record<string, unknown> & { id: string }
 
@@ -57,20 +58,26 @@ export async function loadItemsWithUsage(): Promise<ItemRecord[]> {
 }
 
 export async function createItem(input: { name: string; defaultRate: number }) {
-  await pb.collection('items').create({
-    name: input.name.trim(),
-    default_rate: input.defaultRate,
+  await runDataOperation('create-item', async () => {
+    await pb.collection('items').create({
+      name: input.name.trim(),
+      default_rate: input.defaultRate,
+    })
   })
 }
 
 export async function updateItem(itemId: string, input: { name: string; defaultRate: number }) {
-  await pb.collection('items').update(itemId, {
-    name: input.name.trim(),
-    default_rate: input.defaultRate,
+  await runDataOperation('update-item', async () => {
+    await pb.collection('items').update(itemId, {
+      name: input.name.trim(),
+      default_rate: input.defaultRate,
+    })
   })
 }
 
 export async function deleteItem(itemId: string) {
-  await pb.collection('items').delete(itemId)
+  await runDataOperation('delete-item', async () => {
+    await pb.collection('items').delete(itemId)
+  })
 }
 

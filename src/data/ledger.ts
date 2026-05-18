@@ -1,6 +1,7 @@
 import { pb } from '@/data/pocketbase'
 import { buildPartyEvents, buildPartyKpis, buildPartyRows, type LedgerBill, type LedgerBillItem, type LedgerCustomer, type LedgerPayment } from '@/domain/ledger'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { formatCustomerDisplayName } from '@/lib/customer-display'
 
 type PBRecord = Record<string, unknown> & { id: string }
 
@@ -13,7 +14,7 @@ const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
 
 export async function loadPartyDashboard(asOfDate: string, overdueDaysThreshold = 30) {
   const [customersRaw, billsRaw, billItemsRaw, paymentsRaw] = await Promise.all([
-    pb.collection('customers').getFullList({ sort: 'name' }),
+    pb.collection('customers').getFullList({ sort: 'company_name,name' }),
     pb.collection('bills').getFullList({ sort: 'date,bill_no' }),
     pb.collection('bill_items').getFullList(),
     pb.collection('payments').getFullList({ sort: 'date' }),
@@ -21,18 +22,25 @@ export async function loadPartyDashboard(asOfDate: string, overdueDaysThreshold 
 
   const customers: LedgerCustomer[] = (customersRaw as PBRecord[]).map((row) => ({
     id: row.id,
-    name: String(row.name ?? ''),
+    name: formatCustomerDisplayName(row.company_name, row.name),
     active: Boolean(row.active),
     openingBalance: num(row.opening_balance),
+    openingBalanceDate: datePart(row.opening_balance_date),
   }))
   const bills: LedgerBill[] = (billsRaw as PBRecord[]).map((row) => ({
     id: row.id,
     customerId: String(row.customer ?? ''),
-    date: datePart(row.date),
+    customerName: String(row.customer_name ?? ''),
+    businessDate: datePart(row.date),
+    createdAt: String(row.created),
     bookNo: num(row.book_no),
     billNo: num(row.bill_no),
+    total: 0,
     transport: num(row.transport),
     gstRate: num(row.gst_rate),
+    gstAmount: num(row.gst_amount),
+    mktRate: num(row.mkt),
+    lrNo: String(row.lr_no ?? ''),
   }))
   const billItems: LedgerBillItem[] = (billItemsRaw as PBRecord[]).map((row) => ({
     billId: String(row.bill ?? ''),
@@ -43,9 +51,12 @@ export async function loadPartyDashboard(asOfDate: string, overdueDaysThreshold 
   const payments: LedgerPayment[] = (paymentsRaw as PBRecord[]).map((row) => ({
     id: row.id,
     customerId: String(row.customer ?? ''),
-    date: datePart(row.date),
+    customerName: String(row.customer_name ?? ''),
+    businessDate: datePart(row.date),
+    createdAt: String(row.created),
     amount: num(row.amount),
     mode: String(row.mode ?? ''),
+    note: String(row.note ?? ''),
   }))
 
   const rows = buildPartyRows({ customers, bills, billItems, payments, asOfDate, overdueDaysThreshold })
@@ -58,42 +69,62 @@ export async function loadPartyStatement(customerId: string, asOfDate: string) {
     pb.collection('customers').getOne(customerId),
     pb.collection('bills').getFullList({
       sort: 'date,bill_no',
-      filter: `customer = "${customerId}" && date <= "${asOfDate}"`,
+      filter: `customer = "${customerId}"`,
     }),
     pb.collection('bill_items').getFullList(),
     pb.collection('payments').getFullList({
       sort: 'date',
-      filter: `customer = "${customerId}" && date <= "${asOfDate}"`,
+      filter: `customer = "${customerId}"`,
     }),
   ])
 
-  const billsRawTyped = billsRaw as PBRecord[]
+  const billsRawTyped = (billsRaw as PBRecord[]).filter((bill) => datePart(bill.date) <= asOfDate)
   const billItemsRawTyped = billItemsRaw as PBRecord[]
-  const paymentsRawTyped = paymentsRaw as PBRecord[]
+  const paymentsRawTyped = (paymentsRaw as PBRecord[]).filter((payment) => datePart(payment.date) <= asOfDate)
 
   const itemSumByBill = new Map<string, number>()
+  const itemDetailByBill = new Map<string, string>()
   for (const row of billItemsRawTyped) {
     const billId = String(row.bill ?? '')
     itemSumByBill.set(billId, (itemSumByBill.get(billId) ?? 0) + num(row.amount))
+    const itemName = String(row.item_name ?? '').trim() || 'Item'
+    const qty = num(row.qty)
+    const rate = num(row.rate)
+    const line = `${itemName} ${Math.round(qty)}kg @ ${Math.round(rate)}`
+    const prev = itemDetailByBill.get(billId)
+    if (!prev) {
+      itemDetailByBill.set(billId, line)
+    } else if (prev.split(' | ').length < 3) {
+      itemDetailByBill.set(billId, `${prev} | ${line}`)
+    }
   }
 
   const bills = billsRawTyped.map((bill) => ({
     id: bill.id,
-    date: datePart(bill.date),
+    businessDate: datePart(bill.date),
+    createdAt: String(bill.created),
     bookNo: num(bill.book_no),
     billNo: num(bill.bill_no),
-    total: calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate)),
+    total: calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount)),
+    details: `Bill ${num(bill.book_no)}/${num(bill.bill_no)}`,
+    compactDetails: itemDetailByBill.get(bill.id) ?? '',
   }))
-  const billDateById = new Map(bills.map((bill) => [bill.id, bill.date]))
+  const billDateById = new Map(bills.map((bill) => [bill.id, bill.businessDate]))
   const payments = paymentsRawTyped.map((payment) => ({
     id: payment.id,
-    date: datePart(payment.date),
+    businessDate: datePart(payment.date),
+    createdAt: String(payment.created),
     amount: num(payment.amount),
     mode: String(payment.mode ?? ''),
+    note: String(payment.note ?? ''),
   }))
 
   const openingBalance = num((customerRaw as PBRecord).opening_balance)
-  const events = buildPartyEvents({ openingBalance, bills, payments })
+  const storedOpeningBalanceDate = datePart((customerRaw as PBRecord).opening_balance_date)
+  const earliestBillDate = bills.map((bill) => bill.businessDate).filter(Boolean).sort()[0] ?? ''
+  const earliestPaymentDate = payments.map((payment) => payment.businessDate).filter(Boolean).sort()[0] ?? ''
+  const openingBalanceDate = storedOpeningBalanceDate || [earliestBillDate, earliestPaymentDate].filter(Boolean).sort()[0] || asOfDate
+  const events = buildPartyEvents({ openingBalance, openingBalanceDate, bills, payments })
   const itemSummaryMap = new Map<
     string,
     {
@@ -138,10 +169,9 @@ export async function loadPartyStatement(customerId: string, asOfDate: string) {
 
   return {
     customerId,
-    customerName: String((customerRaw as PBRecord).name ?? ''),
+    customerName: formatCustomerDisplayName((customerRaw as PBRecord).company_name, (customerRaw as PBRecord).name),
     openingBalance,
     events,
     itemSummary,
   }
 }
-

@@ -1,4 +1,5 @@
 import { pb } from '@/data/pocketbase'
+import { runDataOperation } from '@/data/reliability'
 import { buildCustomerLedgerSummaries, type BillItemRecord, type BillRecord, type CustomerRecord, type PaymentRecord } from '@/domain/customers'
 
 type PBRecord = Record<string, unknown> & { id: string }
@@ -10,14 +11,16 @@ const num = (value: unknown) => {
 
 const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
 
-const optionalKeys = ['phone', 'gstin', 'address', 'credit_limit', 'note'] as const
+const optionalKeys = ['company_name', 'opening_balance_date', 'phone', 'gstin', 'address', 'credit_limit', 'note'] as const
 
 function extractCustomerRecord(record: PBRecord): CustomerRecord {
   return {
     id: record.id,
+    companyName: String(record.company_name ?? record.name ?? ''),
     name: String(record.name ?? ''),
     active: Boolean(record.active),
     openingBalance: num(record.opening_balance),
+    openingBalanceDate: String(record.opening_balance_date ?? '').slice(0, 10),
     phone: String(record.phone ?? ''),
     gstin: String(record.gstin ?? ''),
     address: String(record.address ?? ''),
@@ -27,9 +30,11 @@ function extractCustomerRecord(record: PBRecord): CustomerRecord {
 }
 
 function buildCustomerWritePayload(input: {
+  companyName: string
   name: string
   active: boolean
   openingBalance: number
+  openingBalanceDate?: string
   phone?: string
   gstin?: string
   address?: string
@@ -37,9 +42,11 @@ function buildCustomerWritePayload(input: {
   note?: string
 }) {
   return {
+    company_name: input.companyName,
     name: input.name,
     active: input.active,
     opening_balance: input.openingBalance,
+    opening_balance_date: input.openingBalanceDate ?? '',
     phone: input.phone ?? '',
     gstin: input.gstin ?? '',
     address: input.address ?? '',
@@ -77,14 +84,12 @@ async function writeCustomerWithSchemaFallback(
 function isOptionalFieldSchemaError(error: unknown) {
   if (!(error instanceof Error)) return false
   const message = error.message.toLowerCase()
-  if (optionalKeys.some((key) => message.includes(key))) return true
-  if (message.includes('validation') || message.includes('unknown') || message.includes('invalid')) return true
-  return false
+  return optionalKeys.some((key) => message.includes(key))
 }
 
 export async function loadCustomersWithLedgerContext() {
   const [customersRaw, billsRaw, billItemsRaw, paymentsRaw] = await Promise.all([
-    pb.collection('customers').getFullList({ sort: 'name' }),
+    pb.collection('customers').getFullList({ sort: 'company_name,name' }),
     pb.collection('bills').getFullList({ sort: '-date,-bill_no' }),
     pb.collection('bill_items').getFullList(),
     pb.collection('payments').getFullList({ sort: '-date' }),
@@ -101,6 +106,7 @@ export async function loadCustomersWithLedgerContext() {
       billNo: num(row.bill_no),
       transport: num(row.transport),
       gstRate: num(row.gst_rate),
+      gstAmount: num(row.gst_amount),
     }),
   )
   const billItems = (billItemsRaw as PBRecord[]).map(
@@ -123,9 +129,11 @@ export async function loadCustomersWithLedgerContext() {
 }
 
 export async function createCustomer(input: {
+  companyName: string
   name: string
   active: boolean
   openingBalance: number
+  openingBalanceDate?: string
   phone?: string
   gstin?: string
   address?: string
@@ -133,15 +141,19 @@ export async function createCustomer(input: {
   note?: string
 }) {
   const payload = buildCustomerWritePayload(input)
-  await writeCustomerWithSchemaFallback('create', payload)
+  await runDataOperation('create-customer', async () => {
+    await writeCustomerWithSchemaFallback('create', payload)
+  })
 }
 
 export async function updateCustomer(
   id: string,
   input: {
+    companyName: string
     name: string
     active: boolean
     openingBalance: number
+    openingBalanceDate?: string
     phone?: string
     gstin?: string
     address?: string
@@ -150,10 +162,19 @@ export async function updateCustomer(
   },
 ) {
   const payload = buildCustomerWritePayload(input)
-  await writeCustomerWithSchemaFallback('update', payload, id)
+  await runDataOperation('update-customer', async () => {
+    await writeCustomerWithSchemaFallback('update', payload, id)
+    const updated = (await pb.collection('customers').getOne(id)) as PBRecord
+    const expectedCompany = input.companyName.trim()
+    const storedCompany = String(updated.company_name ?? '').trim()
+    if (expectedCompany && storedCompany !== expectedCompany) {
+      throw new Error('Company name could not be updated.')
+    }
+  })
 }
 
 export async function toggleCustomerActive(id: string, nextActive: boolean) {
-  await pb.collection('customers').update(id, { active: nextActive })
+  await runDataOperation('toggle-customer-active', async () => {
+    await pb.collection('customers').update(id, { active: nextActive })
+  })
 }
-

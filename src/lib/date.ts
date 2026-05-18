@@ -5,13 +5,18 @@ export function getLocalIsoDate(date = new Date()): string {
   return `${y}-${m}-${d}`
 }
 
+function normalizeDateLike(dateText: string) {
+  return dateText.includes(' ') && !dateText.includes('T') ? dateText.replace(' ', 'T') : dateText
+}
+
 export function toMonthKey(dateText: string): string {
   return dateText.slice(0, 7)
 }
 
 function parseIsoDate(dateText: string): Date | null {
   if (!dateText) return null
-  const trimmed = dateText.slice(0, 10)
+  const normalized = normalizeDateLike(dateText)
+  const trimmed = normalized.slice(0, 10)
   const parsed = new Date(`${trimmed}T00:00:00`)
   if (Number.isNaN(parsed.getTime())) return null
   return parsed
@@ -24,6 +29,39 @@ export function formatFullDate(dateText: string): string {
   const month = String(parsed.getMonth() + 1).padStart(2, '0')
   const year = parsed.getFullYear()
   return `${day}-${month}-${year}`
+}
+
+export function formatDateTime(dateText: string): string {
+  if (!dateText) return '-'
+  const parsed = new Date(normalizeDateLike(dateText))
+  if (Number.isNaN(parsed.getTime())) return formatFullDate(dateText)
+  const day = String(parsed.getDate()).padStart(2, '0')
+  const month = String(parsed.getMonth() + 1).padStart(2, '0')
+  const year = parsed.getFullYear()
+  const hours = String(parsed.getHours()).padStart(2, '0')
+  const minutes = String(parsed.getMinutes()).padStart(2, '0')
+  return `${day}-${month}-${year} ${hours}:${minutes}`
+}
+
+export function toDateTimeLocalInputValue(dateText: string): string {
+  if (!dateText) return ''
+  const parsed = new Date(normalizeDateLike(dateText))
+  if (Number.isNaN(parsed.getTime())) return dateText.slice(0, 16)
+  const year = parsed.getFullYear()
+  const month = String(parsed.getMonth() + 1).padStart(2, '0')
+  const day = String(parsed.getDate()).padStart(2, '0')
+  const hours = String(parsed.getHours()).padStart(2, '0')
+  const minutes = String(parsed.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day}T${hours}:${minutes}`
+}
+
+export function toStoredDateTimeValue(input: string): string {
+  if (!input) return ''
+  if (input.endsWith('Z')) return input
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return `${input}T00:00`
+  const parsed = new Date(input)
+  if (Number.isNaN(parsed.getTime())) return input
+  return parsed.toISOString()
 }
 
 export function formatMonthYear(input: string): string {

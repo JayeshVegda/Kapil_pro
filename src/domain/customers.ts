@@ -1,10 +1,13 @@
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { computeNetBalance, splitBalance } from '@/domain/financial-math'
 
 export type CustomerRecord = {
   id: string
+  companyName: string
   name: string
   active: boolean
   openingBalance: number
+  openingBalanceDate?: string
   phone?: string
   gstin?: string
   address?: string
@@ -21,6 +24,7 @@ export type BillRecord = {
   billNo: number
   transport: number
   gstRate: number
+  gstAmount?: number
 }
 
 export type BillItemRecord = {
@@ -63,7 +67,7 @@ export function buildCustomerLedgerSummaries(params: {
   const billTotalByCustomer = new Map<string, number>()
   const lastBillDateByCustomer = new Map<string, string>()
   for (const bill of params.bills) {
-    const billTotal = calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, bill.transport, bill.gstRate)
+    const billTotal = calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, bill.transport, bill.gstRate, bill.gstAmount)
     billTotalByCustomer.set(bill.customerId, (billTotalByCustomer.get(bill.customerId) ?? 0) + billTotal)
     const currentLast = lastBillDateByCustomer.get(bill.customerId) ?? ''
     if (bill.date > currentLast) lastBillDateByCustomer.set(bill.customerId, bill.date)
@@ -81,10 +85,8 @@ export function buildCustomerLedgerSummaries(params: {
     .map((customer) => {
       const billedTotal = billTotalByCustomer.get(customer.id) ?? 0
       const paidTotal = paymentTotalByCustomer.get(customer.id) ?? 0
-      const netBalance = customer.openingBalance + billedTotal - paidTotal
-      const dueAmount = netBalance > 0 ? netBalance : 0
-      const advanceAmount = netBalance < 0 ? Math.abs(netBalance) : 0
-      const balanceLabel: 'Due' | 'Advance' | 'Clear' = dueAmount > 0 ? 'Due' : advanceAmount > 0 ? 'Advance' : 'Clear'
+      const netBalance = computeNetBalance(customer.openingBalance, billedTotal, paidTotal)
+      const { dueAmount, advanceAmount, balanceLabel } = splitBalance(netBalance)
       return {
         customer,
         billedTotal,
@@ -98,6 +100,5 @@ export function buildCustomerLedgerSummaries(params: {
         lastPaymentDate: lastPaymentDateByCustomer.get(customer.id) ?? '',
       }
     })
-    .sort((a, b) => a.customer.name.localeCompare(b.customer.name))
+    .sort((a, b) => (a.customer.companyName || a.customer.name).localeCompare(b.customer.companyName || b.customer.name))
 }
-

@@ -1,29 +1,51 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import html2canvas from 'html2canvas'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, RefreshCw, Trash2 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
+import { toUserMessage } from '@/app/errors'
+import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
+import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { saveBillWithItems } from '@/data/bills'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billing-calculations'
+import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
 import { useMarketRate } from '@/domain/market-rate'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
+import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
+import {
+  BILL_PREVIEW_CARD_CLASS,
+  BILL_PRINT_DOCUMENT_TITLE,
+  downloadBillLayoutAsJpg,
+  printBillLayoutFromElement,
+  shareBillLayoutImageWithWhatsAppFallback,
+} from '@/lib/bill-print-export'
 import { formatInQty, formatInrInteger, parseNonNegativeNumber, parsePositiveIntInput } from '@/lib/inr-format'
+import { findBestNameMatch } from '@/lib/search'
 
 export const Route = createFileRoute('/new-bill')({
   component: NewBillPage,
 })
 
-type CustomerOption = { id: string; name: string }
+type CustomerOption = { id: string; name: string; companyName: string; customerName: string }
 type ItemOption = { id: string; name: string; defaultRate: number }
 type BillItemRow = { itemName: string; qty: number; rate: number; manualRateEdited: boolean }
+type GstMode = 'none' | 'percent18' | 'manual'
 type CreditAdjustment = { date: string; amount: number }
 type AutoBalanceContext = { previousBalanceDate: string; previousBalanceAmount: number; credits: CreditAdjustment[] }
 type PBRecord = Record<string, unknown> & { id: string }
 const num = (v: unknown) => (Number.isFinite(Number(v ?? 0)) ? Number(v) : 0)
 const datePart = (v: unknown) => String(v ?? '').slice(0, 10)
-const COMPANY_NAME = 'Kapil Trading Co.'
+const toTs = (v: unknown) => {
+  const ts = new Date(String(v ?? '')).getTime()
+  return Number.isFinite(ts) ? ts : 0
+}
+const bagsFromQtyKg = (qtyKg: number) => {
+  if (!(qtyKg > 0)) return 0
+  return Math.round(qtyKg / 50)
+}
+const COMPANY_NAME = 'Kapil Products'
+const GST_RATE_DISCOUNT = 30
 const submitRowSchema = z.object({
   itemName: z.string().trim().min(1),
   qty: z.number().positive(),
@@ -39,6 +61,7 @@ const submitBillSchema = z.object({
 })
 
 function NewBillPage() {
+  const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
   const [bookNo, setBookNo] = useState<number>(51)
   const [billNo, setBillNo] = useState<number>(1)
@@ -46,21 +69,34 @@ function NewBillPage() {
   const [customerId, setCustomerId] = useState('')
   const [mktRate, setMktRate] = useState<number>(0)
   const [transport, setTransport] = useState<number>(0)
-  const [gstRate, setGstRate] = useState<number>(0)
+  const [gstMode, setGstMode] = useState<GstMode>('none')
+  const [manualGstAmount, setManualGstAmount] = useState<number>(0)
+  const gstRate = gstMode === 'percent18' ? 18 : 0
   const [lrInput, setLrInput] = useState('')
   const [lrList, setLrList] = useState<string[]>([])
   const [rows, setRows] = useState<BillItemRow[]>([{ itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
   const [statusText, setStatusText] = useState('')
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
-  const { marketRate, refreshMarketRate } = useMarketRate()
+  const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
+  const [quickCommandInput, setQuickCommandInput] = useState('')
+  const { marketRate, refreshMarketRate } = useMarketRate(date)
   const billNoInitializedRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
 
   const customersQuery = useQuery({
     queryKey: ['customers-options'],
     queryFn: async (): Promise<CustomerOption[]> => {
-      const records = await pb.collection('customers').getFullList({ sort: 'name' })
-      return records.map((r) => ({ id: r.id, name: String(r.name ?? '') }))
+      const records = await pb.collection('customers').getFullList({ sort: 'company_name,name' })
+      return records.map((r) => {
+        const customerName = String(r.name ?? '')
+        const companyName = formatCompanyName(r.company_name, r.name)
+        return {
+          id: r.id,
+          name: formatCustomerDisplayName(companyName, customerName),
+          companyName,
+          customerName,
+        }
+      })
     },
   })
 
@@ -91,22 +127,34 @@ function NewBillPage() {
       const [billsRaw, billItemsRaw, paymentsRaw] = await Promise.all([
         pb.collection('bills').getFullList({
           sort: 'date,bill_no',
-          filter: `customer = "${customerId}" && date <= "${date}"`,
+          filter: `customer = "${customerId}"`,
         }),
         pb.collection('bill_items').getFullList(),
         pb.collection('payments').getFullList({
           sort: 'date',
-          filter: `customer = "${customerId}" && date <= "${date}"`,
+          filter: `customer = "${customerId}"`,
         }),
       ])
       const customerRecord = await pb.collection('customers').getOne(customerId)
 
-      const bills = billsRaw as PBRecord[]
+      const bills = (billsRaw as PBRecord[])
+        .filter((bill) => datePart(bill.date) <= date)
+        .sort((a, b) => {
+          const d = datePart(a.date).localeCompare(datePart(b.date))
+          if (d !== 0) return d
+          const c = toTs(a.created) - toTs(b.created)
+          if (c !== 0) return c
+          return String(a.id).localeCompare(String(b.id))
+        })
       const billItems = billItemsRaw as PBRecord[]
-      const payments = (paymentsRaw as PBRecord[]).map((payment) => ({
-        date: datePart(payment.date),
-        amount: num(payment.amount),
-      }))
+      const payments = (paymentsRaw as PBRecord[])
+        .filter((payment) => datePart(payment.date) <= date)
+        .map((payment) => ({
+          date: datePart(payment.date),
+          amount: num(payment.amount),
+          createdTs: toTs(payment.created),
+          id: String(payment.id),
+        }))
       const openingBalance = num(customerRecord.opening_balance)
 
       const priorBills = bills.filter((bill) => datePart(bill.date) < date)
@@ -123,15 +171,33 @@ function NewBillPage() {
 
       const lastBill = priorBills[priorBills.length - 1]
       const lastBillDate = datePart(lastBill.date)
+      const lastBillCreatedTs = toTs(lastBill.created)
       const billTotals = priorBills.map((bill) => ({
         date: datePart(bill.date),
-        total: calculateBillTotalFromBase(itemTotalByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate)),
+        total: calculateBillTotalFromBase(itemTotalByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount)),
       }))
 
       const billedUntilLastBill = billTotals.reduce((sum, entry) => sum + entry.total, 0)
-      const paidUntilLastBill = payments.filter((entry) => entry.date <= lastBillDate).reduce((sum, entry) => sum + entry.amount, 0)
-      const previousBalanceAmount = openingBalance + billedUntilLastBill - paidUntilLastBill
-      const credits = payments.filter((entry) => entry.date > lastBillDate && entry.date <= date && entry.amount > 0)
+      const paidUntilLastBill = payments
+        .filter((entry) => {
+          if (entry.date < lastBillDate) return true
+          if (entry.date > lastBillDate) return false
+          // Same bill day: include only payments entered up to last bill creation time.
+          if (entry.createdTs > 0 && lastBillCreatedTs > 0) return entry.createdTs <= lastBillCreatedTs
+          return true
+        })
+        .reduce((sum, entry) => sum + entry.amount, 0)
+      const previousBalanceAmount = computeNetBalance(openingBalance, billedUntilLastBill, paidUntilLastBill)
+      const credits = payments.filter(
+        (entry) =>
+          entry.amount > 0 &&
+          // Credit should be after last bill cutoff.
+          (entry.date > lastBillDate ||
+            (entry.date === lastBillDate &&
+              ((entry.createdTs > 0 && lastBillCreatedTs > 0 && entry.createdTs > lastBillCreatedTs) ||
+                (entry.createdTs === 0 || lastBillCreatedTs === 0)))) &&
+          isOnOrBeforeDay(entry.date, date),
+      )
 
       return {
         previousBalanceDate: lastBillDate || date,
@@ -162,30 +228,38 @@ function NewBillPage() {
         billNo,
         date,
         customerId: customer.id,
-        customerName: customer.name,
+        customerName: customer.companyName,
         mktRate,
         transport,
         gstRate,
+        gstAmount,
         lrList,
         items: validRows,
       })
     },
-    onSuccess: () => {
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['transactions-page'] }),
+        queryClient.invalidateQueries({ queryKey: ['customers-ledger'] }),
+        queryClient.invalidateQueries({ queryKey: ['payment-ledger-context'] }),
+        queryClient.invalidateQueries({ queryKey: ['latest-bill-no'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard-data'] }),
+      ])
       setStatusText('Bill saved successfully')
       resetForm()
     },
     onError: (err) => {
-      setStatusText(err instanceof Error ? err.message : 'Failed to save bill')
+      setStatusText(toUserMessage(err))
     },
   })
 
-  const totals = useMemo(() => {
-    return calculateBillTotals({
-      items: rows,
-      transport,
-      gstRate,
-    })
-  }, [rows, gstRate, transport])
+  const totals = calculateBillTotals({
+    items: rows,
+    transport,
+    gstRate,
+    gstAmountOverride: gstMode === 'manual' ? manualGstAmount : null,
+  })
+  const { totalQty, itemsTotal, gstAmount, grandTotal } = totals
 
   const helperStatusText = useMemo(() => {
     if (statusText) return statusText
@@ -193,60 +267,59 @@ function NewBillPage() {
     const hasValidRow = rows.some((r) => r.itemName && r.qty > 0 && r.rate > 0)
     return hasCustomer && hasValidRow ? 'Ready to save' : 'Fill required fields to save'
   }, [statusText, customerId, rows])
-  const selectedCustomerName = (customersQuery.data ?? []).find((c) => c.id === customerId)?.name ?? 'Unknown'
+  const selectedCustomerName = (customersQuery.data ?? []).find((c) => c.id === customerId)?.companyName ?? 'Unknown'
   const validRows = rows.filter((r) => r.itemName.trim() && r.qty > 0 && r.rate > 0)
   const previousBalanceDate = autoBalanceQuery.data?.previousBalanceDate ?? date
   const previousBalanceAmount = autoBalanceQuery.data?.previousBalanceAmount ?? 0
   const validCredits = (autoBalanceQuery.data?.credits ?? []).filter((entry) => entry.amount > 0)
   const totalCredits = validCredits.reduce((sum, entry) => sum + entry.amount, 0)
-  const subTotalBeforeCredits = totals.grandTotal + previousBalanceAmount
-  const payableAfterAdjustments = totals.grandTotal + previousBalanceAmount - totalCredits
-  const previewLineItems = useMemo(
-    () => [
-      { particulars: `MKT : ${Math.round(mktRate) || 0}`, qty: '', rate: '', amount: '', isMeta: true },
-      ...validRows.map((row) => ({
-        particulars: row.itemName,
-        qty: `${row.qty} kg`,
-        rate: `${Math.round(row.rate)}`,
-        amount: `${Math.round(row.qty * row.rate)}`,
-        isMeta: false,
-      })),
-      ...(totals.transport > 0
-        ? [{ particulars: 'Transport', qty: '', rate: '+', amount: `${Math.round(totals.transport)}`, isMeta: true as const }]
-        : []),
-      ...(totals.gstAmount > 0
-        ? [{ particulars: `GST ${gstRate}%`, qty: '', rate: '+', amount: `${Math.round(totals.gstAmount)}`, isMeta: true as const }]
-        : []),
-      {
-        particulars: `Pre [${previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)}]`,
-        qty: '',
-        rate: previousBalanceAmount >= 0 ? '+' : '-',
-        amount: `${Math.round(Math.abs(previousBalanceAmount))}`,
-        isMeta: true as const,
-      },
-      ...(validCredits.length > 0
-        ? validCredits.map((entry) => ({
-            particulars: `Cr [${formatFullDate(entry.date)}]`,
-            qty: '',
-            rate: '-',
-            amount: `${Math.round(entry.amount)}`,
-            isMeta: true as const,
-          }))
-        : [{ particulars: 'Cr [No credits in this period]', qty: '', rate: '-', amount: '0', isMeta: true as const }]),
-    ],
-    [mktRate, validRows, totals.transport, totals.gstAmount, gstRate, previousBalanceAmount, previousBalanceDate, validCredits],
-  )
+  const subTotalBeforeCredits = grandTotal + previousBalanceAmount
+  const payableAfterAdjustments = grandTotal + previousBalanceAmount - totalCredits
+
+  const previewItemRows = validRows.map((r) => ({
+    itemName: r.itemName,
+    qty: r.qty,
+    rate: r.rate,
+    amount: r.qty * r.rate,
+    bags: bagsFromQtyKg(r.qty),
+  }))
+  const draftPrintProps: BillPrintLayoutProps | null =
+    customerId && validRows.length > 0
+      ? {
+          bookNo,
+          billNo,
+          date,
+          customerName: selectedCustomerName,
+          mkt: mktRate,
+          itemRows: previewItemRows,
+          gstAmount,
+          transport,
+          gstRate,
+          currentBillTotal: grandTotal,
+          previousBalance: previousBalanceAmount,
+          previousBillDate: previousBalanceDate,
+          periodCreditEntries: validCredits.map((c) => ({ date: c.date, amount: c.amount })),
+          subtotal: subTotalBeforeCredits,
+          finalTotal: payableAfterAdjustments,
+          totalQty,
+          totalBags: previewItemRows.reduce((s, r) => s + r.bags, 0),
+          lrList,
+        }
+      : null
 
   function resetForm() {
     setDate(today)
     setCustomerId('')
     setMktRate(0)
     setTransport(0)
-    setGstRate(0)
+    setGstMode('none')
+    setManualGstAmount(0)
     setRows([{ itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
     setLrInput('')
     setLrList([])
     setBillNo((prev) => prev + 1)
+    setIsQuickEntryOpen(false)
+    setQuickCommandInput('')
   }
 
   function addLrChip() {
@@ -267,6 +340,26 @@ function NewBillPage() {
 
   function updateRow(index: number, patch: Partial<BillItemRow>) {
     setRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)))
+  }
+
+  const getAutoRate = useCallback((item: ItemOption, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
+    const gstDiscount = nextGstMode === 'percent18' ? GST_RATE_DISCOUNT : 0
+    return Math.max(0, item.defaultRate + nextMktRate - gstDiscount)
+  }, [mktRate, gstMode])
+
+  function updateGstMode(nextMode: GstMode) {
+    setGstMode(nextMode)
+    if (nextMode !== 'manual') setManualGstAmount(0)
+    const items = itemsQuery.data ?? []
+    if (items.length === 0) return
+    setRows((prev) =>
+      prev.map((row) => {
+        if (!row.itemName || row.manualRateEdited) return row
+        const selected = items.find((it) => it.name === row.itemName)
+        if (!selected) return row
+        return { ...row, rate: getAutoRate(selected, mktRate, nextMode) }
+      }),
+    )
   }
 
   function validateBeforePreview() {
@@ -290,6 +383,29 @@ function NewBillPage() {
     setIsPreviewOpen(true)
   }
 
+  function applyQuickEntry() {
+    const parsed = parseQuickCommandLine(quickCommandInput, customersQuery.data ?? [], itemsQuery.data ?? [], today, mktRate)
+    if (!parsed.ok) {
+      setStatusText(parsed.error)
+      return
+    }
+    setCustomerId(parsed.customer.id)
+    setDate(parsed.date)
+    setTransport(parsed.transport)
+    setGstMode(parsed.gstRate === 18 ? 'percent18' : 'none')
+    setManualGstAmount(0)
+    setRows([
+      {
+        itemName: parsed.item.name,
+        qty: parsed.qtyKg,
+        rate: parsed.rate,
+        manualRateEdited: parsed.manualRateEdited,
+      },
+    ])
+    setStatusText(`Quick Entry applied (${parsed.qtyHint})`)
+    setIsQuickEntryOpen(false)
+  }
+
   async function confirmAndSave() {
     try {
       await saveMutation.mutateAsync()
@@ -302,56 +418,41 @@ function NewBillPage() {
   function printPreview() {
     const previewElement = previewRef.current
     if (!previewElement) return
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=800')
-    if (!printWindow) {
-      setStatusText('Unable to open print window')
-      return
-    }
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Bill Preview</title>
-          <style>
-            @page { size: 11cm 18cm; margin: 0.25cm; }
-            body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #0f172a; background: #fff; }
-            .preview-print { width: 10.5cm; min-height: 17.5cm; margin: 0 auto; }
-            table { border-collapse: collapse; width: 100%; font-size: 10px; }
-            th, td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; vertical-align: top; }
-            .amount { text-align: right; font-family: monospace; }
-          </style>
-        </head>
-        <body><div class="preview-print">${previewElement.innerHTML}</div></body>
-      </html>
-    `)
-    printWindow.document.close()
-    printWindow.focus()
-    printWindow.print()
+    printBillLayoutFromElement(previewElement, BILL_PRINT_DOCUMENT_TITLE, setStatusText)
   }
 
   async function savePreviewAsJpg() {
     const previewElement = previewRef.current
     if (!previewElement) return
-    const canvas = await html2canvas(previewElement, { scale: 2, backgroundColor: '#ffffff' })
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-    const link = document.createElement('a')
-    link.href = dataUrl
-    link.download = `bill-preview-${bookNo}-${billNo}.jpg`
-    link.click()
+    try {
+      await downloadBillLayoutAsJpg(previewElement, `bill-preview-${bookNo}-${billNo}.jpg`)
+      setStatusText('')
+    } catch {
+      setStatusText('Unable to save JPG in this browser session. Please refresh once and retry.')
+    }
   }
 
-  function shareOnWhatsApp() {
+  async function shareOnWhatsApp() {
+    const previewElement = previewRef.current
+    if (!previewElement) return
     const billRef = `${String(bookNo).padStart(3, '0')}/${String(billNo).padStart(3, '0')}`
     const message = [
       `${COMPANY_NAME}`,
       `Bill Ref: ${billRef}`,
       `Party: ${selectedCustomerName}`,
       `Bill Date: ${formatFullDate(date)}`,
-      `Current Bill: ${formatInrInteger(totals.grandTotal)}`,
+      `Current Bill: ${formatInrInteger(grandTotal)}`,
       `${previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'}: ${formatInrInteger(Math.abs(previousBalanceAmount))} (${previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)})`,
-      `Payments Adjusted: ${formatInrInteger(totalCredits)}`,
+      ...validCredits.map((entry) => `Credited on ${formatFullDate(entry.date)}: ${formatInrInteger(entry.amount)}`),
       `${payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}: ${formatInrInteger(Math.abs(payableAfterAdjustments))}`,
     ].join('\n')
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
+
+    await shareBillLayoutImageWithWhatsAppFallback({
+      element: previewElement,
+      imageFilename: `bill-preview-${bookNo}-${billNo}.jpg`,
+      message,
+      setStatus: setStatusText,
+    })
   }
 
   useEffect(() => {
@@ -376,10 +477,21 @@ function NewBillPage() {
         if (!row.itemName || row.manualRateEdited) return row
         const selected = items.find((it) => it.name === row.itemName)
         if (!selected) return row
-        return { ...row, rate: selected.defaultRate + mktRate }
+        return { ...row, rate: getAutoRate(selected) }
       }),
     )
-  }, [mktRate, itemsQuery.data])
+  }, [mktRate, itemsQuery.data, gstMode, getAutoRate])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.altKey && event.key.toLowerCase() === 'b') {
+        event.preventDefault()
+        setIsQuickEntryOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
@@ -394,7 +506,7 @@ function NewBillPage() {
             type="button"
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
             onClick={() => {
-              void refreshMarketRate().then((ok) => {
+              void refreshMarketRate({ targetDate: date }).then((ok) => {
                 if (ok) {
                   setStatusText('Market rate updated from RSS')
                 } else {
@@ -422,17 +534,19 @@ function NewBillPage() {
             <input className={inputClass} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
           <Field label="Customer">
-            <select className={inputClass} value={customerId} onChange={(e) => setCustomerId(e.target.value)} disabled={customersQuery.isLoading || customersQuery.isError}>
-              <option value="">Select customer...</option>
-              {customersQuery.isLoading && <option value="" disabled>Loading customers...</option>}
-              {customersQuery.isError && <option value="" disabled>Unable to load customers</option>}
-              {!customersQuery.isLoading && !customersQuery.isError && (customersQuery.data ?? []).length === 0 && <option value="" disabled>No customers found</option>}
-              {(customersQuery.data ?? []).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <SearchableCombobox
+              options={customersQuery.data ?? []}
+              value={customerId}
+              onChange={(nextId) => {
+                setCustomerId(nextId)
+                setStatusText('')
+              }}
+              inputClassName={inputClass}
+              placeholder={customersQuery.isLoading ? 'Loading customers...' : 'Search customer...'}
+              disabled={customersQuery.isLoading || customersQuery.isError}
+              emptyText="No matching customer found."
+              maxResults={25}
+            />
           </Field>
           <Field label="MKT Rate">
             <input className={inputClass} type="number" value={mktRate} onChange={(e) => setMktRate(parseNonNegativeNumber(e.target.value))} />
@@ -441,13 +555,23 @@ function NewBillPage() {
             <input className={inputClass} type="number" value={transport} onChange={(e) => setTransport(parseNonNegativeNumber(e.target.value))} />
           </Field>
           <Field label="GST (optional)">
-            <select className={inputClass} value={gstRate} onChange={(e) => setGstRate(Number(e.target.value))}>
-              <option value={0}>No GST</option>
-              <option value={5}>5%</option>
-              <option value={12}>12%</option>
-              <option value={18}>18%</option>
+            <select className={inputClass} value={gstMode} onChange={(e) => updateGstMode(e.target.value as GstMode)}>
+              <option value="none">No GST</option>
+              <option value="percent18">18% GST (-₹30 rate)</option>
+              <option value="manual">Manual GST amount</option>
             </select>
           </Field>
+          {gstMode === 'manual' && (
+            <Field label="GST Amount (INR)">
+              <input
+                className={inputClass}
+                type="number"
+                value={manualGstAmount || ''}
+                onChange={(e) => setManualGstAmount(parseNonNegativeNumber(e.target.value))}
+                placeholder="0"
+              />
+            </Field>
+          )}
           <Field label="Previous Balance Date (auto)">
             <input className={`${inputClass} bg-slate-50`} type="text" value={previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)} readOnly />
           </Field>
@@ -557,25 +681,26 @@ function NewBillPage() {
                     <td className="px-3 py-2.5 align-middle">
                       <select
                         className={inputClass}
-                        value={row.itemName}
+                        value={(itemsQuery.data ?? []).find((it) => it.name === row.itemName)?.id ?? ''}
                         disabled={itemsQuery.isLoading || itemsQuery.isError}
                         onChange={(e) => {
-                          const itemName = e.target.value
-                          const selected = (itemsQuery.data ?? []).find((it) => it.name === itemName)
+                          const id = e.target.value
+                          const selected = (itemsQuery.data ?? []).find((it) => it.id === id)
+                          if (!selected) {
+                            updateRow(i, { itemName: '', rate: 0, manualRateEdited: false })
+                            return
+                          }
                           updateRow(i, {
-                            itemName,
-                            rate: selected ? selected.defaultRate + mktRate : row.rate,
+                            itemName: selected.name,
+                            rate: getAutoRate(selected),
                             manualRateEdited: false,
                           })
                         }}
                       >
-                        <option value="">Select item...</option>
-                        {itemsQuery.isLoading && <option value="" disabled>Loading items...</option>}
-                        {itemsQuery.isError && <option value="" disabled>Unable to load items</option>}
-                        {!itemsQuery.isLoading && !itemsQuery.isError && (itemsQuery.data ?? []).length === 0 && <option value="" disabled>No items found</option>}
-                        {(itemsQuery.data ?? []).map((it) => (
-                          <option key={it.id} value={it.name}>
-                            {it.name}
+                        <option value="">{itemsQuery.isLoading ? 'Loading items…' : 'Select item…'}</option>
+                        {(itemsQuery.data ?? []).map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}
                           </option>
                         ))}
                       </select>
@@ -637,13 +762,15 @@ function NewBillPage() {
         <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-5">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div className="grid grid-cols-2 gap-x-8 gap-y-4 sm:flex sm:flex-wrap sm:items-end sm:gap-8">
-              <Metric label="Total Qty" value={formatInQty(totals.totalQty, 'kg')} />
-              <Metric label="Line items" value={formatInrInteger(totals.itemsTotal)} />
+              <Metric label="Total Qty" value={formatInQty(totalQty, 'kg')} />
+              <Metric label="Line items" value={formatInrInteger(itemsTotal)} />
               <Metric label="Transport" value={formatInrInteger(transport)} />
-              <Metric label="GST" value={formatInrInteger(totals.gstAmount)} />
-              <Metric label={previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'} value={formatInrInteger(Math.abs(previousBalanceAmount))} />
+              <Metric label="GST" value={formatInrInteger(gstAmount)} />
+              {previousBalanceAmount !== 0 && (
+                <Metric label={previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'} value={formatInrInteger(Math.abs(previousBalanceAmount))} />
+              )}
               <Metric label="Sub Total" value={formatInrInteger(subTotalBeforeCredits)} />
-              <Metric label="Credits" value={`- ${formatInrInteger(totalCredits)}`} />
+              <Metric label="Credited Entries" value={String(validCredits.length)} />
             </div>
             <div className="text-left lg:text-right">
               <p className="text-xs text-slate-400">{payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}</p>
@@ -679,74 +806,17 @@ function NewBillPage() {
               </button>
             </div>
             <div className="max-h-[70vh] overflow-auto p-4">
-              <div
-                ref={previewRef}
-                className="mx-auto rounded-md border border-slate-300 bg-white p-2 text-[10px] text-slate-800"
-                style={{ width: '11cm', minHeight: '18cm' }}
-              >
-                <div className="mb-1 border-b border-slate-300 pb-1 text-center text-[12px] font-semibold tracking-wide">
-                  {COMPANY_NAME}
-                </div>
-                <div className="mb-1 flex items-center justify-between border-b border-slate-300 pb-1 text-[11px]">
-                  <div>No. <span className="font-semibold">{String(bookNo).padStart(3, '0')}/{String(billNo).padStart(3, '0')}</span></div>
-                  <div>Date : <span className="font-semibold">{formatFullDate(date)}</span></div>
-                </div>
-                <div className="mb-1 border-b border-slate-300 pb-1">
-                  <span className="mr-1 font-semibold">M/s.</span>
-                  <span>{selectedCustomerName}</span>
-                </div>
-
-                <table className="w-full border-collapse text-[10px]">
-                  <thead>
-                    <tr className="bg-slate-50">
-                      <th className="w-[7%] border border-slate-300 px-1 py-1 text-left">Sr.</th>
-                      <th className="w-[46%] border border-slate-300 px-1 py-1 text-left">Particulars</th>
-                      <th className="w-[16%] border border-slate-300 px-1 py-1 text-right">Qty.</th>
-                      <th className="w-[13%] border border-slate-300 px-1 py-1 text-right">Rate</th>
-                      <th className="w-[18%] border border-slate-300 px-1 py-1 text-right">Amount Rs.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Array.from({ length: 14 }).map((_, idx) => {
-                      const row = previewLineItems[idx]
-                      return (
-                        <tr key={idx}>
-                          <td className="border border-slate-300 px-1 py-1 align-top text-[9px] text-slate-500">{row && !row.isMeta ? idx + 1 : ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 align-top">{row?.particulars ?? ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 text-right align-top font-mono">{row?.qty ?? ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 text-right align-top font-mono">{row?.rate ?? ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 text-right align-top font-mono">{row?.amount ?? ''}</td>
-                        </tr>
-                      )
-                    })}
-                    <tr>
-                      <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">Current Bill Total</td>
-                      <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[11px] font-semibold">{Math.round(totals.grandTotal).toLocaleString('en-IN')}</td>
-                    </tr>
-                    <tr>
-                      <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">Sub Total</td>
-                      <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[11px] font-semibold">{Math.round(subTotalBeforeCredits).toLocaleString('en-IN')}</td>
-                    </tr>
-                    <tr>
-                      <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">{payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}</td>
-                      <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[12px] font-bold">{Math.round(Math.abs(payableAfterAdjustments)).toLocaleString('en-IN')}</td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <div className="mt-2 flex items-start justify-between">
-                  <div className="space-y-1">
-                    <p>Weight : <span className="font-semibold">{formatInQty(totals.totalQty, 'kg')}</span></p>
-                    <p>Bags : <span className="font-semibold">{validRows.length || 0}</span></p>
-                    <p>{previousBalanceAmount >= 0 ? 'Prev Bal' : 'Prev Advance'} [{previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)}] : <span className="font-semibold">{Math.round(Math.abs(previousBalanceAmount)).toLocaleString('en-IN')}</span></p>
-                    <p>Total Credits : <span className="font-semibold">-{Math.round(totalCredits).toLocaleString('en-IN')}</span></p>
-                    <p className="mt-2 inline-block rounded-md border border-slate-400 px-2 py-1">
-                      LR No. <span className="font-semibold">{lrList.length > 0 ? lrList.join(', ') : '-'}</span>
-                    </p>
-                  </div>
-                  <div className="flex h-8 w-24 items-center justify-center rounded-full border border-slate-400 text-[11px] text-slate-500">
-                    Signature
-                  </div>
+              <div className="flex justify-center">
+                <div
+                  ref={previewRef}
+                  className={BILL_PREVIEW_CARD_CLASS}
+                  style={{ width: `${BILL_PRINT_PAGE_WIDTH_CM}cm`, maxWidth: '100%' }}
+                >
+                {draftPrintProps ? (
+                  <BillPrintLayout {...draftPrintProps} />
+                ) : (
+                  <p className="p-4 text-sm text-slate-500">Unable to build preview.</p>
+                )}
                 </div>
               </div>
             </div>
@@ -770,6 +840,43 @@ function NewBillPage() {
                 disabled={saveMutation.isPending}
               >
                 {saveMutation.isPending ? 'Saving...' : 'Confirm & Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {isQuickEntryOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h3 className="text-base font-semibold text-slate-900">Bill Command (Alt + B)</h3>
+              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickEntryOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="space-y-2 px-4 py-4">
+              <input
+                autoFocus
+                className={inputClass}
+                value={quickCommandInput}
+                onChange={(e) => setQuickCommandInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    applyQuickEntry()
+                  }
+                }}
+                placeholder='party [item] qty [rate=auto] [gst] [date=today|-1|DD-MM-YYYY] [+t 2000] (default item: Spindle (8.5.Gm))'
+              />
+              <p className="text-xs text-slate-500">Qty rule: if qty is 50 or less it is treated as bags, else treated as kg.</p>
+              <p className="text-xs text-slate-500">Examples: `sambhu 10` | `sambhu spindle 10 gst +t 2000` | `sambhu tapper 620 790 -1`</p>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsQuickEntryOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" onClick={applyQuickEntry}>
+                Apply to Bill Form
               </button>
             </div>
           </div>
@@ -799,3 +906,96 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 const inputClass =
   'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+
+function parseQuickCommandLine(
+  input: string,
+  customers: Array<{ id: string; name: string }>,
+  items: Array<{ id: string; name: string; defaultRate: number }>,
+  today: string,
+  mktRate: number,
+):
+  | {
+      ok: true
+      customer: { id: string; name: string }
+      item: { id: string; name: string; defaultRate: number }
+      qtyKg: number
+      qtyHint: string
+      rate: number
+      gstRate: number
+      manualRateEdited: boolean
+      date: string
+      transport: number
+    }
+  | { ok: false; error: string } {
+  const raw = input.trim()
+  if (!raw) return { ok: false, error: 'Quick command is empty' }
+  const tokens = raw.split(/\s+/).filter(Boolean)
+  if (tokens.length < 2) return { ok: false, error: 'Use: party [item] qty [rate] [gst] [date] [+t amount]' }
+
+  const customer = resolveByName(tokens[0], customers)
+  if (!customer) return { ok: false, error: `Party not found: ${tokens[0]}` }
+
+  let qtyIndex = -1
+  for (let i = 1; i < tokens.length; i += 1) {
+    if (Number.isFinite(Number(tokens[i])) && Number(tokens[i]) > 0) {
+      qtyIndex = i
+      break
+    }
+  }
+  if (qtyIndex < 0) return { ok: false, error: 'Quantity missing in command' }
+  const qtyRaw = Number(tokens[qtyIndex])
+  const qtyKg = qtyRaw <= 50 ? qtyRaw * 50 : qtyRaw
+  const qtyHint = qtyRaw <= 50 ? `${Math.round(qtyRaw)} bags` : `${Math.round(qtyRaw)} kg`
+
+  const itemToken = tokens.slice(1, qtyIndex).join(' ').trim()
+  const defaultItemName = 'Spindle (8.5.Gm)'
+  const fallbackItem = items.find((item) => item.name.toLowerCase() === defaultItemName.toLowerCase()) ?? items[0]
+  const item = itemToken ? resolveByName(itemToken, items) : fallbackItem
+  if (!item) return { ok: false, error: 'Item list is empty' }
+
+  let gstRate = 0
+  let manualRate = 0
+  let hasManualRate = false
+  let date = today
+  let transport = 0
+  for (let i = qtyIndex + 1; i < tokens.length; i += 1) {
+    const token = tokens[i].toLowerCase()
+    if (Number.isFinite(Number(token)) && Number(token) > 0) {
+      manualRate = Number(token)
+      hasManualRate = true
+      continue
+    }
+    if (token === 'gst' || token === 'm') {
+      gstRate = 18
+      continue
+    }
+    if ((token === '+t' || token === '+transport') && i + 1 < tokens.length) {
+      transport = Number(tokens[i + 1]) || transport
+      i += 1
+      continue
+    }
+    date = parseQuickDateToken(token, today)
+  }
+
+  const autoRate = Math.max(0, item.defaultRate + mktRate - (gstRate === 18 ? GST_RATE_DISCOUNT : 0))
+  const rate = hasManualRate ? manualRate : autoRate
+  return { ok: true, customer, item, qtyKg, qtyHint, rate, gstRate, manualRateEdited: hasManualRate, date, transport }
+}
+
+function resolveByName<T extends { name: string }>(token: string, records: T[]) {
+  return findBestNameMatch(records, token, (record) => record.name) ?? null
+}
+
+function parseQuickDateToken(value: string, today: string) {
+  const token = value.trim().toLowerCase()
+  if (!token) return today
+  if (token === 'today' || token === '0') return today
+  if (token === '-1' || token === 'yday' || token === 'yesterday') {
+    const d = new Date(`${today}T00:00:00`)
+    d.setDate(d.getDate() - 1)
+    return getLocalIsoDate(d)
+  }
+  const m = token.match(/^(\d{2})-(\d{2})-(\d{4})$/)
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`
+  return token
+}

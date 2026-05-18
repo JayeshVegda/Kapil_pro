@@ -1,24 +1,23 @@
 services:
-  billing-pocketbase:
-    image: ghcr.io/muchobien/pocketbase:latest
-    container_name: kapil-billing-pocketbase
+  kapil:
+    image: nginx:alpine
+    container_name: kapil
     restart: unless-stopped
-    command: serve --http=0.0.0.0:8090 --dir=/pb_data
-    ports:
-      - "8090:8090"
+    volumes:
+      - ./dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - caddy-net
+
+  kapil-pb:
+    image: ghcr.io/muchobien/pocketbase:latest
+    container_name: kapil-pb
+    restart: unless-stopped
     volumes:
       - ./pb_data:/pb_data
+    networks:
+      - caddy-net
 
-  billing-web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: billing-billing-web
-    container_name: kapil-billing-web
-    restart: unless-stopped
-    depends_on:
-      - billing-pocketbase
-    ports:
-      - "8088:80"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+networks:
+  caddy-net:
+    external: true

@@ -29,7 +29,7 @@ function LedgerPage() {
     queryFn: () => loadPartyDashboard(asOfDate, 30),
   })
 
-  const rows = dashboardQuery.data?.rows ?? []
+  const rows = useMemo(() => dashboardQuery.data?.rows ?? [], [dashboardQuery.data?.rows])
 
   useEffect(() => {
     if (rows.length === 0) return
@@ -65,7 +65,7 @@ function LedgerPage() {
         (event) => `<tr>
           <td>${escapeHtml(event.date === '-' ? '-' : formatFullDate(event.date))}</td>
           <td>${escapeHtml(event.type)}</td>
-          <td>${escapeHtml(event.details)}</td>
+          <td>${escapeHtml(event.details)}${event.compactDetails ? `<br/><small>${escapeHtml(event.compactDetails)}</small>` : ''}</td>
           <td style="text-align:right">${Math.round(event.debit).toLocaleString('en-IN')}</td>
           <td style="text-align:right">${Math.round(event.credit).toLocaleString('en-IN')}</td>
           <td style="text-align:right">${Math.round(event.balance).toLocaleString('en-IN')}</td>
@@ -207,39 +207,6 @@ function LedgerPage() {
     }
   }, [statementQuery.data, selectedRow, toDate])
 
-  const decisionModel = useMemo(() => {
-    if (!selectedRow) {
-      return {
-        healthStatus: 'Good' as const,
-        overdueAmount: 0,
-        lastPaymentAgo: '-',
-        paymentBehavior: 'Irregular',
-        riskSignals: [] as string[],
-      }
-    }
-    const overdueAmount = selectedRow.status === 'Overdue' ? selectedRow.dueAmount : 0
-    const hasLastPayment = Boolean(selectedRow.lastPaymentDate)
-    const lastPaymentDays = daysAgo(selectedRow.lastPaymentDate, asOfDate)
-    const healthStatus: 'Good' | 'Risk' | 'Overdue' =
-      selectedRow.status === 'Overdue' ? 'Overdue' : selectedRow.dueAmount > 50000 || lastPaymentDays > 45 ? 'Risk' : 'Good'
-    const paymentBehavior =
-      !hasLastPayment ? 'Irregular' : selectedRow.status === 'Overdue' ? 'Late' : lastPaymentDays <= 30 ? 'On-time' : lastPaymentDays <= 60 ? 'Irregular' : 'Late'
-    const riskSignals: string[] = []
-    if (selectedRow.dueAmount >= 100000) riskSignals.push(`Large unpaid amount: ${formatInrInteger(selectedRow.dueAmount)}`)
-    if (lastPaymentDays > 45) riskSignals.push(`No payment in ${lastPaymentDays} days`)
-    if (analytics.monthDebit > analytics.monthCredit * 1.3 && analytics.monthDebit > 0) {
-      riskSignals.push('Billing is rising faster than collection')
-    }
-
-    return {
-      healthStatus,
-      overdueAmount,
-      lastPaymentAgo: hasLastPayment ? `${lastPaymentDays} days ago` : 'No payment yet',
-      paymentBehavior,
-      riskSignals,
-    }
-  }, [selectedRow, asOfDate, analytics.monthDebit, analytics.monthCredit])
-
   const filteredEvents = useMemo(() => {
     const events = statementQuery.data?.events ?? []
     if (statementFilter === 'all') return events
@@ -305,30 +272,6 @@ function LedgerPage() {
               <Metric label="Avg Selling Rate" value={formatInrInteger(selectedRow.averageSellingRate)} />
               <Metric label="Avg Selling Weight" value={String(Math.round(selectedRow.averageSellingWeight))} />
             </div>
-          </section>
-
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3">
-              <h3 className="text-base font-semibold text-slate-900">{selectedRow.customerName} - Quick Health Summary</h3>
-              <p className="text-xs text-slate-500">As of {formatFullDate(asOfDate)}</p>
-            </div>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-5">
-              <Metric label="Status" value={decisionModel.healthStatus} emphasized={decisionModel.healthStatus !== 'Good'} />
-              <Metric label="Total Due" value={formatInrInteger(selectedRow.dueAmount)} emphasized />
-              <Metric label="Overdue Amount" value={formatInrInteger(decisionModel.overdueAmount)} />
-              <Metric label="Last Payment" value={decisionModel.lastPaymentAgo} />
-              <Metric label="Payment Behavior" value={decisionModel.paymentBehavior} />
-            </div>
-            {decisionModel.riskSignals.length > 0 && (
-              <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-rose-700">Risk Signals</p>
-                <ul className="mt-1 space-y-0.5 text-sm text-rose-800">
-                  {decisionModel.riskSignals.map((signal, idx) => (
-                    <li key={idx}>- {signal}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </section>
 
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -485,7 +428,10 @@ function LedgerPage() {
                   >
                     <td className="px-3 py-3 text-sm text-slate-700">{event.date === '-' ? '-' : formatFullDate(event.date)}</td>
                     <td className="px-3 py-3 text-sm text-slate-700">{event.type}</td>
-                    <td className="px-3 py-3 text-sm text-slate-700">{event.details}</td>
+                    <td className="px-3 py-3 text-sm text-slate-700">
+                      <p>{event.details}</p>
+                      {event.compactDetails ? <p className="mt-0.5 text-xs text-slate-500">{event.compactDetails}</p> : null}
+                    </td>
                     <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{formatInrInteger(event.debit)}</td>
                     <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{formatInrInteger(event.credit)}</td>
                     <td className="px-3 py-3 text-right font-mono text-sm font-semibold text-slate-900">{formatSignedBalance(event.balance)}</td>
@@ -510,14 +456,6 @@ function Metric({ label, value, emphasized = false }: { label: string; value: st
       <p className={`mt-0.5 font-mono tabular-nums ${emphasized ? 'text-lg font-bold text-rose-800' : 'text-base font-semibold text-slate-900'}`}>{value}</p>
     </div>
   )
-}
-
-function daysAgo(fromIsoDate: string, toIsoDate: string) {
-  if (!fromIsoDate || !toIsoDate) return 0
-  const from = new Date(`${fromIsoDate}T00:00:00`)
-  const to = new Date(`${toIsoDate}T00:00:00`)
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 0
-  return Math.max(0, Math.floor((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000)))
 }
 
 function formatSignedBalance(balance: number) {

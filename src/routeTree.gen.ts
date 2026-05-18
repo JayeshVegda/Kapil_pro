@@ -17,6 +17,7 @@ import { Route as MonthlyReportRouteImport } from './routes/monthly-report'
 import { Route as LedgerRouteImport } from './routes/ledger'
 import { Route as ItemsRouteImport } from './routes/items'
 import { Route as CustomersRouteImport } from './routes/customers'
+import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as BackupRouteImport } from './routes/backup'
 import { Route as IndexRouteImport } from './routes/index'
 
@@ -60,6 +61,11 @@ const CustomersRoute = CustomersRouteImport.update({
   path: '/customers',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CalendarRoute = CalendarRouteImport.update({
+  id: '/calendar',
+  path: '/calendar',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BackupRoute = BackupRouteImport.update({
   id: '/backup',
   path: '/backup',
@@ -74,6 +80,7 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/calendar': typeof CalendarRoute
   '/customers': typeof CustomersRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
@@ -86,6 +93,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/calendar': typeof CalendarRoute
   '/customers': typeof CustomersRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
@@ -99,6 +107,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/calendar': typeof CalendarRoute
   '/customers': typeof CustomersRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
@@ -113,6 +122,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/backup'
+    | '/calendar'
     | '/customers'
     | '/items'
     | '/ledger'
@@ -125,6 +135,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/backup'
+    | '/calendar'
     | '/customers'
     | '/items'
     | '/ledger'
@@ -137,6 +148,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/backup'
+    | '/calendar'
     | '/customers'
     | '/items'
     | '/ledger'
@@ -150,6 +162,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BackupRoute: typeof BackupRoute
+  CalendarRoute: typeof CalendarRoute
   CustomersRoute: typeof CustomersRoute
   ItemsRoute: typeof ItemsRoute
   LedgerRoute: typeof LedgerRoute
@@ -218,6 +231,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CustomersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/calendar': {
+      id: '/calendar'
+      path: '/calendar'
+      fullPath: '/calendar'
+      preLoaderRoute: typeof CalendarRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/backup': {
       id: '/backup'
       path: '/backup'
@@ -238,6 +258,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BackupRoute: BackupRoute,
+  CalendarRoute: CalendarRoute,
   CustomersRoute: CustomersRoute,
   ItemsRoute: ItemsRoute,
   LedgerRoute: LedgerRoute,

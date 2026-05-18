@@ -1,11 +1,20 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import html2canvas from 'html2canvas'
 import { Download, Printer, Search, Share2 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM } from '@/components/billing/bill-print-layout'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { formatFullDate } from '@/lib/date'
+import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
+import {
+  BILL_PREVIEW_CARD_CLASS,
+  BILL_PRINT_DOCUMENT_TITLE,
+  downloadBillLayoutAsJpg,
+  printBillLayoutFromElement,
+  shareBillLayoutImageWithWhatsAppFallback,
+} from '@/lib/bill-print-export'
 import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/print-bill')({
@@ -22,9 +31,11 @@ type BillOption = {
   date: string
   customerId: string
   customerName: string
+  printCustomerName: string
   mkt: number
   transport: number
   gstRate: number
+  gstAmount: number
   lrNo: string
   total: number
   itemSummary: string
@@ -48,6 +59,7 @@ const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
 function PrintBillPage() {
   const [search, setSearch] = useState('')
   const [selectedBillId, setSelectedBillId] = useState('')
+  const [actionStatus, setActionStatus] = useState('')
   const previewRef = useRef<HTMLDivElement>(null)
 
   const printQuery = useQuery({
@@ -57,7 +69,7 @@ function PrintBillPage() {
         pb.collection('bills').getFullList({ sort: '-date,-bill_no' }),
         pb.collection('bill_items').getFullList(),
         pb.collection('payments').getFullList({ sort: 'date' }),
-        pb.collection('customers').getFullList({ sort: 'name' }),
+        pb.collection('customers').getFullList({ sort: 'company_name,name' }),
       ])
 
       const itemBaseByBill = new Map<string, number>()
@@ -81,21 +93,32 @@ function PrintBillPage() {
       }
 
       const bills = (billsRaw as PBRecord[]).map(
-        (row): BillOption => ({
-          id: row.id,
-          billRef: String(row.bill_ref ?? ''),
-          billNo: num(row.bill_no),
-          bookNo: num(row.book_no),
-          date: datePart(row.date),
-          customerId: String(row.customer ?? ''),
-          customerName: String(row.customer_name ?? 'Unknown'),
-          mkt: num(row.mkt),
-          transport: num(row.transport),
-          gstRate: num(row.gst_rate),
-          lrNo: String(row.lr_no ?? ''),
-          total: calculateBillTotalFromBase(itemBaseByBill.get(row.id) ?? 0, num(row.transport), num(row.gst_rate)),
-          itemSummary: itemSummaryByBill.get(row.id) ?? '-',
-        }),
+        (row): BillOption => {
+          const customer = (customersRaw as PBRecord[]).find((entry) => entry.id === String(row.customer ?? ''))
+          const displayName = customer
+            ? formatCustomerDisplayName(customer.company_name, customer.name)
+            : String(row.customer_name ?? 'Unknown')
+          const printCustomerName = customer
+            ? formatCompanyName(customer.company_name, customer.name)
+            : String(row.customer_name ?? 'Unknown')
+          return {
+            id: row.id,
+            billRef: String(row.bill_ref ?? ''),
+            billNo: num(row.bill_no),
+            bookNo: num(row.book_no),
+            date: datePart(row.date),
+            customerId: String(row.customer ?? ''),
+            customerName: displayName,
+            printCustomerName,
+            mkt: num(row.mkt),
+            transport: num(row.transport),
+            gstRate: num(row.gst_rate),
+            gstAmount: num(row.gst_amount),
+            lrNo: String(row.lr_no ?? ''),
+            total: calculateBillTotalFromBase(itemBaseByBill.get(row.id) ?? 0, num(row.transport), num(row.gst_rate), num(row.gst_amount)),
+            itemSummary: itemSummaryByBill.get(row.id) ?? '-',
+          }
+        },
       )
       const billItems = (billItemsRaw as PBRecord[]).map(
         (row): BillPrintItem & { billId: string } => ({
@@ -119,16 +142,15 @@ function PrintBillPage() {
     },
   })
 
-  const bills = printQuery.data?.bills ?? []
-
   const filteredBills = useMemo(() => {
+    const bills = printQuery.data?.bills ?? []
     const q = search.trim().toLowerCase()
     if (!q) return bills
     return bills.filter((bill) => {
       const haystack = `${bill.billRef} ${bill.bookNo}/${bill.billNo} ${bill.date} ${bill.customerName} ${bill.lrNo}`.toLowerCase()
       return haystack.includes(q)
     })
-  }, [bills, search])
+  }, [printQuery.data?.bills, search])
 
   const selectedBill = useMemo(() => {
     if (!selectedBillId) return null
@@ -138,14 +160,14 @@ function PrintBillPage() {
   const preview = useMemo(() => {
     if (!selectedBill || !printQuery.data) return null
     const allCustomerBills = printQuery.data.bills
-      .filter((bill) => bill.customerId === selectedBill.customerId && bill.date <= selectedBill.date)
+      .filter((bill) => bill.customerId === selectedBill.customerId && isOnOrBeforeDay(bill.date, selectedBill.date))
       .sort((a, b) => a.date.localeCompare(b.date) || a.billNo - b.billNo)
     const currentIdx = allCustomerBills.findIndex((bill) => bill.id === selectedBill.id)
     if (currentIdx < 0) return null
 
     const itemRows = printQuery.data.billItems.filter((item) => item.billId === selectedBill.id)
     const itemBaseTotal = itemRows.reduce((sum, row) => sum + row.amount, 0)
-    const gstAmount = (itemBaseTotal * selectedBill.gstRate) / 100
+    const gstAmount = selectedBill.gstAmount > 0 ? selectedBill.gstAmount : (itemBaseTotal * selectedBill.gstRate) / 100
     const currentBillTotal = itemBaseTotal + gstAmount + selectedBill.transport
 
     const opening = printQuery.data.customerOpeningById.get(selectedBill.customerId) ?? 0
@@ -155,13 +177,16 @@ function PrintBillPage() {
       const bill = allCustomerBills[i]
       const rows = printQuery.data.billItems.filter((item) => item.billId === bill.id)
       const base = rows.reduce((sum, row) => sum + row.amount, 0)
-      previousBalance += calculateBillTotalFromBase(base, bill.transport, bill.gstRate)
+      previousBalance += calculateBillTotalFromBase(base, bill.transport, bill.gstRate, bill.gstAmount)
     }
     const previousBillDate = currentIdx > 0 ? allCustomerBills[currentIdx - 1].date : 'Opening'
     const paidBeforePrevious =
       currentIdx > 0
         ? printQuery.data.payments
-            .filter((entry) => entry.customerId === selectedBill.customerId && entry.date <= allCustomerBills[currentIdx - 1].date)
+            .filter(
+              (entry) =>
+                entry.customerId === selectedBill.customerId && isOnOrBeforeDay(entry.date, allCustomerBills[currentIdx - 1].date),
+            )
             .reduce((sum, entry) => sum + entry.amount, 0)
         : 0
     previousBalance -= paidBeforePrevious
@@ -169,9 +194,9 @@ function PrintBillPage() {
     const periodCreditEntries = printQuery.data.payments
       .filter((entry) => {
         if (entry.customerId !== selectedBill.customerId) return false
-        if (entry.date > selectedBill.date) return false
+        if (!isOnOrBeforeDay(entry.date, selectedBill.date)) return false
         if (!previousCutoffDate) return true
-        return entry.date > previousCutoffDate
+        return !isOnOrBeforeDay(entry.date, previousCutoffDate)
       })
       .sort((a, b) => a.date.localeCompare(b.date))
     const periodCredits = periodCreditEntries.reduce((sum, entry) => sum + entry.amount, 0)
@@ -202,49 +227,42 @@ function PrintBillPage() {
 
   function printPreview() {
     if (!previewRef.current) return
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=800')
-    if (!printWindow) return
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Print Bill</title>
-          <style>
-            body { margin: 0; padding: 12px; font-family: Arial, sans-serif; color: #0f172a; background: #fff; }
-            table { border-collapse: collapse; width: 100%; font-size: 12px; }
-            th, td { border: 1px solid #cbd5e1; padding: 6px; text-align: left; }
-            .amount { text-align: right; font-family: monospace; }
-          </style>
-        </head>
-        <body>${previewRef.current.innerHTML}</body>
-      </html>
-    `)
-    printWindow.document.close()
-    printWindow.focus()
-    printWindow.print()
+    printBillLayoutFromElement(previewRef.current, BILL_PRINT_DOCUMENT_TITLE, setActionStatus)
   }
 
   async function exportAsJpg() {
     if (!previewRef.current || !preview) return
-    const canvas = await html2canvas(previewRef.current, { scale: 2, backgroundColor: '#ffffff' })
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.95)
-    const link = document.createElement('a')
-    link.href = dataUrl
-    link.download = `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`
-    link.click()
+    try {
+      await downloadBillLayoutAsJpg(
+        previewRef.current,
+        `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`,
+      )
+      setActionStatus('')
+    } catch {
+      setActionStatus('Unable to save JPG in this browser session. Please refresh once and retry.')
+    }
   }
 
-  function shareOnWhatsApp() {
-    if (!preview) return
+  async function shareOnWhatsApp() {
+    if (!preview || !previewRef.current) return
     const message = [
       `Bill ${preview.selectedBill.bookNo}/${preview.selectedBill.billNo}`,
       `Date: ${formatFullDate(preview.selectedBill.date)}`,
       `Party: ${preview.selectedBill.customerName}`,
-      `Current Bill: ${formatInrInteger(preview.currentBillTotal)}`,
-      `Previous Balance: ${formatInrInteger(preview.previousBalance)} (${preview.previousBillDate === 'Opening' ? 'Opening' : formatFullDate(preview.previousBillDate)})`,
-      `Credits: ${formatInrInteger(preview.periodCredits)}`,
+      ...(preview.currentBillTotal !== 0 ? [`Current Bill: ${formatInrInteger(preview.currentBillTotal)}`] : []),
+      ...(preview.previousBalance !== 0
+        ? [`Previous Balance: ${formatInrInteger(preview.previousBalance)} (${preview.previousBillDate === 'Opening' ? 'Opening' : formatFullDate(preview.previousBillDate)})`]
+        : []),
+      ...preview.periodCreditEntries.map((entry) => `Credited on ${formatFullDate(entry.date)}: ${formatInrInteger(entry.amount)}`),
       `Amount Due: ${formatInrInteger(preview.finalTotal)}`,
     ].join('\n')
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
+
+    await shareBillLayoutImageWithWhatsAppFallback({
+      element: previewRef.current,
+      imageFilename: `bill-${preview.selectedBill.bookNo}-${preview.selectedBill.billNo}.jpg`,
+      message,
+      setStatus: setActionStatus,
+    })
   }
 
   return (
@@ -340,105 +358,34 @@ function PrintBillPage() {
                   </button>
                 </div>
               </div>
+              {actionStatus && <p className="mb-2 text-xs text-slate-500">{actionStatus}</p>}
               <div className="max-h-[70vh] overflow-auto rounded-lg border border-slate-100 p-1">
-                <div ref={previewRef} className="mx-auto max-w-[760px] rounded-lg border border-slate-300 bg-white p-4">
-                  <div className="mb-2 flex items-start justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">Kapil Products</p>
-                      <p className="text-xs text-slate-600">MKT: {preview.selectedBill.mkt}</p>
-                    </div>
-                    <div className="text-right text-xs text-slate-600">
-                      <p>Date: {formatFullDate(preview.selectedBill.date)}</p>
-                      <p>No: {preview.selectedBill.bookNo}/{preview.selectedBill.billNo}</p>
-                    </div>
-                  </div>
-
-                  <p className="mb-2 text-sm text-slate-700">M/s. <span className="font-semibold text-slate-900">{preview.selectedBill.customerName}</span></p>
-
-                  <table className="w-full border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-slate-50">
-                        <th className="border border-slate-300 px-2 py-1 text-left">Particulars</th>
-                        <th className="border border-slate-300 px-2 py-1 text-right">Qty</th>
-                        <th className="border border-slate-300 px-2 py-1 text-right">Rate</th>
-                        <th className="border border-slate-300 px-2 py-1 text-right">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {preview.itemRows.map((row, index) => (
-                        <tr key={`${row.itemName}-${index}`}>
-                          <td className="border border-slate-300 px-2 py-1">{row.itemName}</td>
-                          <td className="border border-slate-300 px-2 py-1 text-right">{row.qty} kg</td>
-                          <td className="border border-slate-300 px-2 py-1 text-right">{formatInrInteger(row.rate)}</td>
-                          <td className="border border-slate-300 px-2 py-1 text-right">{formatInrInteger(row.amount)}</td>
-                        </tr>
-                      ))}
-                      {preview.gstAmount > 0 && (
-                        <tr>
-                          <td className="border border-slate-300 px-2 py-1">GST ({preview.selectedBill.gstRate}%)</td>
-                          <td className="border border-slate-300 px-2 py-1" />
-                          <td className="border border-slate-300 px-2 py-1" />
-                          <td className="border border-slate-300 px-2 py-1 text-right">{formatInrInteger(preview.gstAmount)}</td>
-                        </tr>
-                      )}
-                      {preview.selectedBill.transport > 0 && (
-                        <tr>
-                          <td className="border border-slate-300 px-2 py-1">Transport</td>
-                          <td className="border border-slate-300 px-2 py-1" />
-                          <td className="border border-slate-300 px-2 py-1" />
-                          <td className="border border-slate-300 px-2 py-1 text-right">+ {formatInrInteger(preview.selectedBill.transport)}</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-
-                  <div className="my-3 border-t border-slate-300" />
-                  <div className="space-y-1.5 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span>Current Bill Total</span>
-                      <span className="font-mono font-semibold">{formatInrInteger(preview.currentBillTotal)}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>Previous Balance [dt. {preview.previousBillDate === 'Opening' ? 'Opening' : formatFullDate(preview.previousBillDate)}]</span>
-                      <span className="font-mono">+ {formatInrInteger(preview.previousBalance)}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>Sub Total</span>
-                      <span className="font-mono">{formatInrInteger(preview.subtotal)}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>Cr. Entries</span>
-                      <span className="font-mono">- {formatInrInteger(preview.periodCredits)}</span>
-                    </div>
-                    {preview.periodCreditEntries.length > 0 && (
-                      <div className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
-                        {preview.periodCreditEntries.map((entry, index) => (
-                          <div key={`${entry.date}-${entry.amount}-${index}`} className="flex items-center justify-between text-[11px] text-slate-600">
-                            <span>Cr on {formatFullDate(entry.date)}</span>
-                            <span className="font-mono">- {formatInrInteger(entry.amount)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between border-t border-slate-300 pt-1.5 text-base font-bold">
-                      <span>Total</span>
-                      <span className="font-mono">{formatInrInteger(preview.finalTotal)}</span>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <p className="text-slate-500">Weight</p>
-                      <p className="font-semibold text-slate-800">{Math.round(preview.totalQty)} kg</p>
-                    </div>
-                    <div>
-                      <p className="text-slate-500">Bags</p>
-                      <p className="font-semibold text-slate-800">{Math.round(preview.totalBags)}</p>
-                    </div>
-                    <div>
-                      <p className="text-slate-500">LR No.</p>
-                      <p className="font-semibold text-slate-800">{preview.lrList.length ? preview.lrList.join(', ') : '-'}</p>
-                    </div>
+                <div className="flex justify-center px-1 py-2">
+                  <div
+                    ref={previewRef}
+                    className={BILL_PREVIEW_CARD_CLASS}
+                    style={{ width: `${BILL_PRINT_PAGE_WIDTH_CM}cm`, maxWidth: '100%' }}
+                  >
+                    <BillPrintLayout
+                      bookNo={preview.selectedBill.bookNo}
+                      billNo={preview.selectedBill.billNo}
+                      date={preview.selectedBill.date}
+                      customerName={preview.selectedBill.printCustomerName}
+                      mkt={preview.selectedBill.mkt}
+                      itemRows={preview.itemRows}
+                      gstAmount={preview.gstAmount}
+                      transport={preview.selectedBill.transport}
+                      gstRate={preview.selectedBill.gstRate}
+                      currentBillTotal={preview.currentBillTotal}
+                      previousBalance={preview.previousBalance}
+                      previousBillDate={preview.previousBillDate}
+                      periodCreditEntries={preview.periodCreditEntries}
+                      subtotal={preview.subtotal}
+                      finalTotal={preview.finalTotal}
+                      totalQty={preview.totalQty}
+                      totalBags={preview.totalBags}
+                      lrList={preview.lrList}
+                    />
                   </div>
                 </div>
               </div>

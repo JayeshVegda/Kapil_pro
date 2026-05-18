@@ -1,5 +1,8 @@
 import { pb } from '@/data/pocketbase'
+import { recalculateAndPersistBillStatusesForCustomer } from '@/data/bill-statuses'
+import { runDataOperation } from '@/data/reliability'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { formatCustomerDisplayName } from '@/lib/customer-display'
 import type { LedgerBill, LedgerPayment } from '@/domain/payment-ledger'
 
 type PBRecord = Record<string, unknown> & { id: string }
@@ -21,15 +24,28 @@ export type PaymentLedgerContext = {
   customerId: string
   customerName: string
   openingBalance: number
+  openingBalanceDate: string
   bills: LedgerBill[]
   payments: LedgerPayment[]
 }
 
+export type SavedPaymentReceipt = {
+  id: string
+  customerId: string
+  customerName: string
+  date: string
+  amount: number
+  mode: 'Cash' | 'Bank'
+  note: string
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
 export async function loadPaymentCustomers(): Promise<PaymentCustomerOption[]> {
-  const records = await pb.collection('customers').getFullList({ sort: 'name' })
+  const records = await pb.collection('customers').getFullList({ sort: 'company_name,name' })
   return (records as PBRecord[]).map((record) => ({
     id: record.id,
-    name: String(record.name ?? ''),
+    name: formatCustomerDisplayName(record.company_name, record.name),
     openingBalance: num(record.opening_balance),
   }))
 }
@@ -39,18 +55,22 @@ export async function loadCustomerPaymentLedger(customerId: string, asOfDate: st
     pb.collection('customers').getOne(customerId),
     pb.collection('bills').getFullList({
       sort: 'date,bill_no',
-      filter: `customer = "${customerId}" && date <= "${asOfDate}"`,
+      filter: `customer = "${customerId}"`,
     }),
     pb.collection('bill_items').getFullList(),
     pb.collection('payments').getFullList({
       sort: 'date',
-      filter: `customer = "${customerId}" && date <= "${asOfDate}"`,
+      filter: `customer = "${customerId}"`,
     }),
   ])
 
-  const bills = billsRaw as PBRecord[]
+  const bills = (billsRaw as PBRecord[]).filter((bill) => datePart(bill.date) <= asOfDate)
   const billItems = billItemsRaw as PBRecord[]
-  const payments = paymentsRaw as PBRecord[]
+  const payments = (paymentsRaw as PBRecord[]).filter((payment) => datePart(payment.date) <= asOfDate)
+  const storedOpeningBalanceDate = datePart((customer as unknown as PBRecord).opening_balance_date)
+  const earliestBillDate = bills.map((bill) => datePart(bill.date)).filter(Boolean).sort()[0] ?? ''
+  const earliestPaymentDate = payments.map((payment) => datePart(payment.date)).filter(Boolean).sort()[0] ?? ''
+  const openingBalanceDate = storedOpeningBalanceDate || [earliestBillDate, earliestPaymentDate].filter(Boolean).sort()[0] || asOfDate
 
   const itemSumByBill = new Map<string, number>()
   const itemDetailsByBill = new Map<string, string[]>()
@@ -68,21 +88,33 @@ export async function loadCustomerPaymentLedger(customerId: string, asOfDate: st
 
   return {
     customerId,
-    customerName: String(customer.name ?? ''),
+    customerName: formatCustomerDisplayName(customer.company_name, customer.name),
     openingBalance: num(customer.opening_balance),
+    openingBalanceDate,
     bills: bills.map((bill) => ({
       id: bill.id,
-      date: datePart(bill.date),
+      businessDate: datePart(bill.date),
+      createdAt: String(bill.created),
+      customerId,
+      customerName: formatCustomerDisplayName(customer.company_name, customer.name),
       billNo: num(bill.bill_no),
       bookNo: num(bill.book_no),
-      total: calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate)),
+      total: calculateBillTotalFromBase(itemSumByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount)),
+      transport: num(bill.transport),
+      gstRate: num(bill.gst_rate),
+      mktRate: num(bill.mkt),
+      lrNo: String(bill.lr_no ?? ''),
       compactDetails: (itemDetailsByBill.get(bill.id) ?? []).join(' | '),
     })),
     payments: payments.map((payment) => ({
       id: payment.id,
-      date: datePart(payment.date),
+      businessDate: datePart(payment.date),
+      createdAt: String(payment.created),
+      customerId,
+      customerName: formatCustomerDisplayName(customer.company_name, customer.name),
       amount: num(payment.amount),
       mode: String(payment.mode ?? ''),
+      note: String(payment.note ?? ''),
     })),
   }
 }
@@ -94,14 +126,42 @@ export async function savePayment(input: {
   amount: number
   mode: 'Cash' | 'Bank'
   note?: string
-}) {
-  await pb.collection('payments').create({
-    customer: input.customerId,
-    customer_name: input.customerName,
-    date: input.date,
-    amount: input.amount,
-    mode: input.mode,
-    note: input.note ?? '',
+}): Promise<SavedPaymentReceipt> {
+  return runDataOperation('save-payment', async () => {
+    const created = await pb.collection('payments').create({
+      customer: input.customerId,
+      customer_name: input.customerName,
+      date: input.date,
+      amount: input.amount,
+      mode: input.mode,
+      note: input.note ?? '',
+    })
+    await recalculateAndPersistBillStatusesForCustomer(input.customerId)
+    return {
+      id: created.id,
+      customerId: input.customerId,
+      customerName: input.customerName,
+      date: input.date,
+      amount: input.amount,
+      mode: input.mode,
+      note: input.note ?? '',
+    }
   })
 }
 
+export async function ensurePaymentPersisted(paymentId: string) {
+  // PocketBase is usually immediate, but this guards against transient read-after-write lag.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await pb.collection('payments').getOne(paymentId)
+      return true
+    } catch (error) {
+      const status = Number((error as { status?: unknown })?.status ?? 0)
+      if (status > 0 && status !== 404) {
+        throw error
+      }
+      await sleep(200 * (attempt + 1))
+    }
+  }
+  return false
+}

@@ -1,5 +1,5 @@
 const DEFAULTS = {
-  pocketBaseUrl: 'http://127.0.0.1:8090',
+  pocketBaseUrl: '/pb',
   marketRateUrl: '/api/market-rate',
 } as const
 

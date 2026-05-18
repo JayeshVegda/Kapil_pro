@@ -7,7 +7,7 @@ export async function loadDashboardCollections() {
     pb.collection('bills').getFullList({ sort: '-date,-bill_no' }),
     pb.collection('bill_items').getFullList(),
     pb.collection('payments').getFullList({ sort: '-date' }),
-    pb.collection('customers').getFullList({ sort: 'name' }),
+    pb.collection('customers').getFullList({ sort: 'company_name,name' }),
   ])
 
   return {

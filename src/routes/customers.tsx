@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Edit3, Plus } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
+import { toUserMessage } from '@/app/errors'
 import { createCustomer, loadCustomersWithLedgerContext, toggleCustomerActive, updateCustomer } from '@/data/customers'
 import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
 import { formatFullDate } from '@/lib/date'
@@ -15,8 +16,10 @@ export const Route = createFileRoute('/customers')({
 const CUSTOMER_QUERY_KEY = ['customers-ledger'] as const
 
 const customerSchema = z.object({
+  companyName: z.string().trim().min(1, 'Company name is required'),
   name: z.string().trim().min(1, 'Customer name is required'),
   openingBalance: z.number(),
+  openingBalanceDate: z.string().optional(),
   active: z.boolean(),
   phone: z.string().optional(),
   gstin: z.string().optional(),
@@ -27,8 +30,10 @@ const customerSchema = z.object({
 
 type CustomerFormState = {
   id: string | null
+  companyName: string
   name: string
   openingBalance: number
+  openingBalanceDate: string
   active: boolean
   phone: string
   gstin: string
@@ -39,8 +44,10 @@ type CustomerFormState = {
 
 const defaultCustomerFormState = (): CustomerFormState => ({
   id: null,
+  companyName: '',
   name: '',
   openingBalance: 0,
+  openingBalanceDate: '',
   active: true,
   phone: '',
   gstin: '',
@@ -60,7 +67,7 @@ function CustomersPage() {
     queryFn: loadCustomersWithLedgerContext,
   })
 
-  const filteredRows = customersQuery.data ?? []
+  const filteredRows = useMemo(() => customersQuery.data ?? [], [customersQuery.data])
   const summary = useMemo(() => {
     return filteredRows.reduce(
       (acc, row) => {
@@ -80,6 +87,7 @@ function CustomersPage() {
     mutationFn: async () => {
       const parsed = customerSchema.safeParse({
         ...formState,
+        companyName: formState.companyName.trim(),
         name: formState.name.trim(),
       })
       if (!parsed.success) {
@@ -87,8 +95,10 @@ function CustomersPage() {
       }
 
       const payload = {
+        companyName: parsed.data.companyName,
         name: parsed.data.name,
         openingBalance: parsed.data.openingBalance,
+        openingBalanceDate: parsed.data.openingBalanceDate ?? '',
         active: parsed.data.active,
         phone: parsed.data.phone ?? '',
         gstin: parsed.data.gstin ?? '',
@@ -112,7 +122,7 @@ function CustomersPage() {
       ])
     },
     onError: (error) => {
-      setStatusText(error instanceof Error ? error.message : 'Failed to save customer')
+      setStatusText(toUserMessage(error))
     },
   })
 
@@ -127,7 +137,7 @@ function CustomersPage() {
       ])
     },
     onError: (error) => {
-      setStatusText(error instanceof Error ? error.message : 'Failed to update customer status')
+      setStatusText(toUserMessage(error))
     },
   })
 
@@ -139,8 +149,10 @@ function CustomersPage() {
   function openEditForm(row: (typeof filteredRows)[number]) {
     setFormState({
       id: row.customer.id,
+      companyName: row.customer.companyName || row.customer.name,
       name: row.customer.name,
       openingBalance: row.customer.openingBalance,
+      openingBalanceDate: row.customer.openingBalanceDate ?? '',
       active: row.customer.active,
       phone: row.customer.phone ?? '',
       gstin: row.customer.gstin ?? '',
@@ -150,7 +162,7 @@ function CustomersPage() {
     })
   }
 
-  const canSubmitForm = formState.name.trim().length > 0 && !createOrUpdateMutation.isPending
+  const canSubmitForm = formState.companyName.trim().length > 0 && formState.name.trim().length > 0 && !createOrUpdateMutation.isPending
 
   return (
     <div className="w-full space-y-8 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
@@ -171,7 +183,10 @@ function CustomersPage() {
             </div>
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
-            <Field label="Name *">
+            <Field label="Company Name *">
+              <input className={inputClass} type="text" value={formState.companyName} onChange={(event) => setFormState((prev) => ({ ...prev, companyName: event.target.value }))} />
+            </Field>
+            <Field label="Customer Name *">
               <input className={inputClass} type="text" value={formState.name} onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))} />
             </Field>
             <Field label="Phone">
@@ -179,6 +194,9 @@ function CustomersPage() {
             </Field>
             <Field label="Opening Balance">
               <input className={inputClass} type="number" value={formState.openingBalance || ''} onChange={(event) => setFormState((prev) => ({ ...prev, openingBalance: Number(event.target.value || 0) }))} />
+            </Field>
+            <Field label="Opening Balance Date">
+              <input className={inputClass} type="date" value={formState.openingBalanceDate} onChange={(event) => setFormState((prev) => ({ ...prev, openingBalanceDate: event.target.value }))} />
             </Field>
             <Field label="Status">
               <select className={inputClass} value={formState.active ? 'yes' : 'no'} onChange={(event) => setFormState((prev) => ({ ...prev, active: event.target.value === 'yes' }))}>
@@ -235,13 +253,15 @@ function CustomersPage() {
         {customersQuery.isError && <p className="text-sm text-red-600">Unable to load customers.</p>}
         {!customersQuery.isLoading && !customersQuery.isError && (
           <div className="overflow-x-auto no-scrollbar">
-            <table className="w-full min-w-[860px]">
+            <table className="w-full min-w-[980px]">
               <thead>
                 <tr className="bg-slate-50">
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Name</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Company Name</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Customer Name</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Phone</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">GSTIN</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Opening Balance</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Opening Dt.</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Active</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
                 </tr>
@@ -249,7 +269,7 @@ function CustomersPage() {
               <tbody>
                 {filteredRows.length === 0 && (
                   <tr>
-                    <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={6}>
+                    <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={8}>
                       <p className="font-medium text-slate-700">No customers yet.</p>
                       <p className="mt-1">Create your first customer to start billing and ledger tracking.</p>
                       <button
@@ -270,12 +290,14 @@ function CustomersPage() {
                   <tr key={row.customer.id} className={`border-t border-slate-100 transition hover:bg-slate-50 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                     <td className="px-3 py-3">
                       <Link to="/ledger" search={{ customerId: row.customer.id, focus: '' }} className="text-sm font-medium text-blue-700 hover:text-blue-800 hover:underline">
-                        {row.customer.name}
+                        {row.customer.companyName || row.customer.name}
                       </Link>
                     </td>
+                    <td className="px-3 py-3 text-sm text-slate-700">{row.customer.name || '-'}</td>
                     <td className="px-3 py-3 text-sm text-slate-700">{row.customer.phone || '-'}</td>
                     <td className="px-3 py-3 text-sm text-slate-700">{row.customer.gstin || '-'}</td>
                     <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{formatInrInteger(row.openingBalance)}</td>
+                    <td className="px-3 py-3 text-sm text-slate-600">{row.customer.openingBalanceDate ? formatFullDate(row.customer.openingBalanceDate) : '-'}</td>
                     <td className="px-3 py-3">
                       <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${row.customer.active ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
                         {row.customer.active ? 'Active' : 'Inactive'}
