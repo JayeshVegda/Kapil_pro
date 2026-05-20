@@ -99,6 +99,7 @@ export type MonthlyStockReportRow = {
 }
 
 const GENERAL_CUSTOMER_NAME = 'General'
+const DEFAULT_STOCK_START_DATE = '2026-05-20'
 
 const num = (value: unknown) => {
   const parsed = Number(value ?? 0)
@@ -393,8 +394,8 @@ function bucketContext(data: StockData, key: string) {
   const customer = data.customers.find((row) => row.id === customerId)
   if (!item || !customer) return null
   const opening = data.openings.find((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName))
-  const openingDate = datePart(opening?.date)
-  const openingStock = num(opening?.qty)
+  const openingDate = datePart(opening?.date) || DEFAULT_STOCK_START_DATE
+  const openingStock = opening ? num(opening.qty) : 0
   return { item, customer, opening, openingDate, openingStock }
 }
 
@@ -455,7 +456,7 @@ export async function loadCurrentStock(): Promise<CurrentStockRecord[]> {
         soldThisMonth,
       }
     })
-    .filter((row): row is CurrentStockRecord => row !== null)
+    .filter((row): row is CurrentStockRecord => row !== null && (row.openingStock !== 0 || row.totalIn !== 0 || row.totalAdjustment !== 0 || row.totalOut !== 0))
     .sort((a, b) => a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName))
 }
 
@@ -613,7 +614,7 @@ export async function loadMonthlyStockReport(monthKey: string): Promise<MonthlyS
         closing: opening + stockIn + adjustment - sold,
       }
     })
-    .filter((row): row is MonthlyStockReportRow => row !== null)
+    .filter((row): row is MonthlyStockReportRow => row !== null && (row.opening !== 0 || row.stockIn !== 0 || row.sold !== 0 || row.adjustment !== 0 || row.closing !== 0))
     .sort((a, b) => a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName))
 }
 
