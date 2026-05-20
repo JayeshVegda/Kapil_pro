@@ -106,6 +106,20 @@ export function StockPage() {
   const filteredStockInRows = gasStockInRows.filter((row) => matchesAnyRankedQuery([row.itemName, row.customerName, row.date, formatFullDate(row.date)], search))
   const stockItems = currentStockQuery.data ?? []
   const attentionItems = stockItems.filter((item) => item.currentStock <= 0)
+  const positiveItems = stockItems.filter((item) => item.currentStock > 0)
+  const totalClosingStock = stockItems.reduce((sum, item) => sum + item.currentStock, 0)
+  const stockGlanceRows = useMemo(
+    () =>
+      [...stockItems].sort((a, b) => {
+        const aAttention = a.currentStock <= 0 ? 0 : 1
+        const bAttention = b.currentStock <= 0 ? 0 : 1
+        if (aAttention !== bAttention) return aAttention - bAttention
+        const itemCompare = a.itemName.localeCompare(b.itemName)
+        if (itemCompare !== 0) return itemCompare
+        return a.customerName.localeCompare(b.customerName)
+      }),
+    [stockItems],
+  )
   const selectedLedgerItem = gasItems.find((row) => row.id === ledgerItemId)
   const selectedLedgerCustomer = customers.find((row) => row.id === ledgerCustomerId)
 
@@ -246,6 +260,33 @@ export function StockPage() {
 
   return (
     <div className="w-full space-y-4 px-3 pb-24 pt-3 sm:px-4 lg:px-6">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold text-slate-950">Current Stock</h3>
+            <p className="mt-0.5 text-xs text-slate-500">Item + party buckets with opening, stock in, sold, adjustment, and closing.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <StockSummaryPill label="Buckets" value={String(stockItems.length)} />
+            <StockSummaryPill label="In Stock" value={String(positiveItems.length)} tone="green" />
+            <StockSummaryPill label="Needs Attention" value={String(attentionItems.length)} tone={attentionItems.length > 0 ? 'red' : 'slate'} />
+            <StockSummaryPill label="Closing" value={formatStockQty(totalClosingStock, gasItems[0])} />
+          </div>
+        </div>
+        {currentStockQuery.isLoading && <p className="rounded-md bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">Loading stock...</p>}
+        {currentStockQuery.isError && <ErrorText error={currentStockQuery.error} fallback="Unable to load stock." />}
+        {!currentStockQuery.isLoading && !currentStockQuery.isError && (
+          <CurrentStockGlance
+            rows={stockGlanceRows}
+            onOpenLedger={(item) => {
+              setLedgerItemId(item.itemId)
+              setLedgerCustomerId(item.customerId)
+              setActivePanel('ledger')
+            }}
+          />
+        )}
+      </section>
+
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         {statusText && (
           <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600" role="status" aria-live="polite">
@@ -501,24 +542,6 @@ export function StockPage() {
         )}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-slate-900">Current Stock</h3>
-          {attentionItems.length > 0 && <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700">{attentionItems.length} item needs attention</span>}
-        </div>
-        {currentStockQuery.isLoading && <p className="text-sm text-slate-500">Loading stock...</p>}
-        {currentStockQuery.isError && <ErrorText error={currentStockQuery.error} fallback="Unable to load stock." />}
-        {!currentStockQuery.isLoading && !currentStockQuery.isError && (
-          <CurrentStockTable
-            rows={stockItems}
-            onOpenLedger={(item) => {
-              setLedgerItemId(item.itemId)
-              setLedgerCustomerId(item.customerId)
-              setActivePanel('ledger')
-            }}
-          />
-        )}
-      </section>
     </div>
   )
 }
@@ -565,44 +588,66 @@ function WorkspacePanel({ title, subtitle, children }: { title: string; subtitle
   )
 }
 
-function CurrentStockTable({ rows, onOpenLedger }: { rows: CurrentStockRecord[]; onOpenLedger: (item: CurrentStockRecord) => void }) {
+function StockSummaryPill({ label, value, tone = 'slate' }: { label: string; value: string; tone?: 'slate' | 'green' | 'red' }) {
+  const toneClass = tone === 'red' ? 'border-red-200 bg-red-50 text-red-700' : tone === 'green' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-700'
   return (
-    <div className="overflow-x-auto no-scrollbar">
-      <table className="w-full min-w-[980px]">
-        <thead>
-          <tr className="bg-slate-50">
-            <Th>Item</Th>
-            <Th>Party</Th>
-            <Th right>Opening</Th>
-            <Th right>Stock In</Th>
-            <Th right>Sold</Th>
-            <Th right>Adjustment</Th>
-            <Th right>Closing</Th>
-            <Th right>Action</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={8} text="No finished goods stock buckets configured." />}
-          {rows.map((item, index) => (
-            <tr key={item.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-              <Td strong>{item.itemName}</Td>
-              <Td>{item.customerName}</Td>
-              <Td right mono>{formatStockQty(item.openingStock, item)}</Td>
-              <Td right mono>{formatStockQty(item.totalIn, item)}</Td>
-              <Td right mono>{formatStockQty(item.totalOut, item)}</Td>
-              <Td right mono>{formatStockQty(item.totalAdjustment, item)}</Td>
-              <Td right mono>
-                <span className={item.currentStock < 0 ? 'text-red-700' : 'text-slate-800'}>{formatStockQty(item.currentStock, item)}</span>
-              </Td>
-              <Td right>
-                <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onOpenLedger(item)}>
-                  Ledger
-                </button>
-              </Td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className={`rounded-md border px-3 py-2 ${toneClass}`}>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.08em]">{label}</div>
+      <div className="mt-0.5 font-mono text-sm font-semibold">{value}</div>
+    </div>
+  )
+}
+
+function CurrentStockGlance({ rows, onOpenLedger }: { rows: CurrentStockRecord[]; onOpenLedger: (item: CurrentStockRecord) => void }) {
+  if (rows.length === 0) {
+    return <p className="rounded-md bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">No finished goods stock buckets configured.</p>
+  }
+
+  return (
+    <div className="h-[30vh] min-h-[260px] overflow-y-auto pr-1">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {rows.map((item) => {
+          const needsAttention = item.currentStock <= 0
+          return (
+            <article key={item.id} className={`rounded-lg border p-3 shadow-sm ${needsAttention ? 'border-red-200 bg-red-50/60' : 'border-slate-200 bg-white'}`}>
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h4 className="truncate text-sm font-semibold text-slate-950">{item.itemName}</h4>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">{item.customerName}</p>
+                </div>
+                <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] ${needsAttention ? 'bg-red-100 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                  {needsAttention ? 'Check' : 'Stock'}
+                </span>
+              </div>
+
+              <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Closing</div>
+                <div className={`mt-0.5 font-mono text-lg font-bold ${item.currentStock < 0 ? 'text-red-700' : 'text-slate-950'}`}>{formatStockQty(item.currentStock, item)}</div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <StockMiniMetric label="Opening" value={formatStockQty(item.openingStock, item)} />
+                <StockMiniMetric label="Stock In" value={formatStockQty(item.totalIn, item)} />
+                <StockMiniMetric label="Sold" value={formatStockQty(item.totalOut, item)} />
+                <StockMiniMetric label="Adjustment" value={formatStockQty(item.totalAdjustment, item)} />
+              </div>
+
+              <button type="button" className="mt-3 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onOpenLedger(item)}>
+                Open Ledger
+              </button>
+            </article>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function StockMiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md bg-slate-50 px-2.5 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">{label}</div>
+      <div className="mt-0.5 truncate font-mono text-xs font-semibold text-slate-800">{value}</div>
     </div>
   )
 }
