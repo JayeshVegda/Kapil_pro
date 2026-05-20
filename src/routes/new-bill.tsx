@@ -285,7 +285,9 @@ function NewBillPage() {
     return validRows
       .map((row) => {
         const matchesItem = (entry: (typeof stockRows)[number]) => entry.itemId === row.itemId || entry.itemName === row.itemName
-        const stock = stockRows.find((entry) => entry.customerId === customerId && matchesItem(entry))
+        const buyerStock = stockRows.find((entry) => entry.customerId === customerId && matchesItem(entry))
+        const generalStock = stockRows.find((entry) => entry.customerName.toLowerCase().includes('general') && matchesItem(entry))
+        const stock = buyerStock ?? generalStock
         const item = (itemsQuery.data ?? []).find((entry) => entry.id === row.itemId || entry.name === row.itemName)
         if (!stock || String(item?.type ?? '').toLowerCase() !== 'gas') return null
         const available = stock?.currentStock ?? 0
