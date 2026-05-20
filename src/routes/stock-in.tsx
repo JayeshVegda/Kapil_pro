@@ -28,6 +28,7 @@ import {
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { formatInQty, parseNonNegativeNumber } from '@/lib/inr-format'
 import { matchesAnyRankedQuery } from '@/lib/search'
+import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 
 export const Route = createFileRoute('/stock-in')({
   component: StockInPage,
@@ -252,6 +253,45 @@ export function StockPage() {
     setAdjustmentCustomerId((current) => current || nextCustomerId)
     setLedgerCustomerId((current) => current || nextCustomerId)
   }
+
+  function applyStockCommand(input: string) {
+    const parsed = parseContextCommand(input, 'stock', {
+      items: gasItems,
+      today,
+    })
+    if (!parsed.ok) {
+      setStatusText(parsed.error)
+      return
+    }
+    if (parsed.command.kind !== 'stock') {
+      setStatusText('This command is not a stock command.')
+      return
+    }
+    const general = findGeneralCustomer(customers)
+    setEditingId(null)
+    setDate(parsed.command.date)
+    setItemId(parsed.command.item.id)
+    setCustomerId(general?.id ?? customerId)
+    setQtyInput(String(parsed.command.qty))
+    setNote(parsed.command.note)
+    setActivePanel('receive')
+    setStatusText(`Command ready: ${parsed.command.item.name} | ${parsed.command.displayQty}`)
+  }
+
+  useEffect(() => {
+    if (itemsQuery.isLoading || customersQuery.isLoading) return
+    if (gasItems.length === 0 || customers.length === 0) return
+    const raw = window.sessionStorage.getItem(PENDING_COMMAND_STORAGE_KEY)
+    if (!raw) return
+    try {
+      const pending = JSON.parse(raw) as { kind?: string; body?: string; createdAt?: number }
+      if (pending.kind !== 'stock' || !pending.body || Date.now() - Number(pending.createdAt ?? 0) > 60_000) return
+      window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
+      applyStockCommand(pending.body)
+    } catch {
+      window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
+    }
+  }, [customers.length, customersQuery.isLoading, gasItems, itemsQuery.isLoading])
 
   function startEditStockIn(row: NonNullable<typeof stockInQuery.data>[number]) {
     setEditingId(row.id)
