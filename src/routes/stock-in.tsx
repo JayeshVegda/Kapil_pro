@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ClipboardList, Edit3, History, PackagePlus, SlidersHorizontal, Trash2, Warehouse } from 'lucide-react'
+import { ClipboardList, Edit3, History, PackagePlus, Search, SlidersHorizontal, Trash2, Warehouse } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
@@ -45,7 +45,8 @@ const adjustmentSchema = stockInSchema.extend({
   qty: z.number().refine((value) => value !== 0, 'Adjustment qty is required'),
 })
 
-type StockPanel = 'opening' | 'receive' | 'adjust' | 'report' | 'ledger' | 'logs'
+type StockPanel = 'opening' | 'receive' | 'adjust'
+type AuditPanel = 'ledger' | 'logs' | 'report'
 
 export function StockPage() {
   const queryClient = useQueryClient()
@@ -67,10 +68,12 @@ export function StockPage() {
   const [adjustmentQtyInput, setAdjustmentQtyInput] = useState('0')
   const [adjustmentNote, setAdjustmentNote] = useState('')
   const [search, setSearch] = useState('')
+  const [stockSearch, setStockSearch] = useState('')
   const [ledgerItemId, setLedgerItemId] = useState('')
   const [ledgerCustomerId, setLedgerCustomerId] = useState('')
   const [reportMonth, setReportMonth] = useState(() => getLocalIsoDate().slice(0, 7))
   const [activePanel, setActivePanel] = useState<StockPanel>('receive')
+  const [auditPanel, setAuditPanel] = useState<AuditPanel>('ledger')
   const [statusText, setStatusText] = useState('')
 
   const itemsQuery = useQuery({ queryKey: ['items-options'], queryFn: loadItems })
@@ -108,9 +111,12 @@ export function StockPage() {
   const attentionItems = stockItems.filter((item) => item.currentStock <= 0)
   const positiveItems = stockItems.filter((item) => item.currentStock > 0)
   const totalClosingStock = stockItems.reduce((sum, item) => sum + item.currentStock, 0)
+  const normalizedStockSearch = stockSearch.trim()
   const stockGlanceRows = useMemo(
     () =>
-      [...stockItems].sort((a, b) => {
+      stockItems
+        .filter((row) => matchesAnyRankedQuery([row.itemName, row.customerName], normalizedStockSearch))
+        .sort((a, b) => {
         const aAttention = a.currentStock <= 0 ? 0 : 1
         const bAttention = b.currentStock <= 0 ? 0 : 1
         if (aAttention !== bAttention) return aAttention - bAttention
@@ -118,7 +124,7 @@ export function StockPage() {
         if (itemCompare !== 0) return itemCompare
         return a.customerName.localeCompare(b.customerName)
       }),
-    [stockItems],
+    [stockItems, normalizedStockSearch],
   )
   const selectedLedgerItem = gasItems.find((row) => row.id === ledgerItemId)
   const selectedLedgerCustomer = customers.find((row) => row.id === ledgerCustomerId)
@@ -258,31 +264,66 @@ export function StockPage() {
     setActivePanel('receive')
   }
 
+  function selectBucketForReceive(row: CurrentStockRecord) {
+    setEditingId(null)
+    setDate(today)
+    setItemId(row.itemId)
+    setCustomerId(row.customerId)
+    setQtyInput('0')
+    setNote('')
+    setStatusText('')
+    setActivePanel('receive')
+  }
+
+  function selectBucketForAdjust(row: CurrentStockRecord) {
+    setAdjustmentDate(today)
+    setAdjustmentItemId(row.itemId)
+    setAdjustmentCustomerId(row.customerId)
+    setAdjustmentQtyInput('0')
+    setAdjustmentNote('')
+    setStatusText('')
+    setActivePanel('adjust')
+  }
+
+  function selectBucketForLedger(row: CurrentStockRecord) {
+    setLedgerItemId(row.itemId)
+    setLedgerCustomerId(row.customerId)
+    setAuditPanel('ledger')
+  }
+
   return (
     <div className="w-full space-y-4 px-3 pb-24 pt-3 sm:px-4 lg:px-6">
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <StockSummaryPill label="Total Buckets" value={String(stockItems.length)} />
+        <StockSummaryPill label="In Stock" value={String(positiveItems.length)} tone="green" />
+        <StockSummaryPill label="Needs Attention" value={String(attentionItems.length)} tone={attentionItems.length > 0 ? 'red' : 'slate'} />
+        <StockSummaryPill label="Closing Stock" value={formatStockQty(totalClosingStock, gasItems[0])} />
+      </section>
+
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-base font-semibold text-slate-950">Current Stock</h3>
-            <p className="mt-0.5 text-xs text-slate-500">Item + party buckets with opening, stock in, sold, adjustment, and closing.</p>
+            <h3 className="text-base font-semibold text-slate-950">Inventory</h3>
+            <p className="mt-0.5 text-xs text-slate-500">Search item + party buckets, check closing stock, and act quickly.</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <StockSummaryPill label="Buckets" value={String(stockItems.length)} />
-            <StockSummaryPill label="In Stock" value={String(positiveItems.length)} tone="green" />
-            <StockSummaryPill label="Needs Attention" value={String(attentionItems.length)} tone={attentionItems.length > 0 ? 'red' : 'slate'} />
-            <StockSummaryPill label="Closing" value={formatStockQty(totalClosingStock, gasItems[0])} />
-          </div>
+          <label className="relative w-full sm:w-80">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              className={`${inputClass} pl-9`}
+              value={stockSearch}
+              onChange={(event) => setStockSearch(event.target.value)}
+              placeholder="Search item or party..."
+            />
+          </label>
         </div>
         {currentStockQuery.isLoading && <p className="rounded-md bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">Loading stock...</p>}
         {currentStockQuery.isError && <ErrorText error={currentStockQuery.error} fallback="Unable to load stock." />}
         {!currentStockQuery.isLoading && !currentStockQuery.isError && (
           <CurrentStockGlance
             rows={stockGlanceRows}
-            onOpenLedger={(item) => {
-              setLedgerItemId(item.itemId)
-              setLedgerCustomerId(item.customerId)
-              setActivePanel('ledger')
-            }}
+            onReceive={selectBucketForReceive}
+            onAdjust={selectBucketForAdjust}
+            onOpenLedger={selectBucketForLedger}
           />
         )}
       </section>
@@ -298,9 +339,6 @@ export function StockPage() {
             <PanelButton active={activePanel === 'opening'} onClick={() => setActivePanel('opening')} icon={<Warehouse size={14} />}>Opening</PanelButton>
             <PanelButton active={activePanel === 'receive'} onClick={() => setActivePanel('receive')} icon={<PackagePlus size={14} />}>Receive</PanelButton>
             <PanelButton active={activePanel === 'adjust'} onClick={() => setActivePanel('adjust')} icon={<SlidersHorizontal size={14} />}>Adjust</PanelButton>
-            <PanelButton active={activePanel === 'report'} onClick={() => setActivePanel('report')} icon={<ClipboardList size={14} />}>Report</PanelButton>
-            <PanelButton active={activePanel === 'ledger'} onClick={() => setActivePanel('ledger')} icon={<History size={14} />}>Ledger</PanelButton>
-            <PanelButton active={activePanel === 'logs'} onClick={() => setActivePanel('logs')} icon={<Warehouse size={14} />}>Logs</PanelButton>
           </div>
         </div>
 
@@ -475,7 +513,22 @@ export function StockPage() {
           </WorkspacePanel>
         )}
 
-        {activePanel === 'report' && (
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">Audit & Reports</h3>
+            <p className="mt-1 text-xs text-slate-500">Open ledger, review logs, and check monthly movement when needed.</p>
+          </div>
+          <div className="inline-flex min-w-max rounded-lg border border-slate-200 bg-slate-50 p-1">
+            <PanelButton active={auditPanel === 'ledger'} onClick={() => setAuditPanel('ledger')} icon={<History size={14} />}>Ledger</PanelButton>
+            <PanelButton active={auditPanel === 'logs'} onClick={() => setAuditPanel('logs')} icon={<Warehouse size={14} />}>Logs</PanelButton>
+            <PanelButton active={auditPanel === 'report'} onClick={() => setAuditPanel('report')} icon={<ClipboardList size={14} />}>Report</PanelButton>
+          </div>
+        </div>
+
+        {auditPanel === 'report' && (
           <WorkspacePanel title="Monthly Stock Report" subtitle={`${formatMonthYear(reportMonth)} opening, stock in, sold, adjustment, closing.`}>
             <div className="mb-3 flex justify-end">
               <input className={`${inputClass} w-44`} type="month" value={reportMonth} onChange={(event) => setReportMonth(event.target.value)} />
@@ -486,7 +539,7 @@ export function StockPage() {
           </WorkspacePanel>
         )}
 
-        {activePanel === 'ledger' && (
+        {auditPanel === 'ledger' && (
           <WorkspacePanel title="Item + Party Stock Ledger" subtitle={selectedLedgerItem && selectedLedgerCustomer ? `Full movement for ${selectedLedgerItem.name} / ${selectedLedgerCustomer.name}` : 'Select an item and party to inspect opening, receipts, sold, adjustments, and running balance.'}>
             <div className="mb-3 grid max-w-3xl grid-cols-1 gap-3 md:grid-cols-2">
               <SearchableCombobox
@@ -519,7 +572,7 @@ export function StockPage() {
           </WorkspacePanel>
         )}
 
-        {activePanel === 'logs' && (
+        {auditPanel === 'logs' && (
           <WorkspacePanel title="Stock Logs" subtitle="Review and correct stock receipts and manual adjustments.">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <h4 className="text-sm font-semibold text-slate-900">Stock In Log</h4>
@@ -598,7 +651,17 @@ function StockSummaryPill({ label, value, tone = 'slate' }: { label: string; val
   )
 }
 
-function CurrentStockGlance({ rows, onOpenLedger }: { rows: CurrentStockRecord[]; onOpenLedger: (item: CurrentStockRecord) => void }) {
+function CurrentStockGlance({
+  rows,
+  onReceive,
+  onAdjust,
+  onOpenLedger,
+}: {
+  rows: CurrentStockRecord[]
+  onReceive: (item: CurrentStockRecord) => void
+  onAdjust: (item: CurrentStockRecord) => void
+  onOpenLedger: (item: CurrentStockRecord) => void
+}) {
   if (rows.length === 0) {
     return <p className="rounded-md bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">No finished goods stock buckets configured.</p>
   }
@@ -607,20 +670,23 @@ function CurrentStockGlance({ rows, onOpenLedger }: { rows: CurrentStockRecord[]
     <div className="h-[30vh] min-h-[260px] overflow-y-auto pr-1">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {rows.map((item) => {
+          const isNegative = item.currentStock < 0
           const needsAttention = item.currentStock <= 0
           const closing = formatStockQtyParts(item.currentStock, item)
-          const monthIn = formatStockQtyParts(item.totalIn, item)
-          const monthSold = formatStockQtyParts(item.totalOut, item)
-          const monthAdjustment = formatStockQtyParts(item.totalAdjustment, item)
+          const monthIn = formatStockQtyParts(item.stockInThisMonth, item)
+          const monthSold = formatStockQtyParts(item.soldThisMonth, item)
+          const monthAdjustment = formatStockQtyParts(item.adjustmentThisMonth, item)
+          const statusLabel = isNegative ? 'Negative' : needsAttention ? 'Attention' : 'In Stock'
+          const statusClass = isNegative ? 'bg-red-100 text-red-700' : needsAttention ? 'bg-amber-100 text-amber-800' : 'bg-emerald-50 text-emerald-700'
           return (
-            <article key={item.id} className={`rounded-lg border p-3 shadow-sm ${needsAttention ? 'border-red-200 bg-red-50/60' : 'border-slate-200 bg-white'}`}>
+            <article key={item.id} className={`rounded-lg border p-3 shadow-sm ${isNegative ? 'border-red-200 bg-red-50/60' : needsAttention ? 'border-amber-200 bg-amber-50/60' : 'border-slate-200 bg-white'}`}>
               <div className="flex min-w-0 items-start justify-between gap-2">
                 <div className="min-w-0">
                   <h4 className="truncate text-sm font-semibold text-slate-950">{item.itemName}</h4>
                   <p className="mt-0.5 truncate text-xs text-slate-500">{item.customerName}</p>
                 </div>
-                <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] ${needsAttention ? 'bg-red-100 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                  {needsAttention ? 'Check' : 'Stock'}
+                <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] ${statusClass}`}>
+                  {statusLabel}
                 </span>
               </div>
 
@@ -641,9 +707,17 @@ function CurrentStockGlance({ rows, onOpenLedger }: { rows: CurrentStockRecord[]
                 </div>
               </div>
 
-              <button type="button" className="mt-3 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onOpenLedger(item)}>
-                Open Ledger
-              </button>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <button type="button" className="rounded-md bg-slate-900 px-2 py-1.5 text-xs font-medium text-white hover:bg-slate-800" onClick={() => onReceive(item)}>
+                  Receive
+                </button>
+                <button type="button" className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onAdjust(item)}>
+                  Adjust
+                </button>
+                <button type="button" className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onOpenLedger(item)}>
+                  Ledger
+                </button>
+              </div>
             </article>
           )
         })}
