@@ -67,7 +67,7 @@ export async function loadDataHealthIssues(): Promise<DataHealthIssue[]> {
       severity: 'High',
       area: 'Stock',
       title: 'Negative stock',
-      detail: `${item.name} is ${Math.abs(item.currentStock)} ${item.unit === 'piece' ? 'pieces' : item.unit} short.`,
+      detail: `${item.itemName} / ${item.customerName} is ${Math.abs(item.currentStock)} ${item.unit === 'piece' ? 'pieces' : item.unit} short.`,
     })
   }
 

@@ -11,6 +11,9 @@ export type BackupSnapshot = {
     bills: number
     billItems: number
     payments: number
+    stockOpenings: number
+    stockIn: number
+    stockAdjustments: number
   }
   data: {
     customers: PBRecord[]
@@ -18,16 +21,22 @@ export type BackupSnapshot = {
     bills: PBRecord[]
     billItems: PBRecord[]
     payments: PBRecord[]
+    stockOpenings: PBRecord[]
+    stockIn: PBRecord[]
+    stockAdjustments: PBRecord[]
   }
 }
 
 export async function buildBackupSnapshot(): Promise<BackupSnapshot> {
-  const [customers, items, bills, billItems, payments] = await Promise.all([
+  const [customers, items, bills, billItems, payments, stockOpenings, stockIn, stockAdjustments] = await Promise.all([
     pb.collection('customers').getFullList({ sort: 'company_name,name' }),
     pb.collection('items').getFullList({ sort: 'name' }),
     pb.collection('bills').getFullList({ sort: 'date,bill_no' }),
     pb.collection('bill_items').getFullList(),
     pb.collection('payments').getFullList({ sort: 'date' }),
+    pb.collection('stock_openings').getFullList({ sort: 'item_name,customer_name' }).catch(() => []),
+    pb.collection('stock_in').getFullList({ sort: 'date' }).catch(() => []),
+    pb.collection('stock_adjustments').getFullList({ sort: 'date' }).catch(() => []),
   ])
 
   return {
@@ -39,6 +48,9 @@ export async function buildBackupSnapshot(): Promise<BackupSnapshot> {
       bills: bills.length,
       billItems: billItems.length,
       payments: payments.length,
+      stockOpenings: stockOpenings.length,
+      stockIn: stockIn.length,
+      stockAdjustments: stockAdjustments.length,
     },
     data: {
       customers: customers as PBRecord[],
@@ -46,6 +58,9 @@ export async function buildBackupSnapshot(): Promise<BackupSnapshot> {
       bills: bills as PBRecord[],
       billItems: billItems as PBRecord[],
       payments: payments as PBRecord[],
+      stockOpenings: stockOpenings as PBRecord[],
+      stockIn: stockIn as PBRecord[],
+      stockAdjustments: stockAdjustments as PBRecord[],
     },
   }
 }
@@ -116,6 +131,18 @@ export function snapshotToCsvFiles(snapshot: BackupSnapshot) {
       String(row.note ?? ''),
     ]),
   ]
+  const stockOpenings = [
+    ['ID', 'Date', 'Item ID', 'Item Name', 'Customer ID', 'Customer Name', 'Qty', 'Note'],
+    ...snapshot.data.stockOpenings.map((row) => [row.id, String(row.date ?? ''), String(row.item ?? ''), String(row.item_name ?? ''), String(row.customer ?? ''), String(row.customer_name ?? ''), String(row.qty ?? 0), String(row.note ?? '')]),
+  ]
+  const stockIn = [
+    ['ID', 'Date', 'Item ID', 'Item Name', 'Customer ID', 'Customer Name', 'Qty', 'Note'],
+    ...snapshot.data.stockIn.map((row) => [row.id, String(row.date ?? ''), String(row.item ?? ''), String(row.item_name ?? ''), String(row.customer ?? ''), String(row.customer_name ?? ''), String(row.qty ?? 0), String(row.note ?? '')]),
+  ]
+  const stockAdjustments = [
+    ['ID', 'Date', 'Item ID', 'Item Name', 'Customer ID', 'Customer Name', 'Qty', 'Note'],
+    ...snapshot.data.stockAdjustments.map((row) => [row.id, String(row.date ?? ''), String(row.item ?? ''), String(row.item_name ?? ''), String(row.customer ?? ''), String(row.customer_name ?? ''), String(row.qty ?? 0), String(row.note ?? '')]),
+  ]
 
   return [
     { filename: 'billing-customers.csv', content: toCsv(customers) },
@@ -123,6 +150,9 @@ export function snapshotToCsvFiles(snapshot: BackupSnapshot) {
     { filename: 'billing-bills.csv', content: toCsv(bills) },
     { filename: 'billing-bill-items.csv', content: toCsv(billItems) },
     { filename: 'billing-payments.csv', content: toCsv(payments) },
+    { filename: 'stock-openings.csv', content: toCsv(stockOpenings) },
+    { filename: 'stock-in.csv', content: toCsv(stockIn) },
+    { filename: 'stock-adjustments.csv', content: toCsv(stockAdjustments) },
   ]
 }
 
@@ -173,4 +203,3 @@ function countDuplicates(values: string[]) {
   }
   return dup.size
 }
-

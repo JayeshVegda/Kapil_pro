@@ -283,22 +283,25 @@ function NewBillPage() {
     const stockRows = currentStockQuery.data ?? []
     return validRows
       .map((row) => {
-        const stock = stockRows.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
-        if (!stock) return null
-        const after = stock.currentStock - row.qty
+        const stock = stockRows.find((entry) => entry.customerId === customerId && (entry.itemId === row.itemId || entry.itemName === row.itemName))
+        const item = (itemsQuery.data ?? []).find((entry) => entry.id === row.itemId || entry.name === row.itemName)
+        if (!stock && String(item?.type ?? '').toLowerCase() !== 'gas') return null
+        const available = stock?.currentStock ?? 0
+        const after = available - row.qty
         if (after >= 0) return null
         return {
           itemName: row.itemName,
-          unit: stock.unit || 'kg',
-          type: stock.type,
-          bagWeight: stock.bagWeight || 50,
-          available: stock.currentStock,
+          customerName: stock?.customerName ?? selectedCustomerName,
+          unit: stock?.unit || item?.unit || 'kg',
+          type: stock?.type || item?.type || '',
+          bagWeight: stock?.bagWeight || item?.bagWeight || 50,
+          available,
           outgoing: row.qty,
           after,
         }
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-  }, [currentStockQuery.data, validRows])
+  }, [currentStockQuery.data, customerId, itemsQuery.data, selectedCustomerName, validRows])
   const previousBalanceDate = autoBalanceQuery.data?.previousBalanceDate ?? date
   const previousBalanceAmount = autoBalanceQuery.data?.previousBalanceAmount ?? 0
   const validCredits = (autoBalanceQuery.data?.credits ?? []).filter((entry) => entry.amount > 0)
@@ -897,7 +900,7 @@ function NewBillPage() {
                   <div className="mt-2 space-y-1">
                     {stockWarnings.map((warning) => (
                       <p key={warning.itemName}>
-                        {warning.itemName}: available {formatStockQty(warning.available, warning.unit, warning.type, warning.bagWeight)}, this bill{' '}
+                        {warning.itemName} / {warning.customerName}: available {formatStockQty(warning.available, warning.unit, warning.type, warning.bagWeight)}, this bill{' '}
                         {formatStockQty(warning.outgoing, warning.unit, warning.type, warning.bagWeight)}, after bill{' '}
                         {formatStockQty(warning.after, warning.unit, warning.type, warning.bagWeight)}.
                       </p>

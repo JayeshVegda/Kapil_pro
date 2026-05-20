@@ -4,9 +4,8 @@ import { Edit3, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
-import { DateInput } from '@/components/ui/date-input'
 import { createItem, deleteItem, loadItemsWithUsage, updateItem } from '@/data/items'
-import { formatFullDate, getLocalIsoDate } from '@/lib/date'
+import { formatFullDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/items')({
@@ -21,8 +20,6 @@ const itemSchema = z.object({
   type: z.enum(['', 'electronic', 'gas']),
   unit: z.enum(['', 'piece', 'kg']),
   bagWeight: z.number().nonnegative('Bag weight cannot be negative'),
-  openingStock: z.number().nonnegative('Opening stock cannot be negative'),
-  openingStockDate: z.string().regex(/^$|^\d{4}-\d{2}-\d{2}$/, 'Invalid opening stock date'),
 }).refine((value) => !value.type || value.unit, {
   message: 'Unit is required',
   path: ['unit'],
@@ -39,8 +36,6 @@ function ItemsPage() {
   const [type, setType] = useState('')
   const [unit, setUnit] = useState('')
   const [bagWeightInput, setBagWeightInput] = useState('50')
-  const [openingStockInput, setOpeningStockInput] = useState('0')
-  const [openingStockDate, setOpeningStockDate] = useState(getLocalIsoDate())
   const [statusText, setStatusText] = useState('')
 
   const itemsQuery = useQuery({
@@ -56,14 +51,13 @@ function ItemsPage() {
         type,
         unit,
         bagWeight: type === 'gas' ? parseNonNegativeNumber(bagWeightInput || '50') : 0,
-        openingStock: type === 'gas' ? parseNonNegativeNumber(openingStockInput) : 0,
-        openingStockDate: type === 'gas' ? openingStockDate : '',
       })
       if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid item')
+      const itemPayload = { ...parsed.data, openingStock: 0, openingStockDate: '' }
       if (editingId) {
-        await updateItem(editingId, parsed.data)
+        await updateItem(editingId, itemPayload)
       } else {
-        await createItem(parsed.data)
+        await createItem(itemPayload)
       }
     },
     onSuccess: async () => {
@@ -100,8 +94,6 @@ function ItemsPage() {
     setType('')
     setUnit('')
     setBagWeightInput('50')
-    setOpeningStockInput('0')
-    setOpeningStockDate(getLocalIsoDate())
   }
 
   function startEdit(item: NonNullable<typeof itemsQuery.data>[number]) {
@@ -111,8 +103,6 @@ function ItemsPage() {
     setType(item.type)
     setUnit(item.unit)
     setBagWeightInput(String(item.bagWeight || 50))
-    setOpeningStockInput(String(item.openingStock))
-    setOpeningStockDate(item.openingStockDate || getLocalIsoDate())
   }
 
   function updateType(nextType: string) {
@@ -138,7 +128,7 @@ function ItemsPage() {
             </button>
           )}
         </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_160px_170px_130px_160px_160px_auto]">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_160px_170px_130px_160px_auto]">
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-slate-600">Item Name *</span>
             <input className={inputClass} value={name} onChange={(event) => setName(event.target.value)} />
@@ -164,18 +154,6 @@ function ItemsPage() {
               <span className="text-xs font-medium text-slate-600">Bag Weight</span>
               <input className={inputClass} type="number" value={bagWeightInput} onChange={(event) => setBagWeightInput(event.target.value)} />
             </label>
-          )}
-          {type === 'gas' && (
-            <>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-slate-600">Opening Stock (kg)</span>
-                <input className={inputClass} type="number" value={openingStockInput} onChange={(event) => setOpeningStockInput(event.target.value)} />
-              </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-slate-600">Opening Date</span>
-                <DateInput className={inputClass} value={openingStockDate} onChange={setOpeningStockDate} />
-              </label>
-            </>
           )}
           <div className="flex items-end gap-2">
             <button type="button" className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50" onClick={resetForm}>
@@ -207,7 +185,6 @@ function ItemsPage() {
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Default Rate</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Type</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Unit</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Opening Date</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Usage Count</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Last Used</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
@@ -216,7 +193,7 @@ function ItemsPage() {
               <tbody>
                 {(itemsQuery.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-slate-500">
+                    <td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500">
                       No items yet. Add your first item to speed up bill entry.
                     </td>
                   </tr>
@@ -227,7 +204,6 @@ function ItemsPage() {
                     <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{formatInrInteger(item.defaultRate)}</td>
                     <td className="px-3 py-3 text-sm text-slate-700">{formatItemType(item.type)}</td>
                     <td className="px-3 py-3 text-sm text-slate-700">{item.unit || '-'}</td>
-                    <td className="px-3 py-3 text-sm text-slate-700">{item.openingStockDate ? formatFullDate(item.openingStockDate) : '-'}</td>
                     <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{item.usageCount}</td>
                     <td className="px-3 py-3 text-sm text-slate-700">{item.lastUsedDate ? formatFullDate(item.lastUsedDate) : '-'}</td>
                     <td className="px-3 py-3 text-right">

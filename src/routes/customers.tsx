@@ -7,6 +7,7 @@ import { toUserMessage } from '@/app/errors'
 import { DateInput } from '@/components/ui/date-input'
 import { createCustomer, loadCustomersWithLedgerContext, toggleCustomerActive, updateCustomer } from '@/data/customers'
 import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
+import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 
@@ -291,7 +292,7 @@ function CustomersPage() {
                   <tr key={row.customer.id} className={`border-t border-slate-100 transition hover:bg-slate-50 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                     <td className="px-3 py-3">
                       <Link to="/ledger" search={{ customerId: row.customer.id, focus: '' }} className="text-sm font-medium text-blue-700 hover:text-blue-800 hover:underline">
-                        {row.customer.companyName || row.customer.name}
+                        {formatCustomerDisplayName(row.customer.companyName, row.customer.name)}
                       </Link>
                     </td>
                     <td className="px-3 py-3 text-sm text-slate-700">{row.customer.name || '-'}</td>

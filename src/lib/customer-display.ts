@@ -9,6 +9,7 @@ export function formatCompanyName(companyName: unknown, customerName: unknown) {
 export function formatCustomerDisplayName(companyName: unknown, customerName: unknown) {
   const company = clean(companyName)
   const customer = clean(customerName)
+  if (company.toLowerCase() === 'general' || customer.toLowerCase() === 'general') return 'General / Regular Stock'
   if (!company) return customer || 'Unknown'
   if (!customer) return company
   if (company.toLowerCase() === customer.toLowerCase()) return company

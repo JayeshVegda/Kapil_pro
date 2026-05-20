@@ -10,15 +10,20 @@ import { isGasStockItem, loadItems, type ItemRecord } from '@/data/items'
 import {
   deleteStockAdjustment,
   deleteStockIn,
+  ensureGeneralCustomer,
   loadCurrentStock,
   loadMonthlyStockReport,
   loadStockAdjustments,
+  loadStockCustomers,
   loadStockIn,
   loadStockLedger,
+  loadStockOpenings,
+  saveStockOpening,
   saveStockAdjustment,
   saveStockIn,
   updateStockIn,
   type CurrentStockRecord,
+  type StockCustomerOption,
 } from '@/data/stock'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
@@ -31,6 +36,7 @@ export const Route = createFileRoute('/stock-in')({
 
 const stockInSchema = z.object({
   itemId: z.string().trim().min(1, 'Please select an item'),
+  customerId: z.string().trim().min(1, 'Please select a party'),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid stock date'),
   qty: z.number().positive('Qty is required'),
   note: z.string(),
@@ -40,22 +46,30 @@ const adjustmentSchema = stockInSchema.extend({
   qty: z.number().refine((value) => value !== 0, 'Adjustment qty is required'),
 })
 
-type StockPanel = 'receive' | 'adjust' | 'report' | 'ledger' | 'logs'
+type StockPanel = 'opening' | 'receive' | 'adjust' | 'report' | 'ledger' | 'logs'
 
 export function StockPage() {
   const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
   const [date, setDate] = useState(today)
   const [itemId, setItemId] = useState('')
+  const [customerId, setCustomerId] = useState('')
   const [qtyInput, setQtyInput] = useState('0')
   const [note, setNote] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [openingDate, setOpeningDate] = useState(today)
+  const [openingItemId, setOpeningItemId] = useState('')
+  const [openingCustomerId, setOpeningCustomerId] = useState('')
+  const [openingQtyInput, setOpeningQtyInput] = useState('0')
+  const [openingNote, setOpeningNote] = useState('')
   const [adjustmentDate, setAdjustmentDate] = useState(today)
   const [adjustmentItemId, setAdjustmentItemId] = useState('')
+  const [adjustmentCustomerId, setAdjustmentCustomerId] = useState('')
   const [adjustmentQtyInput, setAdjustmentQtyInput] = useState('0')
   const [adjustmentNote, setAdjustmentNote] = useState('')
   const [search, setSearch] = useState('')
   const [ledgerItemId, setLedgerItemId] = useState('')
+  const [ledgerCustomerId, setLedgerCustomerId] = useState('')
   const [reportMonth, setReportMonth] = useState(() => getLocalIsoDate().slice(0, 7))
   const [activePanel, setActivePanel] = useState<StockPanel>('receive')
   const [statusText, setStatusText] = useState('')
@@ -64,13 +78,15 @@ export function StockPage() {
   const [isStockConfirmOpen, setIsStockConfirmOpen] = useState(false)
 
   const itemsQuery = useQuery({ queryKey: ['items-options'], queryFn: loadItems })
+  const customersQuery = useQuery({ queryKey: ['stock-customers'], queryFn: loadStockCustomers })
+  const openingsQuery = useQuery({ queryKey: ['stock-openings'], queryFn: loadStockOpenings })
   const currentStockQuery = useQuery({ queryKey: ['current-stock'], queryFn: loadCurrentStock })
   const stockInQuery = useQuery({ queryKey: ['stock-in-log'], queryFn: loadStockIn })
   const adjustmentsQuery = useQuery({ queryKey: ['stock-adjustments-log'], queryFn: loadStockAdjustments })
   const ledgerQuery = useQuery({
-    queryKey: ['stock-ledger', ledgerItemId],
-    queryFn: () => loadStockLedger(ledgerItemId),
-    enabled: Boolean(ledgerItemId),
+    queryKey: ['stock-ledger', ledgerItemId, ledgerCustomerId],
+    queryFn: () => loadStockLedger(ledgerItemId, ledgerCustomerId),
+    enabled: Boolean(ledgerItemId && ledgerCustomerId),
   })
   const stockReportQuery = useQuery({
     queryKey: ['monthly-stock-report', reportMonth],
@@ -79,26 +95,49 @@ export function StockPage() {
 
   const gasItems = useMemo(() => (itemsQuery.data ?? []).filter(isGasStockItem), [itemsQuery.data])
   const gasItemKeys = useMemo(() => new Set(gasItems.flatMap((item) => [item.id, item.name.trim().toLowerCase()])), [gasItems])
+  const customers = customersQuery.data ?? []
   const selectedItem = gasItems.find((item) => item.id === itemId)
+  const selectedCustomer = customers.find((customer) => customer.id === customerId)
+  const selectedOpeningItem = gasItems.find((item) => item.id === openingItemId)
+  const selectedOpeningCustomer = customers.find((customer) => customer.id === openingCustomerId)
   const selectedAdjustmentItem = gasItems.find((item) => item.id === adjustmentItemId)
+  const selectedAdjustmentCustomer = customers.find((customer) => customer.id === adjustmentCustomerId)
   const selectedUnit = unitLabel(selectedItem)
+  const openingUnit = unitLabel(selectedOpeningItem)
   const adjustmentUnit = unitLabel(selectedAdjustmentItem)
   const gasStockInRows = (stockInQuery.data ?? []).filter((row) => gasItemKeys.has(row.itemId) || gasItemKeys.has(row.itemName.trim().toLowerCase()))
   const gasAdjustmentRows = (adjustmentsQuery.data ?? []).filter((row) => gasItemKeys.has(row.itemId) || gasItemKeys.has(row.itemName.trim().toLowerCase()))
-  const filteredStockInRows = gasStockInRows.filter((row) => matchesAnyRankedQuery([row.itemName, row.date, formatFullDate(row.date)], search))
+  const filteredStockInRows = gasStockInRows.filter((row) => matchesAnyRankedQuery([row.itemName, row.customerName, row.date, formatFullDate(row.date)], search))
   const stockItems = currentStockQuery.data ?? []
   const attentionItems = stockItems.filter((item) => item.currentStock <= 0)
   const positiveItems = stockItems.filter((item) => item.currentStock > 0)
   const totalStockEntries = gasStockInRows.length + gasAdjustmentRows.length
   const selectedLedgerItem = gasItems.find((row) => row.id === ledgerItemId)
+  const selectedLedgerCustomer = customers.find((row) => row.id === ledgerCustomerId)
+
+  useEffect(() => {
+    if (customersQuery.isLoading || customers.length > 0) return
+    void ensureGeneralCustomer().then(async (general) => {
+      setCustomerDefaults(general.id)
+      await queryClient.invalidateQueries({ queryKey: ['stock-customers'] })
+    })
+  }, [customers.length, customersQuery.isLoading, queryClient])
+
+  useEffect(() => {
+    const general = findGeneralCustomer(customers)
+    if (!general) return
+    setCustomerDefaults(general.id)
+  }, [customers])
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const parsed = stockInSchema.safeParse({ itemId, date, qty: parseNonNegativeNumber(qtyInput), note })
+      const parsed = stockInSchema.safeParse({ itemId, customerId, date, qty: parseNonNegativeNumber(qtyInput), note })
       if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid stock entry')
       const item = selectedItem
+      const customer = selectedCustomer
       if (!item) throw new Error('Please select an item')
-      const payload = { itemId: item.id, itemName: item.name, date: parsed.data.date, qty: parsed.data.qty, note: parsed.data.note }
+      if (!customer) throw new Error('Please select a party')
+      const payload = { itemId: item.id, itemName: item.name, customerId: customer.id, customerName: customer.name, date: parsed.data.date, qty: parsed.data.qty, note: parsed.data.note }
       if (editingId) {
         await updateStockIn(editingId, payload)
       } else {
@@ -108,6 +147,24 @@ export function StockPage() {
     onSuccess: async () => {
       setStatusText(editingId ? 'Stock in updated.' : 'Stock in saved.')
       resetStockInForm()
+      await invalidateStockQueries(queryClient)
+    },
+    onError: (error) => setStatusText(toUserMessage(error)),
+  })
+
+  const openingMutation = useMutation({
+    mutationFn: async () => {
+      const parsed = stockInSchema.safeParse({ itemId: openingItemId, customerId: openingCustomerId, date: openingDate, qty: parseNonNegativeNumber(openingQtyInput), note: openingNote })
+      if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid opening stock')
+      const item = selectedOpeningItem
+      const customer = selectedOpeningCustomer
+      if (!item) throw new Error('Please select an item')
+      if (!customer) throw new Error('Please select a party')
+      await saveStockOpening({ itemId: item.id, itemName: item.name, customerId: customer.id, customerName: customer.name, date: parsed.data.date, qty: parsed.data.qty, note: parsed.data.note })
+    },
+    onSuccess: async () => {
+      setStatusText('Opening stock saved.')
+      resetOpeningForm()
       await invalidateStockQueries(queryClient)
     },
     onError: (error) => setStatusText(toUserMessage(error)),
@@ -125,11 +182,13 @@ export function StockPage() {
   const adjustmentMutation = useMutation({
     mutationFn: async () => {
       const qty = Number(adjustmentQtyInput)
-      const parsed = adjustmentSchema.safeParse({ itemId: adjustmentItemId, date: adjustmentDate, qty: Number.isFinite(qty) ? qty : 0, note: adjustmentNote })
+      const parsed = adjustmentSchema.safeParse({ itemId: adjustmentItemId, customerId: adjustmentCustomerId, date: adjustmentDate, qty: Number.isFinite(qty) ? qty : 0, note: adjustmentNote })
       if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid adjustment')
       const item = selectedAdjustmentItem
+      const customer = selectedAdjustmentCustomer
       if (!item) throw new Error('Please select an item')
-      await saveStockAdjustment({ itemId: item.id, itemName: item.name, date: parsed.data.date, qty: parsed.data.qty, note: parsed.data.note })
+      if (!customer) throw new Error('Please select a party')
+      await saveStockAdjustment({ itemId: item.id, itemName: item.name, customerId: customer.id, customerName: customer.name, date: parsed.data.date, qty: parsed.data.qty, note: parsed.data.note })
     },
     onSuccess: async () => {
       setStatusText('Stock adjustment saved.')
@@ -152,22 +211,40 @@ export function StockPage() {
     setEditingId(null)
     setDate(today)
     setItemId('')
+    setCustomerId(findGeneralCustomer(customers)?.id ?? '')
     setQtyInput('0')
     setNote('')
     setIsStockConfirmOpen(false)
   }
 
+  function resetOpeningForm() {
+    setOpeningDate(today)
+    setOpeningItemId('')
+    setOpeningCustomerId(findGeneralCustomer(customers)?.id ?? '')
+    setOpeningQtyInput('0')
+    setOpeningNote('')
+  }
+
   function resetAdjustmentForm() {
     setAdjustmentDate(today)
     setAdjustmentItemId('')
+    setAdjustmentCustomerId(findGeneralCustomer(customers)?.id ?? '')
     setAdjustmentQtyInput('0')
     setAdjustmentNote('')
+  }
+
+  function setCustomerDefaults(nextCustomerId: string) {
+    setCustomerId((current) => current || nextCustomerId)
+    setOpeningCustomerId((current) => current || nextCustomerId)
+    setAdjustmentCustomerId((current) => current || nextCustomerId)
+    setLedgerCustomerId((current) => current || nextCustomerId)
   }
 
   function startEditStockIn(row: NonNullable<typeof stockInQuery.data>[number]) {
     setEditingId(row.id)
     setDate(row.date)
     setItemId(row.itemId)
+    setCustomerId(row.customerId)
     setQtyInput(String(row.qty))
     setNote(row.note)
     setStatusText('')
@@ -193,7 +270,9 @@ export function StockPage() {
     setQtyInput(String(parsed.command.qty))
     setNote(parsed.command.note)
     setActivePanel('receive')
-    setStatusText(`Command ready: ${parsed.command.item.name} | ${parsed.command.displayQty}`)
+    const general = findGeneralCustomer(customers)
+    if (general) setCustomerId(general.id)
+    setStatusText(`Command ready: ${parsed.command.item.name} | ${general?.name ?? 'General'} | ${parsed.command.displayQty}`)
     setIsQuickStockOpen(false)
     setQuickStockCommand('')
     setIsStockConfirmOpen(true)
@@ -312,6 +391,7 @@ export function StockPage() {
             </div>
             <div className="space-y-2 px-4 py-4 text-sm text-slate-700">
               <ConfirmRow label="Item" value={selectedItem?.name ?? 'Unknown'} />
+              <ConfirmRow label="Party" value={selectedCustomer?.name ?? 'Unknown'} />
               <ConfirmRow label="Qty" value={formatStockQty(parseNonNegativeNumber(qtyInput), selectedItem)} />
               <ConfirmRow label="Date" value={formatFullDate(date)} />
               {note && <ConfirmRow label="Note" value={note} />}
@@ -324,7 +404,7 @@ export function StockPage() {
                 type="button"
                 className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => void confirmStockCommand()}
-                disabled={!itemId || parseNonNegativeNumber(qtyInput) <= 0 || saveMutation.isPending}
+                disabled={!itemId || !customerId || parseNonNegativeNumber(qtyInput) <= 0 || saveMutation.isPending}
               >
                 {saveMutation.isPending ? 'Saving...' : 'Confirm & Save'}
               </button>
@@ -336,6 +416,7 @@ export function StockPage() {
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 overflow-x-auto no-scrollbar">
           <div className="inline-flex min-w-max rounded-lg border border-slate-200 bg-slate-50 p-1">
+            <PanelButton active={activePanel === 'opening'} onClick={() => setActivePanel('opening')} icon={<Warehouse size={14} />}>Opening</PanelButton>
             <PanelButton active={activePanel === 'receive'} onClick={() => setActivePanel('receive')} icon={<PackagePlus size={14} />}>Receive</PanelButton>
             <PanelButton active={activePanel === 'adjust'} onClick={() => setActivePanel('adjust')} icon={<SlidersHorizontal size={14} />}>Adjust</PanelButton>
             <PanelButton active={activePanel === 'report'} onClick={() => setActivePanel('report')} icon={<ClipboardList size={14} />}>Report</PanelButton>
@@ -344,9 +425,66 @@ export function StockPage() {
           </div>
         </div>
 
+        {activePanel === 'opening' && (
+          <WorkspacePanel title="Opening Stock" subtitle="Set opening stock for each item and party bucket. Saving again updates the same item + party opening.">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[150px_1fr_1fr_160px_1fr_auto]">
+              <Field label="Date">
+                <DateInput className={inputClass} value={openingDate} onChange={setOpeningDate} />
+              </Field>
+              <Field label="Item">
+                <SearchableCombobox
+                  options={gasItems}
+                  value={openingItemId}
+                  onChange={setOpeningItemId}
+                  inputClassName={inputClass}
+                  placeholder={itemsQuery.isLoading ? 'Loading items...' : 'Search item...'}
+                  disabled={itemsQuery.isLoading || itemsQuery.isError}
+                  emptyText="No matching gas part found."
+                  maxResults={25}
+                />
+              </Field>
+              <Field label="Party">
+                <SearchableCombobox
+                  options={customers}
+                  value={openingCustomerId}
+                  onChange={setOpeningCustomerId}
+                  inputClassName={inputClass}
+                  placeholder={customersQuery.isLoading ? 'Loading parties...' : 'Search party...'}
+                  disabled={customersQuery.isLoading || customersQuery.isError}
+                  emptyText="No matching party found."
+                  maxResults={25}
+                />
+              </Field>
+              <Field label={`Opening (${openingUnit})`}>
+                <input className={inputClass} type="number" value={openingQtyInput} onChange={(event) => setOpeningQtyInput(event.target.value)} />
+              </Field>
+              <Field label="Note">
+                <input className={inputClass} value={openingNote} onChange={(event) => setOpeningNote(event.target.value)} placeholder="Opening balance note" />
+              </Field>
+              <div className="sticky bottom-0 z-20 -mx-5 flex items-end gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur md:static md:mx-0 md:border-t-0 md:bg-transparent md:p-0">
+                <button type="button" className="h-11 rounded-md border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50 lg:h-10 lg:px-3" onClick={resetOpeningForm}>
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-11 flex-1 items-center justify-center gap-1 rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 md:flex-none lg:h-10 lg:px-3"
+                  onClick={() => void openingMutation.mutateAsync()}
+                  disabled={!openingItemId || !openingCustomerId || openingMutation.isPending}
+                >
+                  <Warehouse size={14} />
+                  {openingMutation.isPending ? 'Saving...' : 'Save Opening'}
+                </button>
+              </div>
+            </div>
+            <div className="mt-5">
+              <OpeningTable rows={openingsQuery.data ?? []} items={gasItems} />
+            </div>
+          </WorkspacePanel>
+        )}
+
         {activePanel === 'receive' && (
           <WorkspacePanel title={editingId ? 'Edit Stock Receipt' : 'Receive Finished Goods'} subtitle="Add stock produced or received into finished goods inventory.">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[160px_1fr_180px_1fr_auto]">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[150px_1fr_1fr_160px_1fr_auto]">
               <Field label="Date">
                 <DateInput className={inputClass} value={date} onChange={setDate} />
               </Field>
@@ -365,6 +503,21 @@ export function StockPage() {
                   maxResults={25}
                 />
               </Field>
+              <Field label="Party">
+                <SearchableCombobox
+                  options={customers}
+                  value={customerId}
+                  onChange={(nextId) => {
+                    setCustomerId(nextId)
+                    setStatusText('')
+                  }}
+                  inputClassName={inputClass}
+                  placeholder={customersQuery.isLoading ? 'Loading parties...' : 'Search party...'}
+                  disabled={customersQuery.isLoading || customersQuery.isError}
+                  emptyText="No matching party found."
+                  maxResults={25}
+                />
+              </Field>
               <Field label={`Qty (${selectedUnit})`}>
                 <input className={inputClass} type="number" value={qtyInput} onChange={(event) => setQtyInput(event.target.value)} />
               </Field>
@@ -379,7 +532,7 @@ export function StockPage() {
                   type="button"
                   className="inline-flex h-11 flex-1 items-center justify-center gap-1 rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 md:flex-none lg:h-10 lg:px-3"
                   onClick={() => void saveMutation.mutateAsync()}
-                  disabled={!itemId || parseNonNegativeNumber(qtyInput) <= 0 || saveMutation.isPending}
+                  disabled={!itemId || !customerId || parseNonNegativeNumber(qtyInput) <= 0 || saveMutation.isPending}
                 >
                   <PackagePlus size={14} />
                   {saveMutation.isPending ? 'Saving...' : editingId ? 'Update' : 'Save'}
@@ -391,7 +544,7 @@ export function StockPage() {
 
         {activePanel === 'adjust' && (
           <WorkspacePanel title="Manual Stock Adjustment" subtitle="Use for physical count corrections, damage, shortage, or audit corrections. Positive adds stock, negative removes stock.">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[160px_1fr_180px_1fr_auto]">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[150px_1fr_1fr_160px_1fr_auto]">
               <Field label="Date">
                 <DateInput className={inputClass} value={adjustmentDate} onChange={setAdjustmentDate} />
               </Field>
@@ -404,6 +557,18 @@ export function StockPage() {
                   placeholder={itemsQuery.isLoading ? 'Loading items...' : 'Search item...'}
                   disabled={itemsQuery.isLoading || itemsQuery.isError}
                   emptyText="No matching gas part found."
+                  maxResults={25}
+                />
+              </Field>
+              <Field label="Party">
+                <SearchableCombobox
+                  options={customers}
+                  value={adjustmentCustomerId}
+                  onChange={setAdjustmentCustomerId}
+                  inputClassName={inputClass}
+                  placeholder={customersQuery.isLoading ? 'Loading parties...' : 'Search party...'}
+                  disabled={customersQuery.isLoading || customersQuery.isError}
+                  emptyText="No matching party found."
                   maxResults={25}
                 />
               </Field>
@@ -421,7 +586,7 @@ export function StockPage() {
                   type="button"
                   className="inline-flex h-11 flex-1 items-center justify-center gap-1 rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 md:flex-none lg:h-10 lg:px-3"
                   onClick={() => void adjustmentMutation.mutateAsync()}
-                  disabled={!adjustmentItemId || Number(adjustmentQtyInput) === 0 || adjustmentMutation.isPending}
+                  disabled={!adjustmentItemId || !adjustmentCustomerId || Number(adjustmentQtyInput) === 0 || adjustmentMutation.isPending}
                 >
                   <SlidersHorizontal size={14} />
                   {adjustmentMutation.isPending ? 'Saving...' : 'Save'}
@@ -443,8 +608,8 @@ export function StockPage() {
         )}
 
         {activePanel === 'ledger' && (
-          <WorkspacePanel title="Item Stock Ledger" subtitle={selectedLedgerItem ? `Full movement for ${selectedLedgerItem.name}` : 'Select an item to inspect opening, receipts, sold, adjustments, and running balance.'}>
-            <div className="mb-3 max-w-md">
+          <WorkspacePanel title="Item + Party Stock Ledger" subtitle={selectedLedgerItem && selectedLedgerCustomer ? `Full movement for ${selectedLedgerItem.name} / ${selectedLedgerCustomer.name}` : 'Select an item and party to inspect opening, receipts, sold, adjustments, and running balance.'}>
+            <div className="mb-3 grid max-w-3xl grid-cols-1 gap-3 md:grid-cols-2">
               <SearchableCombobox
                 options={gasItems}
                 value={ledgerItemId}
@@ -455,11 +620,21 @@ export function StockPage() {
                 emptyText="No matching gas part found."
                 maxResults={25}
               />
+              <SearchableCombobox
+                options={customers}
+                value={ledgerCustomerId}
+                onChange={setLedgerCustomerId}
+                inputClassName={inputClass}
+                placeholder={customersQuery.isLoading ? 'Loading parties...' : 'Search party ledger...'}
+                disabled={customersQuery.isLoading || customersQuery.isError}
+                emptyText="No matching party found."
+                maxResults={25}
+              />
             </div>
-            {!ledgerItemId && <p className="text-sm text-slate-500">Select an item to view full movement.</p>}
+            {(!ledgerItemId || !ledgerCustomerId) && <p className="text-sm text-slate-500">Select an item and party to view full movement.</p>}
             {ledgerQuery.isLoading && <p className="text-sm text-slate-500">Loading ledger...</p>}
             {ledgerQuery.isError && <ErrorText error={ledgerQuery.error} fallback="Unable to load stock ledger." />}
-            {ledgerItemId && !ledgerQuery.isLoading && !ledgerQuery.isError && (
+            {ledgerItemId && ledgerCustomerId && !ledgerQuery.isLoading && !ledgerQuery.isError && (
               <LedgerTable rows={ledgerQuery.data ?? []} item={selectedLedgerItem} />
             )}
           </WorkspacePanel>
@@ -496,19 +671,14 @@ export function StockPage() {
         {currentStockQuery.isLoading && <p className="text-sm text-slate-500">Loading stock...</p>}
         {currentStockQuery.isError && <ErrorText error={currentStockQuery.error} fallback="Unable to load stock." />}
         {!currentStockQuery.isLoading && !currentStockQuery.isError && (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            {stockItems.length === 0 && <p className="text-sm text-slate-500">No finished goods stock items configured.</p>}
-            {stockItems.map((item) => (
-              <StockCard
-                key={item.id}
-                item={item}
-                onOpenLedger={() => {
-                  setLedgerItemId(item.id)
-                  setActivePanel('ledger')
-                }}
-              />
-            ))}
-          </div>
+          <CurrentStockTable
+            rows={stockItems}
+            onOpenLedger={(item) => {
+              setLedgerItemId(item.itemId)
+              setLedgerCustomerId(item.customerId)
+              setActivePanel('ledger')
+            }}
+          />
         )}
       </section>
     </div>
@@ -521,6 +691,7 @@ function StockInPage() {
 
 async function invalidateStockQueries(queryClient: ReturnType<typeof useQueryClient>) {
   await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['stock-openings'] }),
     queryClient.invalidateQueries({ queryKey: ['stock-in-log'] }),
     queryClient.invalidateQueries({ queryKey: ['stock-adjustments-log'] }),
     queryClient.invalidateQueries({ queryKey: ['current-stock'] }),
@@ -569,22 +740,45 @@ function WorkspacePanel({ title, subtitle, children }: { title: string; subtitle
   )
 }
 
-function StockCard({ item, onOpenLedger }: { item: CurrentStockRecord; onOpenLedger: () => void }) {
-  const indicatorClass = item.currentStock > 0 ? 'bg-emerald-500' : item.currentStock === 0 ? 'bg-amber-500' : 'bg-red-500'
+function CurrentStockTable({ rows, onOpenLedger }: { rows: CurrentStockRecord[]; onOpenLedger: (item: CurrentStockRecord) => void }) {
   return (
-    <button type="button" className="min-h-[8rem] rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-blue-300 hover:bg-blue-50/40" onClick={onOpenLedger}>
-      <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 truncate text-xs font-semibold uppercase tracking-[0.06em] text-slate-500" title={item.name}>{item.name}</p>
-        <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${indicatorClass}`} aria-hidden="true" />
-      </div>
-      <p className="mt-2 font-mono text-2xl font-bold leading-tight tracking-tight text-slate-900">{formatStockQty(item.currentStock, item)}</p>
-      <p className="mt-1 text-[11px] text-slate-500">Opening {formatStockQty(item.openingStock, item)} {item.openingStockDate ? `on ${formatFullDate(item.openingStockDate)}` : ''}</p>
-      <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] leading-snug text-slate-500">
-        <MiniStock label="In" value={formatStockQty(item.stockInThisMonth, item)} />
-        <MiniStock label="Sold" value={formatStockQty(item.soldThisMonth, item)} />
-        <MiniStock label="Adj" value={formatStockQty(item.adjustmentThisMonth, item)} />
-      </div>
-    </button>
+    <div className="overflow-x-auto no-scrollbar">
+      <table className="w-full min-w-[980px]">
+        <thead>
+          <tr className="bg-slate-50">
+            <Th>Item</Th>
+            <Th>Party</Th>
+            <Th right>Opening</Th>
+            <Th right>Stock In</Th>
+            <Th right>Sold</Th>
+            <Th right>Adjustment</Th>
+            <Th right>Closing</Th>
+            <Th right>Action</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && <EmptyRow colSpan={8} text="No finished goods stock buckets configured." />}
+          {rows.map((item, index) => (
+            <tr key={item.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
+              <Td strong>{item.itemName}</Td>
+              <Td>{item.customerName}</Td>
+              <Td right mono>{formatStockQty(item.openingStock, item)}</Td>
+              <Td right mono>{formatStockQty(item.totalIn, item)}</Td>
+              <Td right mono>{formatStockQty(item.totalOut, item)}</Td>
+              <Td right mono>{formatStockQty(item.totalAdjustment, item)}</Td>
+              <Td right mono>
+                <span className={item.currentStock < 0 ? 'text-red-700' : 'text-slate-800'}>{formatStockQty(item.currentStock, item)}</span>
+              </Td>
+              <Td right>
+                <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onOpenLedger(item)}>
+                  Ledger
+                </button>
+              </Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -595,6 +789,7 @@ function StockReportTable({ rows }: { rows: Array<Awaited<ReturnType<typeof load
         <thead>
           <tr className="bg-slate-50">
             <Th>Item</Th>
+            <Th>Party</Th>
             <Th right>Opening</Th>
             <Th right>Stock In</Th>
             <Th right>Sold</Th>
@@ -603,11 +798,12 @@ function StockReportTable({ rows }: { rows: Array<Awaited<ReturnType<typeof load
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={6} text="No stock items configured." />}
+          {rows.length === 0 && <EmptyRow colSpan={7} text="No stock items configured." />}
           {rows.map((row, index) => {
             return (
               <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-                <Td strong>{row.name}</Td>
+                <Td strong>{row.itemName}</Td>
+                <Td>{row.customerName}</Td>
                 <Td right mono>{formatStockQty(row.opening, row)}</Td>
                 <Td right mono>{formatStockQty(row.stockIn, row)}</Td>
                 <Td right mono>{formatStockQty(row.sold, row)}</Td>
@@ -622,12 +818,32 @@ function StockReportTable({ rows }: { rows: Array<Awaited<ReturnType<typeof load
   )
 }
 
-function MiniStock({ label, value }: { label: string; value: string }) {
+function OpeningTable({ rows, items }: { rows: Array<Awaited<ReturnType<typeof loadStockOpenings>>[number]>; items: ItemRecord[] }) {
   return (
-    <p>
-      {label}
-      <span className="block truncate font-mono font-semibold text-slate-800">{value}</span>
-    </p>
+    <div className="overflow-x-auto no-scrollbar">
+      <table className="w-full min-w-[820px]">
+        <thead>
+          <tr className="bg-slate-50">
+            <Th>Date</Th><Th>Item</Th><Th>Party</Th><Th right>Opening</Th><Th>Note</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && <EmptyRow colSpan={5} text="No opening stock records found." />}
+          {rows.map((row, index) => {
+            const item = items.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
+            return (
+              <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
+                <Td>{row.date ? formatFullDate(row.date) : '-'}</Td>
+                <Td strong>{row.itemName}</Td>
+                <Td>{row.customerName}</Td>
+                <Td right mono>{formatStockQty(row.qty, item)}</Td>
+                <Td>{row.note || '-'}</Td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -637,17 +853,18 @@ function StockInTable({ rows, items, onEdit, onDelete, deleting }: { rows: Array
       <table className="w-full min-w-[820px]">
         <thead>
           <tr className="bg-slate-50">
-            <Th>Date</Th><Th>Item</Th><Th right>Qty</Th><Th>Note</Th><Th right>Action</Th>
+            <Th>Date</Th><Th>Item</Th><Th>Party</Th><Th right>Qty</Th><Th>Note</Th><Th right>Action</Th>
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={5} text="No stock in entries found." />}
+          {rows.length === 0 && <EmptyRow colSpan={6} text="No stock in entries found." />}
           {rows.map((row, index) => {
             const item = items.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
             return (
               <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                 <Td>{formatFullDate(row.date)}</Td>
                 <Td strong>{row.itemName}</Td>
+                <Td>{row.customerName}</Td>
                 <Td right mono>{formatStockQty(row.qty, item)}</Td>
                 <Td>{row.note || '-'}</Td>
                 <Td right>
@@ -673,15 +890,16 @@ function AdjustmentTable({ rows, items, onDelete, deleting }: { rows: Array<Awai
   return (
     <div className="overflow-x-auto no-scrollbar">
       <table className="w-full min-w-[760px]">
-        <thead><tr className="bg-slate-50"><Th>Date</Th><Th>Item</Th><Th right>Adjustment</Th><Th>Note</Th><Th right>Action</Th></tr></thead>
+        <thead><tr className="bg-slate-50"><Th>Date</Th><Th>Item</Th><Th>Party</Th><Th right>Adjustment</Th><Th>Note</Th><Th right>Action</Th></tr></thead>
         <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={5} text="No stock adjustments yet." />}
+          {rows.length === 0 && <EmptyRow colSpan={6} text="No stock adjustments yet." />}
           {rows.map((row, index) => {
             const item = items.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
             return (
               <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                 <Td>{formatFullDate(row.date)}</Td>
                 <Td strong>{row.itemName}</Td>
+                <Td>{row.customerName}</Td>
                 <Td right mono>{formatStockQty(row.qty, item)}</Td>
                 <Td>{row.note || '-'}</Td>
                 <Td right>
@@ -696,6 +914,10 @@ function AdjustmentTable({ rows, items, onDelete, deleting }: { rows: Array<Awai
       </table>
     </div>
   )
+}
+
+function findGeneralCustomer(customers: StockCustomerOption[]) {
+  return customers.find((customer) => customer.customerName.toLowerCase() === 'general' || customer.companyName.toLowerCase() === 'general')
 }
 
 function LedgerTable({ rows, item }: { rows: Array<Awaited<ReturnType<typeof loadStockLedger>>[number]>; item?: ItemRecord }) {

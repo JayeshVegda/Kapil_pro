@@ -30,10 +30,14 @@ async function main() {
   console.log(`Authenticated as ${PB_ADMIN_EMAIL}`)
 
   const itemsCol = await ensureItemsStockFields()
+  const customersCol = await pb.collections.getOne('customers')
+  const generalCustomer = await ensureGeneralCustomer()
   await ensureBillItemsItemRelation(itemsCol.id)
-  await ensureStockIn(itemsCol.id)
-  await ensureStockAdjustments(itemsCol.id)
+  await ensureStockOpenings(itemsCol.id, customersCol.id)
+  await ensureStockIn(itemsCol.id, customersCol.id)
+  await ensureStockAdjustments(itemsCol.id, customersCol.id)
   await backfillBillItemsItemRelation()
+  await migrateLegacyStockToGeneral(generalCustomer)
   console.log('Stock collections are ready.')
 }
 
@@ -82,6 +86,44 @@ function numberField(name, required) {
   }
 }
 
+function relationField(name, collectionId, required) {
+  return {
+    name,
+    type: 'relation',
+    required: Boolean(required),
+    maxSelect: 1,
+    collectionId,
+    cascadeDelete: false,
+  }
+}
+
+async function ensureGeneralCustomer() {
+  const existing = await pb
+    .collection('customers')
+    .getFirstListItem('name = "General" || company_name = "General"')
+    .catch(() => null)
+  const payload = {
+    company_name: 'General',
+    name: 'General',
+    active: true,
+    opening_balance: 0,
+    opening_balance_date: '',
+    phone: '',
+    gstin: '',
+    address: '',
+    credit_limit: 0,
+    note: 'Regular Stock',
+  }
+  if (existing) {
+    await pb.collection('customers').update(existing.id, payload)
+    console.log('Updated General customer')
+    return { ...existing, ...payload }
+  }
+  const created = await pb.collection('customers').create(payload)
+  console.log('Created General customer')
+  return created
+}
+
 async function ensureItemsStockFields() {
   const existing = await pb.collections.getOne('items')
   const fields = [
@@ -118,24 +160,68 @@ async function backfillItemsStockDefaults() {
   console.log(`Backfilled item stock defaults: ${updated}`)
 }
 
-async function ensureStockIn(itemsCollectionId) {
+async function ensureStockOpenings(itemsCollectionId, customersCollectionId) {
+  const existing = await pb.collections.getOne('stock_openings').catch(() => null)
+  const fields = [
+    relationField('item', itemsCollectionId, true),
+    textField('item_name', true),
+    relationField('customer', customersCollectionId, true),
+    textField('customer_name', true),
+    textField('date', true),
+    numberField('qty', true),
+    textField('note', false),
+  ]
+  const indexes = [
+    'CREATE UNIQUE INDEX idx_stock_openings_item_customer ON stock_openings (item, customer)',
+    'CREATE INDEX idx_stock_openings_customer ON stock_openings (customer)',
+    'CREATE INDEX idx_stock_openings_date ON stock_openings (date)',
+  ]
+  const apiRule = '@request.auth.id != ""'
+
+  if (!existing) {
+    await pb.collections.create({
+      name: 'stock_openings',
+      type: 'base',
+      fields,
+      indexes,
+      listRule: apiRule,
+      viewRule: apiRule,
+      createRule: apiRule,
+      updateRule: apiRule,
+      deleteRule: apiRule,
+    })
+    console.log('Created stock_openings')
+    return
+  }
+
+  await pb.collections.update(existing.id, {
+    ...existing,
+    fields: mergeFields(existing.fields ?? [], fields),
+    indexes: mergeIndexes(existing.indexes ?? [], indexes),
+    listRule: apiRule,
+    viewRule: apiRule,
+    createRule: apiRule,
+    updateRule: apiRule,
+    deleteRule: apiRule,
+  })
+  console.log('Updated stock_openings schema')
+}
+
+async function ensureStockIn(itemsCollectionId, customersCollectionId) {
   const existing = await pb.collections.getOne('stock_in').catch(() => null)
   const fields = [
-    {
-      name: 'item',
-      type: 'relation',
-      required: true,
-      maxSelect: 1,
-      collectionId: itemsCollectionId,
-      cascadeDelete: false,
-    },
+    relationField('item', itemsCollectionId, true),
     textField('item_name', true),
+    relationField('customer', customersCollectionId, false),
+    textField('customer_name', false),
     textField('date', true),
     numberField('qty', true),
     textField('note', false),
   ]
   const indexes = [
     'CREATE INDEX idx_stock_in_item ON stock_in (item)',
+    'CREATE INDEX idx_stock_in_item_customer ON stock_in (item, customer)',
+    'CREATE INDEX idx_stock_in_customer ON stock_in (customer)',
     'CREATE INDEX idx_stock_in_date ON stock_in (date)',
   ]
   const apiRule = '@request.auth.id != ""'
@@ -169,24 +255,21 @@ async function ensureStockIn(itemsCollectionId) {
   console.log('Updated stock_in schema')
 }
 
-async function ensureStockAdjustments(itemsCollectionId) {
+async function ensureStockAdjustments(itemsCollectionId, customersCollectionId) {
   const existing = await pb.collections.getOne('stock_adjustments').catch(() => null)
   const fields = [
-    {
-      name: 'item',
-      type: 'relation',
-      required: true,
-      maxSelect: 1,
-      collectionId: itemsCollectionId,
-      cascadeDelete: false,
-    },
+    relationField('item', itemsCollectionId, true),
     textField('item_name', true),
+    relationField('customer', customersCollectionId, false),
+    textField('customer_name', false),
     textField('date', true),
     numberField('qty', true),
     textField('note', false),
   ]
   const indexes = [
     'CREATE INDEX idx_stock_adjustments_item ON stock_adjustments (item)',
+    'CREATE INDEX idx_stock_adjustments_item_customer ON stock_adjustments (item, customer)',
+    'CREATE INDEX idx_stock_adjustments_customer ON stock_adjustments (customer)',
     'CREATE INDEX idx_stock_adjustments_date ON stock_adjustments (date)',
   ]
   const apiRule = '@request.auth.id != ""'
@@ -257,4 +340,53 @@ async function backfillBillItemsItemRelation() {
     updated += 1
   }
   console.log(`Backfilled bill_items item relation: ${updated}`)
+}
+
+async function migrateLegacyStockToGeneral(generalCustomer) {
+  const [items, stockIn, adjustments, openings] = await Promise.all([
+    pb.collection('items').getFullList({ sort: 'name' }),
+    pb.collection('stock_in').getFullList(),
+    pb.collection('stock_adjustments').getFullList(),
+    pb.collection('stock_openings').getFullList(),
+  ])
+  const openingKeys = new Set(openings.map((row) => `${row.item}|${row.customer}`))
+  let openingCreated = 0
+  for (const item of items) {
+    const qty = Number(item.opening_stock ?? 0)
+    if (!Number.isFinite(qty) || qty === 0) continue
+    const key = `${item.id}|${generalCustomer.id}`
+    if (openingKeys.has(key)) continue
+    await pb.collection('stock_openings').create({
+      item: item.id,
+      item_name: String(item.name ?? ''),
+      customer: generalCustomer.id,
+      customer_name: 'General',
+      date: String(item.opening_stock_date ?? '').slice(0, 10) || '',
+      qty,
+      note: 'Migrated from item opening stock',
+    })
+    openingCreated += 1
+  }
+
+  let stockInUpdated = 0
+  for (const row of stockIn) {
+    if (row.customer) continue
+    await pb.collection('stock_in').update(row.id, {
+      customer: generalCustomer.id,
+      customer_name: 'General',
+    })
+    stockInUpdated += 1
+  }
+
+  let adjustmentUpdated = 0
+  for (const row of adjustments) {
+    if (row.customer) continue
+    await pb.collection('stock_adjustments').update(row.id, {
+      customer: generalCustomer.id,
+      customer_name: 'General',
+    })
+    adjustmentUpdated += 1
+  }
+
+  console.log(`Migrated legacy stock to General: openings=${openingCreated}, stock_in=${stockInUpdated}, adjustments=${adjustmentUpdated}`)
 }

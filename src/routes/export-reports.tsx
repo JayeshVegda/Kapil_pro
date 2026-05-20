@@ -12,7 +12,7 @@ import { loadCurrentStock, loadMonthlyStockReport } from '@/data/stock'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { BILL_PREVIEW_CARD_CLASS, BILL_PRINT_JPEG_QUALITY_DOWNLOAD } from '@/lib/bill-print-export'
-import { formatCompanyName } from '@/lib/customer-display'
+import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { BILL_JPEG_OUTPUT_WIDTH_PX, exportNodeAsJpgBlob } from '@/lib/image-export'
 import { formatInQty, formatInrInteger } from '@/lib/inr-format'
@@ -445,10 +445,10 @@ function buildStockReport(rows: Awaited<ReturnType<typeof loadMonthlyStockReport
     title: 'Gas Stock Report',
     subtitle: label,
     slug: `gas-stock-report-${safeFilename(label)}`,
-    columns: ['Item', 'Opening', 'Stock In', 'Sold', 'Adjustment', 'Closing'],
-    rows: rows.map((row) => [row.name, formatStockQty(row.opening, row), formatStockQty(row.stockIn, row), formatStockQty(row.sold, row), formatStockQty(row.adjustment, row), formatStockQty(row.closing, row)]),
+    columns: ['Item', 'Party', 'Opening', 'Stock In', 'Sold', 'Adjustment', 'Closing'],
+    rows: rows.map((row) => [row.itemName, row.customerName, formatStockQty(row.opening, row), formatStockQty(row.stockIn, row), formatStockQty(row.sold, row), formatStockQty(row.adjustment, row), formatStockQty(row.closing, row)]),
     summary: [
-      { label: 'Gas Items', value: String(rows.length) },
+      { label: 'Stock Buckets', value: String(rows.length) },
       { label: 'Closing Kg', value: formatInQty(rows.reduce((sum, row) => sum + row.closing, 0), 'kg') },
     ],
   }
@@ -1270,6 +1270,8 @@ function billItemBaseMap(billItems: PBRecord[]) {
 function displayCustomer(row: PBRecord) {
   const company = String(row.company_name ?? '').trim()
   const name = String(row.name ?? '').trim()
+  const display = formatCustomerDisplayName(company, name)
+  if (display === 'General / Regular Stock') return display
   return company && company !== name ? `${company} (${name})` : name || company || row.id
 }
 

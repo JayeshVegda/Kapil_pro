@@ -1,14 +1,35 @@
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
-import { isGasStockItem, loadItems } from '@/data/items'
+import { isGasStockItem, loadItems, type ItemRecord } from '@/data/items'
+import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { getLocalIsoDate } from '@/lib/date'
 
 type PBRecord = Record<string, unknown> & { id: string }
+
+export type StockCustomerOption = {
+  id: string
+  name: string
+  customerName: string
+  companyName: string
+}
+
+export type StockOpeningRecord = {
+  id: string
+  itemId: string
+  itemName: string
+  customerId: string
+  customerName: string
+  date: string
+  qty: number
+  note: string
+}
 
 export type StockInRecord = {
   id: string
   itemId: string
   itemName: string
+  customerId: string
+  customerName: string
   date: string
   qty: number
   note: string
@@ -18,6 +39,8 @@ export type StockAdjustmentRecord = {
   id: string
   itemId: string
   itemName: string
+  customerId: string
+  customerName: string
   date: string
   qty: number
   note: string
@@ -25,6 +48,10 @@ export type StockAdjustmentRecord = {
 
 export type CurrentStockRecord = {
   id: string
+  itemId: string
+  itemName: string
+  customerId: string
+  customerName: string
   name: string
   type: string
   unit: string
@@ -45,6 +72,8 @@ export type StockLedgerRow = {
   date: string
   itemId: string
   itemName: string
+  customerId: string
+  customerName: string
   type: 'Opening' | 'Stock In' | 'Adjustment' | 'Sold'
   inQty: number
   outQty: number
@@ -54,15 +83,22 @@ export type StockLedgerRow = {
 
 export type MonthlyStockReportRow = {
   id: string
+  itemId: string
+  itemName: string
+  customerId: string
+  customerName: string
   name: string
   type: string
   unit: string
+  bagWeight: number
   opening: number
   stockIn: number
   sold: number
   adjustment: number
   closing: number
 }
+
+const GENERAL_CUSTOMER_NAME = 'General'
 
 const num = (value: unknown) => {
   const parsed = Number(value ?? 0)
@@ -71,19 +107,61 @@ const num = (value: unknown) => {
 
 const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
 const nameKey = (value: unknown) => String(value ?? '').trim().toLowerCase()
+const bucketKey = (itemId: string, customerId: string) => `${itemId}::${customerId}`
 
 function currentMonthKey() {
   return getLocalIsoDate().slice(0, 7)
 }
 
-function mapStockIn(row: PBRecord): StockInRecord {
-  const expandedItem = row.expand && typeof row.expand === 'object' ? (row.expand as Record<string, unknown>).item : null
-  const itemName =
-    expandedItem && typeof expandedItem === 'object' ? String((expandedItem as Record<string, unknown>).name ?? row.item_name ?? '') : String(row.item_name ?? '')
+function customerDisplayFromRow(row: PBRecord) {
+  return formatCustomerDisplayName(row.company_name, row.name)
+}
+
+function expandedRecord(row: PBRecord, key: string) {
+  return row.expand && typeof row.expand === 'object' ? (row.expand as Record<string, unknown>)[key] : null
+}
+
+function expandedName(row: PBRecord, relationKey: string, fallback: unknown) {
+  const expanded = expandedRecord(row, relationKey)
+  if (expanded && typeof expanded === 'object') {
+    const record = expanded as PBRecord
+    if (relationKey === 'customer') return customerDisplayFromRow(record)
+    return String(record.name ?? fallback ?? '')
+  }
+  return String(fallback ?? '')
+}
+
+function mapCustomer(row: PBRecord): StockCustomerOption {
+  const companyName = String(row.company_name ?? row.name ?? '')
+  const customerName = String(row.name ?? '')
+  return {
+    id: row.id,
+    name: formatCustomerDisplayName(companyName, customerName),
+    companyName,
+    customerName,
+  }
+}
+
+function mapStockOpening(row: PBRecord): StockOpeningRecord {
   return {
     id: row.id,
     itemId: String(row.item ?? ''),
-    itemName,
+    itemName: expandedName(row, 'item', row.item_name),
+    customerId: String(row.customer ?? ''),
+    customerName: expandedName(row, 'customer', row.customer_name),
+    date: datePart(row.date),
+    qty: num(row.qty),
+    note: String(row.note ?? ''),
+  }
+}
+
+function mapStockIn(row: PBRecord): StockInRecord {
+  return {
+    id: row.id,
+    itemId: String(row.item ?? ''),
+    itemName: expandedName(row, 'item', row.item_name),
+    customerId: String(row.customer ?? ''),
+    customerName: expandedName(row, 'customer', row.customer_name),
     date: datePart(row.date),
     qty: num(row.qty),
     note: String(row.note ?? ''),
@@ -91,13 +169,12 @@ function mapStockIn(row: PBRecord): StockInRecord {
 }
 
 function mapStockAdjustment(row: PBRecord): StockAdjustmentRecord {
-  const expandedItem = row.expand && typeof row.expand === 'object' ? (row.expand as Record<string, unknown>).item : null
-  const itemName =
-    expandedItem && typeof expandedItem === 'object' ? String((expandedItem as Record<string, unknown>).name ?? row.item_name ?? '') : String(row.item_name ?? '')
   return {
     id: row.id,
     itemId: String(row.item ?? ''),
-    itemName,
+    itemName: expandedName(row, 'item', row.item_name),
+    customerId: String(row.customer ?? ''),
+    customerName: expandedName(row, 'customer', row.customer_name),
     date: datePart(row.date),
     qty: num(row.qty),
     note: String(row.note ?? ''),
@@ -108,6 +185,12 @@ function rowMatchesItem(row: PBRecord, itemId: string, itemName: string) {
   const relation = String(row.item ?? '')
   if (relation) return relation === itemId
   return nameKey(row.item_name) === nameKey(itemName)
+}
+
+function rowMatchesCustomer(row: PBRecord, customerId: string, customerName: string) {
+  const relation = String(row.customer ?? '')
+  if (relation) return relation === customerId
+  return nameKey(row.customer_name) === nameKey(customerName)
 }
 
 function billItemOutQty(row: PBRecord, _type: string, _bagWeight: number) {
@@ -138,17 +221,75 @@ function monthBounds(monthKey: string) {
   return { start, end }
 }
 
+export async function loadStockCustomers(): Promise<StockCustomerOption[]> {
+  const records = await pb.collection('customers').getFullList({ sort: 'company_name,name' })
+  return (records as PBRecord[]).map(mapCustomer)
+}
+
+export async function ensureGeneralCustomer(): Promise<StockCustomerOption> {
+  const existing = await pb
+    .collection('customers')
+    .getFirstListItem('name = "General" || company_name = "General"')
+    .catch(() => null)
+  const payload = {
+    company_name: GENERAL_CUSTOMER_NAME,
+    name: GENERAL_CUSTOMER_NAME,
+    active: true,
+    opening_balance: 0,
+    opening_balance_date: '',
+    phone: '',
+    gstin: '',
+    address: '',
+    credit_limit: 0,
+    note: 'Regular Stock',
+  }
+  if (existing) {
+    const updated = await pb.collection('customers').update(existing.id, payload)
+    return mapCustomer(updated as PBRecord)
+  }
+  const created = await pb.collection('customers').create(payload)
+  return mapCustomer(created as PBRecord)
+}
+
+export async function loadStockOpenings(): Promise<StockOpeningRecord[]> {
+  const records = await pb.collection('stock_openings').getFullList({ sort: 'item_name,customer_name', expand: 'item,customer' })
+  return (records as PBRecord[]).map(mapStockOpening)
+}
+
+export async function saveStockOpening(payload: { itemId: string; itemName: string; customerId: string; customerName: string; date: string; qty: number; note: string }) {
+  await runDataOperation('save-stock-opening', async () => {
+    await assertGasStockItem(payload.itemId)
+    const existing = await pb
+      .collection('stock_openings')
+      .getFirstListItem(`item = "${payload.itemId}" && customer = "${payload.customerId}"`)
+      .catch(() => null)
+    const writePayload = {
+      item: payload.itemId,
+      item_name: payload.itemName.trim(),
+      customer: payload.customerId,
+      customer_name: payload.customerName.trim(),
+      date: payload.date,
+      qty: payload.qty,
+      note: payload.note.trim(),
+    }
+    if (existing) await pb.collection('stock_openings').update(existing.id, writePayload)
+    else await pb.collection('stock_openings').create(writePayload)
+  })
+}
+
 export async function loadStockIn(): Promise<StockInRecord[]> {
-  const records = await pb.collection('stock_in').getFullList({ sort: '-date', expand: 'item' })
+  const records = await pb.collection('stock_in').getFullList({ sort: '-date', expand: 'item,customer' })
   return (records as PBRecord[]).map(mapStockIn)
 }
 
-export async function saveStockIn(payload: { itemId: string; itemName: string; date: string; qty: number; note: string }) {
+export async function saveStockIn(payload: { itemId: string; itemName: string; customerId: string; customerName: string; date: string; qty: number; note: string }) {
   await runDataOperation('save-stock-in', async () => {
     await assertGasStockItem(payload.itemId)
     await pb.collection('stock_in').create({
       item: payload.itemId,
       item_name: payload.itemName.trim(),
+      customer: payload.customerId,
+      customer_name: payload.customerName.trim(),
       date: payload.date,
       qty: payload.qty,
       note: payload.note.trim(),
@@ -162,12 +303,14 @@ export async function deleteStockIn(id: string) {
   })
 }
 
-export async function updateStockIn(id: string, payload: { itemId: string; itemName: string; date: string; qty: number; note: string }) {
+export async function updateStockIn(id: string, payload: { itemId: string; itemName: string; customerId: string; customerName: string; date: string; qty: number; note: string }) {
   await runDataOperation('update-stock-in', async () => {
     await assertGasStockItem(payload.itemId)
     await pb.collection('stock_in').update(id, {
       item: payload.itemId,
       item_name: payload.itemName.trim(),
+      customer: payload.customerId,
+      customer_name: payload.customerName.trim(),
       date: payload.date,
       qty: payload.qty,
       note: payload.note.trim(),
@@ -176,16 +319,18 @@ export async function updateStockIn(id: string, payload: { itemId: string; itemN
 }
 
 export async function loadStockAdjustments(): Promise<StockAdjustmentRecord[]> {
-  const records = await pb.collection('stock_adjustments').getFullList({ sort: '-date', expand: 'item' })
+  const records = await pb.collection('stock_adjustments').getFullList({ sort: '-date', expand: 'item,customer' })
   return (records as PBRecord[]).map(mapStockAdjustment)
 }
 
-export async function saveStockAdjustment(payload: { itemId: string; itemName: string; date: string; qty: number; note: string }) {
+export async function saveStockAdjustment(payload: { itemId: string; itemName: string; customerId: string; customerName: string; date: string; qty: number; note: string }) {
   await runDataOperation('save-stock-adjustment', async () => {
     await assertGasStockItem(payload.itemId)
     await pb.collection('stock_adjustments').create({
       item: payload.itemId,
       item_name: payload.itemName.trim(),
+      customer: payload.customerId,
+      customer_name: payload.customerName.trim(),
       date: payload.date,
       qty: payload.qty,
       note: payload.note.trim(),
@@ -199,113 +344,153 @@ export async function deleteStockAdjustment(id: string) {
   })
 }
 
-export async function loadCurrentStock(): Promise<CurrentStockRecord[]> {
-  const [items, stockInRaw, adjustmentsRaw, billItemsRaw, billsRaw] = await Promise.all([
-    loadItems(),
-    pb.collection('stock_in').getFullList(),
-    pb.collection('stock_adjustments').getFullList(),
-    pb.collection('bill_items').getFullList(),
-    pb.collection('bills').getFullList(),
-  ])
-
-  const monthKey = currentMonthKey()
-  const billDateById = new Map<string, string>()
-  for (const bill of billsRaw as PBRecord[]) {
-    billDateById.set(bill.id, datePart(bill.date))
-  }
-
-  const stockInRows = stockInRaw as PBRecord[]
-  const adjustmentRows = adjustmentsRaw as PBRecord[]
-  const billItemRows = billItemsRaw as PBRecord[]
-
-  return items.filter(isGasStockItem).map((item) => {
-    const itemId = item.id
-    const openingDate = item.openingStockDate
-    const totalIn = stockInRows
-      .filter((row) => rowMatchesItem(row, itemId, item.name) && isOnOrAfterOpening(datePart(row.date), openingDate))
-      .reduce((sum, row) => sum + num(row.qty), 0)
-    const stockInThisMonth = stockInRows
-      .filter((row) => rowMatchesItem(row, itemId, item.name) && isOnOrAfterOpening(datePart(row.date), openingDate) && datePart(row.date).slice(0, 7) === monthKey)
-      .reduce((sum, row) => sum + num(row.qty), 0)
-    const totalAdjustment = adjustmentRows
-      .filter((row) => rowMatchesItem(row, itemId, item.name) && isOnOrAfterOpening(datePart(row.date), openingDate))
-      .reduce((sum, row) => sum + num(row.qty), 0)
-    const adjustmentThisMonth = adjustmentRows
-      .filter((row) => rowMatchesItem(row, itemId, item.name) && isOnOrAfterOpening(datePart(row.date), openingDate) && datePart(row.date).slice(0, 7) === monthKey)
-      .reduce((sum, row) => sum + num(row.qty), 0)
-
-    let totalOut = 0
-    let soldThisMonth = 0
-    for (const row of billItemRows) {
-      if (!rowMatchesItem(row, itemId, item.name)) continue
-      const billDate = billDateById.get(String(row.bill ?? '')) ?? ''
-      if (!isOnOrAfterOpening(billDate, openingDate)) continue
-      const outQty = billItemOutQty(row, item.type, item.bagWeight)
-      totalOut += outQty
-      if (billDate.slice(0, 7) === monthKey) soldThisMonth += outQty
-    }
-
-    const openingStock = item.openingStock
-    return {
-      id: item.id,
-      name: item.name,
-      type: item.type,
-      unit: item.unit,
-      bagWeight: item.bagWeight,
-      openingStock,
-      openingStockDate: item.openingStockDate,
-      totalIn,
-      totalAdjustment,
-      totalOut,
-      currentStock: openingStock + totalIn + totalAdjustment - totalOut,
-      stockInThisMonth,
-      adjustmentThisMonth,
-      soldThisMonth,
-    }
-  })
+type StockData = {
+  items: ItemRecord[]
+  customers: StockCustomerOption[]
+  openings: PBRecord[]
+  stockInRows: PBRecord[]
+  adjustmentRows: PBRecord[]
+  billItemRows: PBRecord[]
+  billById: Map<string, PBRecord>
 }
 
-export async function loadStockLedger(itemId: string): Promise<StockLedgerRow[]> {
-  if (!itemId) return []
-  const [items, stockInRaw, adjustmentsRaw, billItemsRaw, billsRaw] = await Promise.all([
+async function loadStockData(): Promise<StockData> {
+  const [items, customers, openingsRaw, stockInRaw, adjustmentsRaw, billItemsRaw, billsRaw] = await Promise.all([
     loadItems(),
+    loadStockCustomers(),
+    pb.collection('stock_openings').getFullList(),
     pb.collection('stock_in').getFullList(),
     pb.collection('stock_adjustments').getFullList(),
     pb.collection('bill_items').getFullList(),
     pb.collection('bills').getFullList(),
   ])
-  const item = items.find((row) => row.id === itemId)
-  if (!item || !isGasStockItem(item)) return []
-
-  const billDateById = new Map<string, { date: string; ref: string }>()
-  for (const bill of billsRaw as PBRecord[]) {
-    billDateById.set(bill.id, {
-      date: datePart(bill.date),
-      ref: `${num(bill.book_no)}/${num(bill.bill_no)}`,
-    })
+  return {
+    items: items.filter(isGasStockItem),
+    customers,
+    openings: openingsRaw as PBRecord[],
+    stockInRows: stockInRaw as PBRecord[],
+    adjustmentRows: adjustmentsRaw as PBRecord[],
+    billItemRows: billItemsRaw as PBRecord[],
+    billById: new Map((billsRaw as PBRecord[]).map((bill) => [bill.id, bill])),
   }
+}
+
+function collectBucketKeys(data: StockData) {
+  const keys = new Set<string>()
+  for (const row of data.openings) if (row.item && row.customer) keys.add(bucketKey(String(row.item), String(row.customer)))
+  for (const row of data.stockInRows) if (row.item && row.customer) keys.add(bucketKey(String(row.item), String(row.customer)))
+  for (const row of data.adjustmentRows) if (row.item && row.customer) keys.add(bucketKey(String(row.item), String(row.customer)))
+  for (const row of data.billItemRows) {
+    const bill = data.billById.get(String(row.bill ?? ''))
+    if (row.item && bill?.customer) keys.add(bucketKey(String(row.item), String(bill.customer)))
+  }
+  return keys
+}
+
+function bucketContext(data: StockData, key: string) {
+  const [itemId, customerId] = key.split('::')
+  const item = data.items.find((row) => row.id === itemId)
+  const customer = data.customers.find((row) => row.id === customerId)
+  if (!item || !customer) return null
+  const opening = data.openings.find((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName))
+  const openingDate = datePart(opening?.date)
+  const openingStock = num(opening?.qty)
+  return { item, customer, opening, openingDate, openingStock }
+}
+
+export async function loadCurrentStock(): Promise<CurrentStockRecord[]> {
+  const data = await loadStockData()
+  const monthKey = currentMonthKey()
+  const keys = collectBucketKeys(data)
+
+  return Array.from(keys)
+    .map((key) => {
+      const context = bucketContext(data, key)
+      if (!context) return null
+      const { item, customer, openingDate, openingStock } = context
+      const totalIn = data.stockInRows
+        .filter((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName) && isOnOrAfterOpening(datePart(row.date), openingDate))
+        .reduce((sum, row) => sum + num(row.qty), 0)
+      const stockInThisMonth = data.stockInRows
+        .filter((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName) && isOnOrAfterOpening(datePart(row.date), openingDate) && datePart(row.date).slice(0, 7) === monthKey)
+        .reduce((sum, row) => sum + num(row.qty), 0)
+      const totalAdjustment = data.adjustmentRows
+        .filter((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName) && isOnOrAfterOpening(datePart(row.date), openingDate))
+        .reduce((sum, row) => sum + num(row.qty), 0)
+      const adjustmentThisMonth = data.adjustmentRows
+        .filter((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName) && isOnOrAfterOpening(datePart(row.date), openingDate) && datePart(row.date).slice(0, 7) === monthKey)
+        .reduce((sum, row) => sum + num(row.qty), 0)
+
+      let totalOut = 0
+      let soldThisMonth = 0
+      for (const row of data.billItemRows) {
+        if (!rowMatchesItem(row, item.id, item.name)) continue
+        const bill = data.billById.get(String(row.bill ?? ''))
+        if (!bill || String(bill.customer ?? '') !== customer.id) continue
+        const billDate = datePart(bill.date)
+        if (!isOnOrAfterOpening(billDate, openingDate)) continue
+        const outQty = billItemOutQty(row, item.type, item.bagWeight)
+        totalOut += outQty
+        if (billDate.slice(0, 7) === monthKey) soldThisMonth += outQty
+      }
+
+      return {
+        id: key,
+        itemId: item.id,
+        itemName: item.name,
+        customerId: customer.id,
+        customerName: customer.name,
+        name: item.name,
+        type: item.type,
+        unit: item.unit,
+        bagWeight: item.bagWeight,
+        openingStock,
+        openingStockDate: openingDate,
+        totalIn,
+        totalAdjustment,
+        totalOut,
+        currentStock: openingStock + totalIn + totalAdjustment - totalOut,
+        stockInThisMonth,
+        adjustmentThisMonth,
+        soldThisMonth,
+      }
+    })
+    .filter((row): row is CurrentStockRecord => row !== null)
+    .sort((a, b) => a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName))
+}
+
+export async function loadStockLedger(itemId: string, customerId: string): Promise<StockLedgerRow[]> {
+  if (!itemId || !customerId) return []
+  const data = await loadStockData()
+  const context = bucketContext(data, bucketKey(itemId, customerId))
+  if (!context) return []
+  const { item, customer, opening, openingDate, openingStock } = context
 
   const movements: Array<Omit<StockLedgerRow, 'balance'>> = [
     {
-      id: `opening-${item.id}`,
-      date: item.openingStockDate,
+      id: `opening-${item.id}-${customer.id}`,
+      date: openingDate,
       itemId: item.id,
       itemName: item.name,
+      customerId: customer.id,
+      customerName: customer.name,
       type: 'Opening',
-      inQty: item.openingStock,
+      inQty: openingStock,
       outQty: 0,
-      note: item.openingStockDate ? `Opening stock as on ${item.openingStockDate}` : 'Opening stock',
+      note: String(opening?.note ?? '') || (openingDate ? `Opening stock as on ${openingDate}` : 'Opening stock'),
     },
   ]
 
-  for (const row of stockInRaw as PBRecord[]) {
-    if (!rowMatchesItem(row, item.id, item.name)) continue
-    if (!isOnOrAfterOpening(datePart(row.date), item.openingStockDate)) continue
+  for (const row of data.stockInRows) {
+    if (!rowMatchesItem(row, item.id, item.name) || !rowMatchesCustomer(row, customer.id, customer.customerName)) continue
+    if (!isOnOrAfterOpening(datePart(row.date), openingDate)) continue
     movements.push({
       id: `in-${row.id}`,
       date: datePart(row.date),
       itemId: item.id,
       itemName: item.name,
+      customerId: customer.id,
+      customerName: customer.name,
       type: 'Stock In',
       inQty: num(row.qty),
       outQty: 0,
@@ -313,15 +498,17 @@ export async function loadStockLedger(itemId: string): Promise<StockLedgerRow[]>
     })
   }
 
-  for (const row of adjustmentsRaw as PBRecord[]) {
-    if (!rowMatchesItem(row, item.id, item.name)) continue
-    if (!isOnOrAfterOpening(datePart(row.date), item.openingStockDate)) continue
+  for (const row of data.adjustmentRows) {
+    if (!rowMatchesItem(row, item.id, item.name) || !rowMatchesCustomer(row, customer.id, customer.customerName)) continue
+    if (!isOnOrAfterOpening(datePart(row.date), openingDate)) continue
     const qty = num(row.qty)
     movements.push({
       id: `adj-${row.id}`,
       date: datePart(row.date),
       itemId: item.id,
       itemName: item.name,
+      customerId: customer.id,
+      customerName: customer.name,
       type: 'Adjustment',
       inQty: qty > 0 ? qty : 0,
       outQty: qty < 0 ? Math.abs(qty) : 0,
@@ -329,19 +516,23 @@ export async function loadStockLedger(itemId: string): Promise<StockLedgerRow[]>
     })
   }
 
-  for (const row of billItemsRaw as PBRecord[]) {
+  for (const row of data.billItemRows) {
     if (!rowMatchesItem(row, item.id, item.name)) continue
-    const bill = billDateById.get(String(row.bill ?? ''))
-    if (!isOnOrAfterOpening(bill?.date ?? '', item.openingStockDate)) continue
+    const bill = data.billById.get(String(row.bill ?? ''))
+    if (!bill || String(bill.customer ?? '') !== customer.id) continue
+    const billDate = datePart(bill.date)
+    if (!isOnOrAfterOpening(billDate, openingDate)) continue
     movements.push({
       id: `sold-${row.id}`,
-      date: bill?.date ?? '',
+      date: billDate,
       itemId: item.id,
       itemName: item.name,
+      customerId: customer.id,
+      customerName: customer.name,
       type: 'Sold',
       inQty: 0,
       outQty: billItemOutQty(row, item.type, item.bagWeight),
-      note: bill ? `Bill ${bill.ref}` : 'Bill',
+      note: `Bill ${num(bill.book_no)}/${num(bill.bill_no)}`,
     })
   }
 
@@ -361,28 +552,23 @@ export async function loadStockLedger(itemId: string): Promise<StockLedgerRow[]>
 
 export async function loadMonthlyStockReport(monthKey: string): Promise<MonthlyStockReportRow[]> {
   const { start, end } = monthBounds(monthKey)
-  const [items, stockInRaw, adjustmentsRaw, billItemsRaw, billsRaw] = await Promise.all([
-    loadItems(),
-    pb.collection('stock_in').getFullList(),
-    pb.collection('stock_adjustments').getFullList(),
-    pb.collection('bill_items').getFullList(),
-    pb.collection('bills').getFullList(),
-  ])
+  const data = await loadStockData()
+  const keys = collectBucketKeys(data)
 
-  const billDateById = new Map<string, string>()
-  for (const bill of billsRaw as PBRecord[]) {
-    billDateById.set(bill.id, datePart(bill.date))
-  }
+  return Array.from(keys)
+    .map((key) => {
+      const context = bucketContext(data, key)
+      if (!context) return null
+      const { item, customer, openingDate, openingStock } = context
+      const stockInRows = data.stockInRows.filter((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName))
+      const adjustmentRows = data.adjustmentRows.filter((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName))
+      const billItemRows = data.billItemRows.filter((row) => {
+        if (!rowMatchesItem(row, item.id, item.name)) return false
+        const bill = data.billById.get(String(row.bill ?? ''))
+        return String(bill?.customer ?? '') === customer.id
+      })
 
-  return items
-    .filter(isGasStockItem)
-    .map((item) => {
-      const openingDate = item.openingStockDate
-      const stockInRows = (stockInRaw as PBRecord[]).filter((row) => rowMatchesItem(row, item.id, item.name))
-      const adjustmentRows = (adjustmentsRaw as PBRecord[]).filter((row) => rowMatchesItem(row, item.id, item.name))
-      const billItemRows = (billItemsRaw as PBRecord[]).filter((row) => rowMatchesItem(row, item.id, item.name))
-
-      const baseline = !openingDate || openingDate <= end ? item.openingStock : 0
+      const baseline = !openingDate || openingDate <= end ? openingStock : 0
       const priorIn = stockInRows
         .filter((row) => isOnOrAfterOpening(datePart(row.date), openingDate) && isBefore(datePart(row.date), start))
         .reduce((sum, row) => sum + num(row.qty), 0)
@@ -391,7 +577,7 @@ export async function loadMonthlyStockReport(monthKey: string): Promise<MonthlyS
         .reduce((sum, row) => sum + num(row.qty), 0)
       const priorSold = billItemRows
         .filter((row) => {
-          const billDate = billDateById.get(String(row.bill ?? '')) ?? ''
+          const billDate = datePart(data.billById.get(String(row.bill ?? ''))?.date)
           return isOnOrAfterOpening(billDate, openingDate) && isBefore(billDate, start)
         })
         .reduce((sum, row) => sum + billItemOutQty(row, item.type, item.bagWeight), 0)
@@ -405,16 +591,21 @@ export async function loadMonthlyStockReport(monthKey: string): Promise<MonthlyS
         .reduce((sum, row) => sum + num(row.qty), 0)
       const sold = billItemRows
         .filter((row) => {
-          const billDate = billDateById.get(String(row.bill ?? '')) ?? ''
+          const billDate = datePart(data.billById.get(String(row.bill ?? ''))?.date)
           return isOnOrAfterOpening(billDate, openingDate) && isInRange(billDate, start, end)
         })
         .reduce((sum, row) => sum + billItemOutQty(row, item.type, item.bagWeight), 0)
 
       return {
-        id: item.id,
+        id: key,
+        itemId: item.id,
+        itemName: item.name,
+        customerId: customer.id,
+        customerName: customer.name,
         name: item.name,
         type: item.type,
         unit: item.unit,
+        bagWeight: item.bagWeight,
         opening,
         stockIn,
         sold,
@@ -422,6 +613,8 @@ export async function loadMonthlyStockReport(monthKey: string): Promise<MonthlyS
         closing: opening + stockIn + adjustment - sold,
       }
     })
+    .filter((row): row is MonthlyStockReportRow => row !== null)
+    .sort((a, b) => a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName))
 }
 
 async function assertGasStockItem(itemId: string) {
