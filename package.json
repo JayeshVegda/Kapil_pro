@@ -4,17 +4,17 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "PATH=/home/ubuntu/.nvm/versions/node/v24.15.0/bin:$PATH vite",
     "db:start": "docker start kapil-billing-pocketbase-local || docker run -d --name kapil-billing-pocketbase-local -p 8091:8090 -v \"$PWD/pb_data:/pb_data\" ghcr.io/muchobien/pocketbase:latest serve --http=0.0.0.0:8090 --dir=/pb_data",
-    "db:seed:large": "node scripts/seed-large-demo.mjs",
+    "db:seed:large": "PATH=/home/ubuntu/.nvm/versions/node/v24.15.0/bin:$PATH node scripts/seed-large-demo.mjs",
     "db:logs": "docker logs --tail=100 kapil-billing-pocketbase-local",
-    "router:generate": "npx --no-install @tanstack/router-cli generate",
-    "typecheck": "npm run router:generate && tsc -b --pretty false",
-    "build": "npm run router:generate && tsc -b && vite build",
-    "test": "vitest run",
+    "router:generate": "PATH=/home/ubuntu/.nvm/versions/node/v24.15.0/bin:$PATH npx --no-install @tanstack/router-cli generate",
+    "typecheck": "npm run router:generate && PATH=/home/ubuntu/.nvm/versions/node/v24.15.0/bin:$PATH tsc -b --pretty false",
+    "build": "npm run router:generate && PATH=/home/ubuntu/.nvm/versions/node/v24.15.0/bin:$PATH tsc -b && PATH=/home/ubuntu/.nvm/versions/node/v24.15.0/bin:$PATH vite build",
+    "test": "PATH=/home/ubuntu/.nvm/versions/node/v24.15.0/bin:$PATH vitest run",
     "verify": "npm run typecheck && npm run test && npm run build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "lint": "PATH=/home/ubuntu/.nvm/versions/node/v24.15.0/bin:$PATH eslint .",
+    "preview": "PATH=/home/ubuntu/.nvm/versions/node/v24.15.0/bin:$PATH vite preview"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",

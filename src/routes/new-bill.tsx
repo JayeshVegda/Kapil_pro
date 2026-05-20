@@ -31,13 +31,14 @@ export const Route = createFileRoute('/new-bill')({
 
 type CustomerOption = { id: string; name: string; companyName: string; customerName: string }
 type ItemOption = { id: string; name: string; defaultRate: number; type: string; unit: string; bagWeight: number; openingStock: number }
-type BillItemRow = { itemId: string; itemName: string; qty: number; rate: number; manualRateEdited: boolean }
+type BillItemRow = { itemId: string; itemName: string; qty: number; defaultRate: number; rate: number; manualRateEdited: boolean }
 type GstMode = 'none' | 'percent18' | 'manual'
 type CreditAdjustment = { date: string; amount: number }
 type AutoBalanceContext = { previousBalanceDate: string; previousBalanceAmount: number; credits: CreditAdjustment[] }
 type PBRecord = Record<string, unknown> & { id: string }
 const num = (v: unknown) => (Number.isFinite(Number(v ?? 0)) ? Number(v) : 0)
 const datePart = (v: unknown) => String(v ?? '').slice(0, 10)
+const nameKey = (value: unknown) => String(value ?? '').trim().toLowerCase()
 const toTs = (v: unknown) => {
   const ts = new Date(String(v ?? '')).getTime()
   return Number.isFinite(ts) ? ts : 0
@@ -76,7 +77,7 @@ function NewBillPage() {
   const gstRate = gstMode === 'percent18' ? 18 : 0
   const [lrInput, setLrInput] = useState('')
   const [lrList, setLrList] = useState<string[]>([])
-  const [rows, setRows] = useState<BillItemRow[]>([{ itemId: '', itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
+  const [rows, setRows] = useState<BillItemRow[]>([{ itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
   const [statusText, setStatusText] = useState('')
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
@@ -118,7 +119,7 @@ function NewBillPage() {
       }))
     },
   })
-  const currentStockQuery = useQuery({ queryKey: ['current-stock'], queryFn: loadCurrentStock })
+  const currentStockQuery = useQuery({ queryKey: ['current-stock'], queryFn: loadCurrentStock, refetchOnMount: 'always' })
 
   const latestBillNoQuery = useQuery({
     queryKey: ['latest-bill-no'],
@@ -280,10 +281,14 @@ function NewBillPage() {
   const selectedCustomerName = (customersQuery.data ?? []).find((c) => c.id === customerId)?.companyName ?? 'Unknown'
   const validRows = rows.filter((r) => r.itemName.trim() && r.qty > 0 && r.rate > 0)
   const stockWarnings = useMemo(() => {
+    if (!currentStockQuery.isSuccess || currentStockQuery.isFetching) return []
     const stockRows = currentStockQuery.data ?? []
     return validRows
       .map((row) => {
-        const stock = stockRows.find((entry) => entry.customerId === customerId && (entry.itemId === row.itemId || entry.itemName === row.itemName))
+        const matchesItem = (entry: (typeof stockRows)[number]) => entry.itemId === row.itemId || entry.itemName === row.itemName
+        const buyerStock = stockRows.find((entry) => entry.customerId === customerId && matchesItem(entry))
+        const generalStock = stockRows.find((entry) => nameKey(entry.customerName) === 'general' && matchesItem(entry))
+        const stock = buyerStock ?? generalStock
         const item = (itemsQuery.data ?? []).find((entry) => entry.id === row.itemId || entry.name === row.itemName)
         if (!stock && String(item?.type ?? '').toLowerCase() !== 'gas') return null
         const available = stock?.currentStock ?? 0
@@ -291,7 +296,7 @@ function NewBillPage() {
         if (after >= 0) return null
         return {
           itemName: row.itemName,
-          customerName: stock?.customerName ?? selectedCustomerName,
+          customerName: stock?.customerName ?? 'General',
           unit: stock?.unit || item?.unit || 'kg',
           type: stock?.type || item?.type || '',
           bagWeight: stock?.bagWeight || item?.bagWeight || 50,
@@ -301,7 +306,7 @@ function NewBillPage() {
         }
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-  }, [currentStockQuery.data, customerId, itemsQuery.data, selectedCustomerName, validRows])
+  }, [currentStockQuery.data, currentStockQuery.isFetching, currentStockQuery.isSuccess, customerId, itemsQuery.data, validRows])
   const previousBalanceDate = autoBalanceQuery.data?.previousBalanceDate ?? date
   const previousBalanceAmount = autoBalanceQuery.data?.previousBalanceAmount ?? 0
   const validCredits = (autoBalanceQuery.data?.credits ?? []).filter((entry) => entry.amount > 0)
@@ -347,7 +352,7 @@ function NewBillPage() {
     setTransport(0)
     setGstMode('none')
     setManualGstAmount(0)
-    setRows([{ itemId: '', itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
+    setRows([{ itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
     setLrInput('')
     setLrList([])
     setBillNo((prev) => prev + 1)
@@ -365,7 +370,7 @@ function NewBillPage() {
 
 
   function addItemRow() {
-    setRows((prev) => [...prev, { itemId: '', itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
+    setRows((prev) => [...prev, { itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
   }
 
   function removeItemRow(index: number) {
@@ -376,10 +381,22 @@ function NewBillPage() {
     setRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)))
   }
 
-  const getAutoRate = useCallback((item: ItemOption, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
+  const getGstRateDiscount = useCallback((nextGstMode: GstMode = gstMode) => {
+    return nextGstMode === 'percent18' ? GST_RATE_DISCOUNT : 0
+  }, [gstMode])
+
+  const getAutoRateFromDefault = useCallback((defaultRate: number, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
     const gstDiscount = nextGstMode === 'percent18' ? GST_RATE_DISCOUNT : 0
-    return Math.max(0, item.defaultRate + nextMktRate - gstDiscount)
+    return Math.max(0, defaultRate + nextMktRate - gstDiscount)
   }, [mktRate, gstMode])
+
+  const getDefaultRateFromFinal = useCallback((finalRate: number, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
+    return Math.max(0, finalRate - nextMktRate + getGstRateDiscount(nextGstMode))
+  }, [getGstRateDiscount, mktRate, gstMode])
+
+  const getAutoRate = useCallback((item: ItemOption, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
+    return getAutoRateFromDefault(item.defaultRate, nextMktRate, nextGstMode)
+  }, [getAutoRateFromDefault, mktRate, gstMode])
 
   function updateGstMode(nextMode: GstMode) {
     setGstMode(nextMode)
@@ -391,7 +408,8 @@ function NewBillPage() {
         if (!row.itemName || row.manualRateEdited) return row
         const selected = items.find((it) => it.name === row.itemName)
         if (!selected) return row
-        return { ...row, itemId: selected.id, rate: getAutoRate(selected, mktRate, nextMode) }
+        const defaultRate = row.defaultRate || selected.defaultRate
+        return { ...row, itemId: selected.id, defaultRate, rate: getAutoRateFromDefault(defaultRate, mktRate, nextMode) }
       }),
     )
   }
@@ -438,22 +456,24 @@ function NewBillPage() {
       return
     }
     const command = parsed.command
+    const nextGstMode = command.gstMode === 'manual' ? 'manual' : command.gstRate === 18 ? 'percent18' : 'none'
     setCustomerId(command.customer.id)
     setDate(command.date)
     setTransport(command.transport)
-    setGstMode(command.gstRate === 18 ? 'percent18' : 'none')
-    setManualGstAmount(0)
-    setRows([
-      {
-        itemName: command.item.name,
-        itemId: command.item.id,
-        qty: command.qty,
-        rate: command.rate,
-        manualRateEdited: command.manualRateEdited,
-      },
-    ])
+    setGstMode(nextGstMode)
+    setManualGstAmount(command.gstMode === 'manual' ? command.gstAmount : 0)
+    setRows(
+      command.items.map((line) => ({
+        itemName: line.item.name,
+        itemId: line.item.id,
+        qty: line.qty,
+        defaultRate: line.defaultRate || getDefaultRateFromFinal(line.rate, mktRate, nextGstMode),
+        rate: line.rate,
+        manualRateEdited: line.manualRateEdited,
+      })),
+    )
     setIsQuickEntryOpen(false)
-    setStatusText(`Command ready: ${command.customer.name} | ${command.item.name} | ${command.displayQty}`)
+    setStatusText(`Command ready: ${command.customer.name} | ${command.items.length} item${command.items.length === 1 ? '' : 's'} | ${command.date}`)
     setPendingCommandPreview(true)
   }
 
@@ -564,10 +584,11 @@ function NewBillPage() {
         if (!row.itemName || row.manualRateEdited) return row
         const selected = items.find((it) => it.id === row.itemId || it.name === row.itemName)
         if (!selected) return row
-        return { ...row, itemId: selected.id, rate: getAutoRate(selected) }
+        const defaultRate = row.defaultRate || selected.defaultRate
+        return { ...row, itemId: selected.id, defaultRate, rate: getAutoRateFromDefault(defaultRate) }
       }),
     )
-  }, [mktRate, itemsQuery.data, gstMode, getAutoRate])
+  }, [mktRate, itemsQuery.data, gstMode, getAutoRateFromDefault])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -743,18 +764,20 @@ function NewBillPage() {
           </button>
         </div>
         <div className="overflow-x-auto no-scrollbar">
-          <table className="w-full min-w-[760px] table-fixed border-separate border-spacing-x-2 border-spacing-y-0">
+          <table className="w-full min-w-[900px] table-fixed border-separate border-spacing-x-2 border-spacing-y-0">
             <colgroup>
-              <col className="w-[44%]" />
+              <col className="w-[34%]" />
+              <col className="w-[12%]" />
               <col className="w-[16%]" />
               <col className="w-[16%]" />
-              <col className="w-[24%]" />
+              <col className="w-[22%]" />
               <col className="w-[72px]" />
             </colgroup>
             <thead>
               <tr className="bg-slate-50">
                 <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Item</th>
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Qty</th>
+                <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Default Rate</th>
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Rate</th>
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
                 <th className="px-3 py-2.5 text-center text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
@@ -774,12 +797,13 @@ function NewBillPage() {
                           const id = e.target.value
                           const selected = (itemsQuery.data ?? []).find((it) => it.id === id)
                           if (!selected) {
-                            updateRow(i, { itemId: '', itemName: '', rate: 0, manualRateEdited: false })
+                            updateRow(i, { itemId: '', itemName: '', defaultRate: 0, rate: 0, manualRateEdited: false })
                             return
                           }
                           updateRow(i, {
                             itemId: selected.id,
                             itemName: selected.name,
+                            defaultRate: selected.defaultRate,
                             rate: getAutoRate(selected),
                             manualRateEdited: false,
                           })
@@ -814,15 +838,40 @@ function NewBillPage() {
                         type="number"
                         min={0}
                         step="any"
+                        value={row.defaultRate || ''}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          if (v === '') {
+                            updateRow(i, { defaultRate: 0, rate: getAutoRateFromDefault(0), manualRateEdited: false })
+                            return
+                          }
+                          const n = Number(v)
+                          const defaultRate = Number.isFinite(n) ? n : 0
+                          updateRow(i, {
+                            defaultRate,
+                            rate: getAutoRateFromDefault(defaultRate),
+                            manualRateEdited: false,
+                          })
+                        }}
+                        placeholder="0"
+                      />
+                    </td>
+                    <td className="px-3 py-2.5 align-middle">
+                      <input
+                        className={`${inputClass} text-right tabular-nums`}
+                        type="number"
+                        min={0}
+                        step="any"
                         value={row.rate || ''}
                         onChange={(e) => {
                           const v = e.target.value
                           if (v === '') {
-                            updateRow(i, { rate: 0, manualRateEdited: true })
+                            updateRow(i, { rate: 0, defaultRate: 0, manualRateEdited: true })
                             return
                           }
                           const n = Number(v)
-                          updateRow(i, { rate: Number.isFinite(n) ? n : 0, manualRateEdited: true })
+                          const rate = Number.isFinite(n) ? n : 0
+                          updateRow(i, { rate, defaultRate: getDefaultRateFromFinal(rate), manualRateEdited: true })
                         }}
                         placeholder="0"
                       />

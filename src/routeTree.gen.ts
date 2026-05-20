@@ -21,6 +21,7 @@ import { Route as ItemsRouteImport } from './routes/items'
 import { Route as ExportReportsRouteImport } from './routes/export-reports'
 import { Route as DataHealthRouteImport } from './routes/data-health'
 import { Route as CustomersRouteImport } from './routes/customers'
+import { Route as ControlRoomRouteImport } from './routes/control-room'
 import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as BackupRouteImport } from './routes/backup'
 import { Route as IndexRouteImport } from './routes/index'
@@ -85,6 +86,11 @@ const CustomersRoute = CustomersRouteImport.update({
   path: '/customers',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ControlRoomRoute = ControlRoomRouteImport.update({
+  id: '/control-room',
+  path: '/control-room',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CalendarRoute = CalendarRouteImport.update({
   id: '/calendar',
   path: '/calendar',
@@ -105,6 +111,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
   '/calendar': typeof CalendarRoute
+  '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
   '/data-health': typeof DataHealthRoute
   '/export-reports': typeof ExportReportsRoute
@@ -122,6 +129,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
   '/calendar': typeof CalendarRoute
+  '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
   '/data-health': typeof DataHealthRoute
   '/export-reports': typeof ExportReportsRoute
@@ -140,6 +148,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
   '/calendar': typeof CalendarRoute
+  '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
   '/data-health': typeof DataHealthRoute
   '/export-reports': typeof ExportReportsRoute
@@ -159,6 +168,7 @@ export interface FileRouteTypes {
     | '/'
     | '/backup'
     | '/calendar'
+    | '/control-room'
     | '/customers'
     | '/data-health'
     | '/export-reports'
@@ -176,6 +186,7 @@ export interface FileRouteTypes {
     | '/'
     | '/backup'
     | '/calendar'
+    | '/control-room'
     | '/customers'
     | '/data-health'
     | '/export-reports'
@@ -193,6 +204,7 @@ export interface FileRouteTypes {
     | '/'
     | '/backup'
     | '/calendar'
+    | '/control-room'
     | '/customers'
     | '/data-health'
     | '/export-reports'
@@ -211,6 +223,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BackupRoute: typeof BackupRoute
   CalendarRoute: typeof CalendarRoute
+  ControlRoomRoute: typeof ControlRoomRoute
   CustomersRoute: typeof CustomersRoute
   DataHealthRoute: typeof DataHealthRoute
   ExportReportsRoute: typeof ExportReportsRoute
@@ -311,6 +324,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CustomersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/control-room': {
+      id: '/control-room'
+      path: '/control-room'
+      fullPath: '/control-room'
+      preLoaderRoute: typeof ControlRoomRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/calendar': {
       id: '/calendar'
       path: '/calendar'
@@ -339,6 +359,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BackupRoute: BackupRoute,
   CalendarRoute: CalendarRoute,
+  ControlRoomRoute: ControlRoomRoute,
   CustomersRoute: CustomersRoute,
   DataHealthRoute: DataHealthRoute,
   ExportReportsRoute: ExportReportsRoute,

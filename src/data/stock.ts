@@ -194,6 +194,28 @@ function rowMatchesCustomer(row: PBRecord, customerId: string, customerName: str
   return nameKey(row.customer_name) === nameKey(customerName)
 }
 
+function findGeneralCustomer(customers: StockCustomerOption[]) {
+  return customers.find((row) => nameKey(row.customerName) === nameKey(GENERAL_CUSTOMER_NAME) || nameKey(row.companyName) === nameKey(GENERAL_CUSTOMER_NAME))
+}
+
+function physicalBucketExists(data: StockData, item: ItemRecord, customer: StockCustomerOption) {
+  return (
+    data.openings.some((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName)) ||
+    data.stockInRows.some((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName)) ||
+    data.adjustmentRows.some((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName))
+  )
+}
+
+function billItemStockCustomer(data: StockData, row: PBRecord, bill: PBRecord) {
+  const item = data.items.find((entry) => rowMatchesItem(row, entry.id, entry.name))
+  if (!item) return null
+
+  const billCustomer = data.customers.find((entry) => entry.id === String(bill.customer ?? ''))
+  if (billCustomer && physicalBucketExists(data, item, billCustomer)) return billCustomer
+
+  return findGeneralCustomer(data.customers) ?? billCustomer ?? null
+}
+
 function billItemOutQty(row: PBRecord, _type: string, _bagWeight: number) {
   return num(row.qty)
 }
@@ -383,7 +405,10 @@ function collectBucketKeys(data: StockData) {
   for (const row of data.adjustmentRows) if (row.item && row.customer) keys.add(bucketKey(String(row.item), String(row.customer)))
   for (const row of data.billItemRows) {
     const bill = data.billById.get(String(row.bill ?? ''))
-    if (row.item && bill?.customer) keys.add(bucketKey(String(row.item), String(bill.customer)))
+    if (!bill) continue
+    const item = data.items.find((entry) => rowMatchesItem(row, entry.id, entry.name))
+    const stockCustomer = billItemStockCustomer(data, row, bill)
+    if (item && stockCustomer) keys.add(bucketKey(item.id, stockCustomer.id))
   }
   return keys
 }
@@ -427,7 +452,7 @@ export async function loadCurrentStock(): Promise<CurrentStockRecord[]> {
       for (const row of data.billItemRows) {
         if (!rowMatchesItem(row, item.id, item.name)) continue
         const bill = data.billById.get(String(row.bill ?? ''))
-        if (!bill || String(bill.customer ?? '') !== customer.id) continue
+        if (!bill || billItemStockCustomer(data, row, bill)?.id !== customer.id) continue
         const billDate = datePart(bill.date)
         if (!isOnOrAfterOpening(billDate, openingDate)) continue
         const outQty = billItemOutQty(row, item.type, item.bagWeight)
@@ -520,9 +545,12 @@ export async function loadStockLedger(itemId: string, customerId: string): Promi
   for (const row of data.billItemRows) {
     if (!rowMatchesItem(row, item.id, item.name)) continue
     const bill = data.billById.get(String(row.bill ?? ''))
-    if (!bill || String(bill.customer ?? '') !== customer.id) continue
+    if (!bill || billItemStockCustomer(data, row, bill)?.id !== customer.id) continue
     const billDate = datePart(bill.date)
     if (!isOnOrAfterOpening(billDate, openingDate)) continue
+    const billCustomer = data.customers.find((entry) => entry.id === String(bill.customer ?? ''))
+    const buyerName = billCustomer?.name || String(bill.customer_name ?? '').trim()
+    const noteSuffix = buyerName && buyerName !== customer.name ? ` - ${buyerName}` : ''
     movements.push({
       id: `sold-${row.id}`,
       date: billDate,
@@ -533,7 +561,7 @@ export async function loadStockLedger(itemId: string, customerId: string): Promi
       type: 'Sold',
       inQty: 0,
       outQty: billItemOutQty(row, item.type, item.bagWeight),
-      note: `Bill ${num(bill.book_no)}/${num(bill.bill_no)}`,
+      note: `Bill ${num(bill.book_no)}/${num(bill.bill_no)}${noteSuffix}`,
     })
   }
 
@@ -566,7 +594,7 @@ export async function loadMonthlyStockReport(monthKey: string): Promise<MonthlyS
       const billItemRows = data.billItemRows.filter((row) => {
         if (!rowMatchesItem(row, item.id, item.name)) return false
         const bill = data.billById.get(String(row.bill ?? ''))
-        return String(bill?.customer ?? '') === customer.id
+        return Boolean(bill && billItemStockCustomer(data, row, bill)?.id === customer.id)
       })
 
       const baseline = !openingDate || openingDate <= end ? openingStock : 0
