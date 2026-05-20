@@ -30,25 +30,33 @@ export function SearchableCombobox({
   const pickerRef = useRef<HTMLDivElement | null>(null)
   const listboxId = useMemo(() => `combobox-${Math.random().toString(36).slice(2)}`, [])
   const previousValueRef = useRef(value)
+  const previousSelectedNameRef = useRef('')
   const [query, setQuery] = useState('')
   const [isOpen, setIsOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
 
+  const selected = useMemo(() => options.find((option) => option.id === value), [options, value])
+  const selectedName = selected?.name ?? ''
   const matches = useMemo(
     () => filterRankedNameMatches(options, query, (option) => option.name).slice(0, maxResults),
     [options, query, maxResults],
   )
 
   useEffect(() => {
-    const selected = options.find((option) => option.id === value)
     const previousValue = previousValueRef.current
+    const previousSelectedName = previousSelectedNameRef.current
     previousValueRef.current = value
+    previousSelectedNameRef.current = selectedName
     if (!value && previousValue) {
-      setQuery('')
+      setQuery((current) => (current === previousSelectedName ? '' : current))
       return
     }
-    if (selected && query !== selected.name) setQuery(selected.name)
-  }, [options, query, value])
+    if (!selectedName) return
+    setQuery((current) => {
+      if (value !== previousValue || !current || current === previousSelectedName) return selectedName
+      return current
+    })
+  }, [selectedName, value])
 
   useEffect(() => {
     if (!isOpen) {
@@ -67,6 +75,8 @@ export function SearchableCombobox({
   }, [])
 
   function selectOption(nextId: string) {
+    const nextOption = options.find((option) => option.id === nextId)
+    if (nextOption) setQuery(nextOption.name)
     onChange(nextId)
     setIsOpen(false)
   }
@@ -77,7 +87,9 @@ export function SearchableCombobox({
         className={inputClassName}
         value={query}
         onChange={(event) => {
-          setQuery(event.target.value)
+          const nextQuery = event.target.value
+          setQuery(nextQuery)
+          if (value && nextQuery !== selectedName) onChange('')
           setIsOpen(true)
         }}
         onFocus={() => setIsOpen(true)}
