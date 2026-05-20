@@ -38,7 +38,6 @@ type AutoBalanceContext = { previousBalanceDate: string; previousBalanceAmount: 
 type PBRecord = Record<string, unknown> & { id: string }
 const num = (v: unknown) => (Number.isFinite(Number(v ?? 0)) ? Number(v) : 0)
 const datePart = (v: unknown) => String(v ?? '').slice(0, 10)
-const nameKey = (value: unknown) => String(value ?? '').trim().toLowerCase()
 const toTs = (v: unknown) => {
   const ts = new Date(String(v ?? '')).getTime()
   return Number.isFinite(ts) ? ts : 0
@@ -286,17 +285,15 @@ function NewBillPage() {
     return validRows
       .map((row) => {
         const matchesItem = (entry: (typeof stockRows)[number]) => entry.itemId === row.itemId || entry.itemName === row.itemName
-        const buyerStock = stockRows.find((entry) => entry.customerId === customerId && matchesItem(entry))
-        const generalStock = stockRows.find((entry) => nameKey(entry.customerName) === 'general' && matchesItem(entry))
-        const stock = buyerStock ?? generalStock
+        const stock = stockRows.find((entry) => entry.customerId === customerId && matchesItem(entry))
         const item = (itemsQuery.data ?? []).find((entry) => entry.id === row.itemId || entry.name === row.itemName)
-        if (!stock && String(item?.type ?? '').toLowerCase() !== 'gas') return null
+        if (!stock || String(item?.type ?? '').toLowerCase() !== 'gas') return null
         const available = stock?.currentStock ?? 0
         const after = available - row.qty
         if (after >= 0) return null
         return {
           itemName: row.itemName,
-          customerName: stock?.customerName ?? 'General',
+          customerName: stock.customerName || selectedCustomerName,
           unit: stock?.unit || item?.unit || 'kg',
           type: stock?.type || item?.type || '',
           bagWeight: stock?.bagWeight || item?.bagWeight || 50,

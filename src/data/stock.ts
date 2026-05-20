@@ -198,22 +198,12 @@ function findGeneralCustomer(customers: StockCustomerOption[]) {
   return customers.find((row) => nameKey(row.customerName) === nameKey(GENERAL_CUSTOMER_NAME) || nameKey(row.companyName) === nameKey(GENERAL_CUSTOMER_NAME))
 }
 
-function physicalBucketExists(data: StockData, item: ItemRecord, customer: StockCustomerOption) {
-  return (
-    data.openings.some((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName)) ||
-    data.stockInRows.some((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName)) ||
-    data.adjustmentRows.some((row) => rowMatchesItem(row, item.id, item.name) && rowMatchesCustomer(row, customer.id, customer.customerName))
-  )
-}
-
 function billItemStockCustomer(data: StockData, row: PBRecord, bill: PBRecord) {
   const item = data.items.find((entry) => rowMatchesItem(row, entry.id, entry.name))
   if (!item) return null
 
   const billCustomer = data.customers.find((entry) => entry.id === String(bill.customer ?? ''))
-  if (billCustomer && physicalBucketExists(data, item, billCustomer)) return billCustomer
-
-  return findGeneralCustomer(data.customers) ?? billCustomer ?? null
+  return billCustomer ?? findGeneralCustomer(data.customers) ?? null
 }
 
 function billItemOutQty(row: PBRecord, _type: string, _bagWeight: number) {
