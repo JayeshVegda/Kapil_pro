@@ -1,7 +1,7 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Download, Printer, Search, Share2 } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { Download, Edit3, Printer, Search, Share2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM } from '@/components/billing/bill-print-layout'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
@@ -18,6 +18,10 @@ import {
 import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/print-bill')({
+  validateSearch: (search: Record<string, unknown>) => ({
+    billId: typeof search.billId === 'string' ? search.billId : '',
+    billRef: typeof search.billRef === 'string' ? search.billRef : '',
+  }),
   component: PrintBillPage,
 })
 
@@ -57,6 +61,7 @@ const num = (value: unknown) => {
 const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
 
 function PrintBillPage() {
+  const routeSearch = Route.useSearch()
   const [search, setSearch] = useState('')
   const [selectedBillId, setSelectedBillId] = useState('')
   const [actionStatus, setActionStatus] = useState('')
@@ -154,8 +159,23 @@ function PrintBillPage() {
 
   const selectedBill = useMemo(() => {
     if (!selectedBillId) return null
-    return filteredBills.find((bill) => bill.id === selectedBillId) ?? null
-  }, [filteredBills, selectedBillId])
+    return (printQuery.data?.bills ?? []).find((bill) => bill.id === selectedBillId) ?? null
+  }, [printQuery.data?.bills, selectedBillId])
+
+  useEffect(() => {
+    if (!routeSearch.billId || selectedBillId === routeSearch.billId) return
+    setSelectedBillId(routeSearch.billId)
+  }, [routeSearch.billId, selectedBillId])
+
+  useEffect(() => {
+    if (!routeSearch.billRef) return
+    setSearch(routeSearch.billRef)
+    const match = (printQuery.data?.bills ?? []).find((bill) => {
+      const ref = `${bill.bookNo}/${bill.billNo}`
+      return ref === routeSearch.billRef || bill.billRef === routeSearch.billRef
+    })
+    if (match) setSelectedBillId(match.id)
+  }, [routeSearch.billRef, printQuery.data?.bills])
 
   const preview = useMemo(() => {
     if (!selectedBill || !printQuery.data) return null
@@ -348,6 +368,14 @@ function PrintBillPage() {
                     <Printer size={14} />
                     Print
                   </button>
+                  <Link
+                    to="/transactions"
+                    search={{ focusKind: 'bill', focusId: preview.selectedBill.id }}
+                    className="inline-flex items-center gap-1 rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100"
+                  >
+                    <Edit3 size={14} />
+                    Edit
+                  </Link>
                   <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50" onClick={() => void exportAsJpg()}>
                     <Download size={14} />
                     JPG

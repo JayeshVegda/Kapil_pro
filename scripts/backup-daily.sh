@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_PATH="/home/ubuntu/Kapil_pro"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_PATH="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ENV_FILE="${PROJECT_PATH}/.env.production"
+
+if [ -f "${ENV_FILE}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  set +a
+fi
+
 PB_DATA_PATH="${PROJECT_PATH}/pb_data"
 LOG_DIR="${PROJECT_PATH}/logs"
 LOG_FILE="${LOG_DIR}/backup.log"
-RCLONE_REMOTE="gdrive"
+RCLONE_REMOTE="b2crypt"
 RCLONE_FOLDER="KapilBackups"
 
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN before running backup-daily.sh}"
@@ -75,12 +85,12 @@ main() {
   local caption
   caption=$(
     cat <<EOF
-Kapil PB Daily Backup
-Host: ${HOSTNAME_SHORT}
-UTC: ${STAMP_UTC}
-File: kapil_pb_${DATE_UTC}.zip
-Size: ${pb_size}
-SHA256: ${pb_sha}
+🔒 BACKUP SUCCESSFUL
+Kapil Products · $(date -u +"%d %b %Y")
+
+🗄 Database     ${pb_size}
+⏱ Completed    $(TZ="Asia/Kolkata" date +"%I:%M %p") IST
+☁️ Cloud        Uploaded
 EOF
   )
 
@@ -92,24 +102,24 @@ EOF
     "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" >/dev/null
   log "Telegram upload completed"
 
-  log "Creating codebase zip for Google Drive: ${code_zip}"
+  log "Creating codebase zip for cloud storage: ${code_zip}"
   (
-    cd "/home/ubuntu"
-    zip -r "${code_zip}" "Kapil_pro" \
-      -x "Kapil_pro/node_modules/*" \
-      -x "Kapil_pro/.git/*" \
-      -x "Kapil_pro/dist/*" \
-      -x "Kapil_pro/kapil_backup_new.zip" \
-      -x "Kapil_pro/kapil_backup_old.zip" \
-      -x "Kapil_pro/kapil_db_backup_new.zip" \
-      -x "Kapil_pro/kapil_db_backup_old.zip" \
+    cd "${PROJECT_PATH}"
+    zip -r "${code_zip}" . \
+      -x "./node_modules/*" \
+      -x "./.git/*" \
+      -x "./dist/*" \
+      -x "./kapil_backup_new.zip" \
+      -x "./kapil_backup_old.zip" \
+      -x "./kapil_db_backup_new.zip" \
+      -x "./kapil_db_backup_old.zip" \
       >/dev/null
   )
 
   rotate_remote_file "kapil_backup_new.zip" "kapil_backup_old.zip"
   upload_remote_file "${code_zip}" "kapil_backup_new.zip"
 
-  log "Creating PocketBase DB zip for Google Drive: ${db_zip}"
+  log "Creating PocketBase DB zip for cloud storage: ${db_zip}"
   (
     cd "${PROJECT_PATH}"
     zip -r "${db_zip}" "pb_data" >/dev/null

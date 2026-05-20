@@ -276,7 +276,7 @@ function MiniMetric({
 
   if (to != null) {
     return (
-      <Link to={to} className={tileClass} aria-label={`${label}: open print bill`}
+      <Link to={to} search={{ billId: '', billRef: '' }} className={tileClass} aria-label={`${label}: open print bill`}
       >
         {body}
       </Link>

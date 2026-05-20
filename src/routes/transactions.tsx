@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Edit3, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import {
@@ -19,6 +19,10 @@ import { formatDateTime, toDateTimeLocalInputValue, toStoredDateTimeValue } from
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/transactions')({
+  validateSearch: (search: Record<string, unknown>) => ({
+    focusKind: search.focusKind === 'bill' || search.focusKind === 'payment' ? search.focusKind : '',
+    focusId: typeof search.focusId === 'string' ? search.focusId : '',
+  }),
   component: TransactionsPage,
 })
 
@@ -81,6 +85,7 @@ function formatTimeLeft(deletedAt: number) {
 }
 
 function TransactionsPage() {
+  const routeSearch = Route.useSearch()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [kindFilter, setKindFilter] = useState<'all' | 'bill' | 'payment'>('all')
@@ -90,6 +95,7 @@ function TransactionsPage() {
   const [editing, setEditing] = useState<TransactionRow | null>(null)
   const [billDraft, setBillDraft] = useState<Omit<BillSnapshot, 'id'> | null>(null)
   const [paymentDraft, setPaymentDraft] = useState<Omit<PaymentSnapshot, 'id'> | null>(null)
+  const autoOpenedFocusRef = useRef('')
 
   const transactionsQuery = useQuery({
     queryKey: TRANSACTIONS_QUERY_KEY,
@@ -120,8 +126,21 @@ function TransactionsPage() {
 
   const visibleRows = useMemo(() => {
     const base = viewMode === 'active' ? rows.filter((row) => !trashMap.has(row.key)) : trashEntries.map((entry) => entry.snapshot)
+    if (routeSearch.focusId && routeSearch.focusKind) {
+      return base.filter((row) => row.kind === routeSearch.focusKind && row.id === routeSearch.focusId)
+    }
     return base.filter((row) => (kindFilter === 'all' ? true : row.kind === kindFilter)).filter((row) => matchesTransactionSearch(row, search))
-  }, [rows, trashEntries, viewMode, kindFilter, search, trashMap])
+  }, [rows, trashEntries, viewMode, kindFilter, search, trashMap, routeSearch.focusId, routeSearch.focusKind])
+
+  useEffect(() => {
+    if (!routeSearch.focusId || !routeSearch.focusKind) return
+    const key = `${routeSearch.focusKind}:${routeSearch.focusId}`
+    if (autoOpenedFocusRef.current === key) return
+    const row = rows.find((entry) => entry.kind === routeSearch.focusKind && entry.id === routeSearch.focusId)
+    if (!row) return
+    autoOpenedFocusRef.current = key
+    startEdit(row)
+  }, [routeSearch.focusId, routeSearch.focusKind, rows])
 
   const deleteMutation = useMutation({
     mutationFn: async (row: TransactionRow) => {
@@ -291,7 +310,7 @@ function TransactionsPage() {
                   </tr>
                 )}
                 {visibleRows.map((row, index) => (
-                  <tr key={row.key} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
+                  <tr key={row.key} className={`border-t border-slate-100 ${routeSearch.focusId === row.id && routeSearch.focusKind === row.kind ? 'bg-blue-50 ring-1 ring-inset ring-blue-200' : index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                     <td className="px-3 py-3 text-sm text-slate-700">{formatDateTime(row.date)}</td>
                     <td className="px-3 py-3 text-sm">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${row.kind === 'bill' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>

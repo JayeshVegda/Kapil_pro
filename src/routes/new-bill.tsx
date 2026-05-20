@@ -5,12 +5,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
+import { DateInput } from '@/components/ui/date-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
-import { saveBillWithItems } from '@/data/bills'
+import { assertBillNumberAvailable, saveBillWithItems } from '@/data/bills'
 import { pb } from '@/data/pocketbase'
+import { loadCurrentStock } from '@/data/stock'
 import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billing-calculations'
 import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
 import { useMarketRate } from '@/domain/market-rate'
+import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
 import {
@@ -21,15 +24,14 @@ import {
   shareBillLayoutImageWithWhatsAppFallback,
 } from '@/lib/bill-print-export'
 import { formatInQty, formatInrInteger, parseNonNegativeNumber, parsePositiveIntInput } from '@/lib/inr-format'
-import { findBestNameMatch } from '@/lib/search'
 
 export const Route = createFileRoute('/new-bill')({
   component: NewBillPage,
 })
 
 type CustomerOption = { id: string; name: string; companyName: string; customerName: string }
-type ItemOption = { id: string; name: string; defaultRate: number }
-type BillItemRow = { itemName: string; qty: number; rate: number; manualRateEdited: boolean }
+type ItemOption = { id: string; name: string; defaultRate: number; type: string; unit: string; bagWeight: number; openingStock: number }
+type BillItemRow = { itemId: string; itemName: string; qty: number; rate: number; manualRateEdited: boolean }
 type GstMode = 'none' | 'percent18' | 'manual'
 type CreditAdjustment = { date: string; amount: number }
 type AutoBalanceContext = { previousBalanceDate: string; previousBalanceAmount: number; credits: CreditAdjustment[] }
@@ -74,11 +76,12 @@ function NewBillPage() {
   const gstRate = gstMode === 'percent18' ? 18 : 0
   const [lrInput, setLrInput] = useState('')
   const [lrList, setLrList] = useState<string[]>([])
-  const [rows, setRows] = useState<BillItemRow[]>([{ itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
+  const [rows, setRows] = useState<BillItemRow[]>([{ itemId: '', itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
   const [statusText, setStatusText] = useState('')
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
   const [quickCommandInput, setQuickCommandInput] = useState('')
+  const [pendingCommandPreview, setPendingCommandPreview] = useState(false)
   const { marketRate, refreshMarketRate } = useMarketRate(date)
   const billNoInitializedRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
@@ -108,9 +111,14 @@ function NewBillPage() {
         id: r.id,
         name: String(r.name ?? ''),
         defaultRate: Number(r.default_rate ?? 0),
+        type: String(r.type ?? ''),
+        unit: String(r.unit ?? ''),
+        bagWeight: Number(r.bag_weight ?? 50),
+        openingStock: Number(r.opening_stock ?? 0),
       }))
     },
   })
+  const currentStockQuery = useQuery({ queryKey: ['current-stock'], queryFn: loadCurrentStock })
 
   const latestBillNoQuery = useQuery({
     queryKey: ['latest-bill-no'],
@@ -217,7 +225,7 @@ function NewBillPage() {
         bookNo,
         billNo,
         date,
-        items: validRows,
+        items: validRows.map((row) => ({ itemId: row.itemId, itemName: row.itemName, qty: row.qty, rate: row.rate, manualRateEdited: row.manualRateEdited })),
       })
       if (!parsed.success) {
         throw new Error(parsed.error.issues[0]?.message ?? 'Bill validation failed')
@@ -244,6 +252,8 @@ function NewBillPage() {
         queryClient.invalidateQueries({ queryKey: ['payment-ledger-context'] }),
         queryClient.invalidateQueries({ queryKey: ['latest-bill-no'] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard-data'] }),
+        queryClient.invalidateQueries({ queryKey: ['current-stock'] }),
+        queryClient.invalidateQueries({ queryKey: ['stock-ledger'] }),
       ])
       setStatusText('Bill saved successfully')
       resetForm()
@@ -269,6 +279,26 @@ function NewBillPage() {
   }, [statusText, customerId, rows])
   const selectedCustomerName = (customersQuery.data ?? []).find((c) => c.id === customerId)?.companyName ?? 'Unknown'
   const validRows = rows.filter((r) => r.itemName.trim() && r.qty > 0 && r.rate > 0)
+  const stockWarnings = useMemo(() => {
+    const stockRows = currentStockQuery.data ?? []
+    return validRows
+      .map((row) => {
+        const stock = stockRows.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
+        if (!stock) return null
+        const after = stock.currentStock - row.qty
+        if (after >= 0) return null
+        return {
+          itemName: row.itemName,
+          unit: stock.unit || 'kg',
+          type: stock.type,
+          bagWeight: stock.bagWeight || 50,
+          available: stock.currentStock,
+          outgoing: row.qty,
+          after,
+        }
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+  }, [currentStockQuery.data, validRows])
   const previousBalanceDate = autoBalanceQuery.data?.previousBalanceDate ?? date
   const previousBalanceAmount = autoBalanceQuery.data?.previousBalanceAmount ?? 0
   const validCredits = (autoBalanceQuery.data?.credits ?? []).filter((entry) => entry.amount > 0)
@@ -314,12 +344,13 @@ function NewBillPage() {
     setTransport(0)
     setGstMode('none')
     setManualGstAmount(0)
-    setRows([{ itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
+    setRows([{ itemId: '', itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
     setLrInput('')
     setLrList([])
     setBillNo((prev) => prev + 1)
     setIsQuickEntryOpen(false)
     setQuickCommandInput('')
+    setPendingCommandPreview(false)
   }
 
   function addLrChip() {
@@ -331,7 +362,7 @@ function NewBillPage() {
 
 
   function addItemRow() {
-    setRows((prev) => [...prev, { itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
+    setRows((prev) => [...prev, { itemId: '', itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
   }
 
   function removeItemRow(index: number) {
@@ -357,7 +388,7 @@ function NewBillPage() {
         if (!row.itemName || row.manualRateEdited) return row
         const selected = items.find((it) => it.name === row.itemName)
         if (!selected) return row
-        return { ...row, rate: getAutoRate(selected, mktRate, nextMode) }
+        return { ...row, itemId: selected.id, rate: getAutoRate(selected, mktRate, nextMode) }
       }),
     )
   }
@@ -377,33 +408,54 @@ function NewBillPage() {
     return true
   }
 
-  function openPreview() {
+  async function openPreview() {
     if (!validateBeforePreview()) return
-    setStatusText('')
-    setIsPreviewOpen(true)
+    try {
+      await assertBillNumberAvailable(bookNo, billNo)
+      setStatusText('')
+      setIsPreviewOpen(true)
+    } catch (error) {
+      setStatusText(toUserMessage(error))
+    }
   }
 
-  function applyQuickEntry() {
-    const parsed = parseQuickCommandLine(quickCommandInput, customersQuery.data ?? [], itemsQuery.data ?? [], today, mktRate)
+  async function applyBillCommand(input: string) {
+    const parsed = parseContextCommand(input, 'bill', {
+      customers: customersQuery.data ?? [],
+      items: itemsQuery.data ?? [],
+      today,
+      mktRate,
+    })
     if (!parsed.ok) {
       setStatusText(parsed.error)
       return
     }
-    setCustomerId(parsed.customer.id)
-    setDate(parsed.date)
-    setTransport(parsed.transport)
-    setGstMode(parsed.gstRate === 18 ? 'percent18' : 'none')
+    if (parsed.command.kind !== 'bill') {
+      setStatusText('This command is not a bill command.')
+      return
+    }
+    const command = parsed.command
+    setCustomerId(command.customer.id)
+    setDate(command.date)
+    setTransport(command.transport)
+    setGstMode(command.gstRate === 18 ? 'percent18' : 'none')
     setManualGstAmount(0)
     setRows([
       {
-        itemName: parsed.item.name,
-        qty: parsed.qtyKg,
-        rate: parsed.rate,
-        manualRateEdited: parsed.manualRateEdited,
+        itemName: command.item.name,
+        itemId: command.item.id,
+        qty: command.qty,
+        rate: command.rate,
+        manualRateEdited: command.manualRateEdited,
       },
     ])
-    setStatusText(`Quick Entry applied (${parsed.qtyHint})`)
     setIsQuickEntryOpen(false)
+    setStatusText(`Command ready: ${command.customer.name} | ${command.item.name} | ${command.displayQty}`)
+    setPendingCommandPreview(true)
+  }
+
+  async function applyQuickEntry() {
+    await applyBillCommand(quickCommandInput)
   }
 
   async function confirmAndSave() {
@@ -414,6 +466,38 @@ function NewBillPage() {
       // saveMutation handles error state text.
     }
   }
+
+  useEffect(() => {
+    if (customersQuery.isLoading || itemsQuery.isLoading) return
+    const raw = window.sessionStorage.getItem(PENDING_COMMAND_STORAGE_KEY)
+    if (!raw) return
+    try {
+      const pending = JSON.parse(raw) as { kind?: string; body?: string; createdAt?: number }
+      if (pending.kind !== 'bill' || !pending.body || Date.now() - Number(pending.createdAt ?? 0) > 60_000) return
+      window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
+      void applyBillCommand(pending.body)
+    } catch {
+      window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
+    }
+  }, [customersQuery.isLoading, itemsQuery.isLoading, customersQuery.data, itemsQuery.data])
+
+  useEffect(() => {
+    if (!pendingCommandPreview) return
+    setPendingCommandPreview(false)
+    void openPreview()
+  }, [pendingCommandPreview, customerId, rows, date, bookNo, billNo])
+
+  useEffect(() => {
+    if (!isPreviewOpen) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.ctrlKey && event.key === 'Enter') {
+        event.preventDefault()
+        void confirmAndSave()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isPreviewOpen, saveMutation.isPending, bookNo, billNo, customerId, date, rows, transport, gstRate, gstAmount])
 
   function printPreview() {
     const previewElement = previewRef.current
@@ -475,9 +559,9 @@ function NewBillPage() {
     setRows((prev) =>
       prev.map((row) => {
         if (!row.itemName || row.manualRateEdited) return row
-        const selected = items.find((it) => it.name === row.itemName)
+        const selected = items.find((it) => it.id === row.itemId || it.name === row.itemName)
         if (!selected) return row
-        return { ...row, rate: getAutoRate(selected) }
+        return { ...row, itemId: selected.id, rate: getAutoRate(selected) }
       }),
     )
   }, [mktRate, itemsQuery.data, gstMode, getAutoRate])
@@ -531,7 +615,7 @@ function NewBillPage() {
             <input className={inputClass} type="number" value={billNo} onChange={(e) => setBillNo(parseNonNegativeNumber(e.target.value))} />
           </Field>
           <Field label="Date">
-            <input className={inputClass} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <DateInput className={inputClass} value={date} onChange={setDate} />
           </Field>
           <Field label="Customer">
             <SearchableCombobox
@@ -681,16 +765,17 @@ function NewBillPage() {
                     <td className="px-3 py-2.5 align-middle">
                       <select
                         className={inputClass}
-                        value={(itemsQuery.data ?? []).find((it) => it.name === row.itemName)?.id ?? ''}
+                        value={row.itemId || ((itemsQuery.data ?? []).find((it) => it.name === row.itemName)?.id ?? '')}
                         disabled={itemsQuery.isLoading || itemsQuery.isError}
                         onChange={(e) => {
                           const id = e.target.value
                           const selected = (itemsQuery.data ?? []).find((it) => it.id === id)
                           if (!selected) {
-                            updateRow(i, { itemName: '', rate: 0, manualRateEdited: false })
+                            updateRow(i, { itemId: '', itemName: '', rate: 0, manualRateEdited: false })
                             return
                           }
                           updateRow(i, {
+                            itemId: selected.id,
                             itemName: selected.name,
                             rate: getAutoRate(selected),
                             manualRateEdited: false,
@@ -779,7 +864,7 @@ function NewBillPage() {
           </div>
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="sticky bottom-0 z-20 -mx-5 mt-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur lg:static lg:mx-0 lg:border-t-0 lg:bg-transparent lg:p-0">
           <span className="text-xs text-slate-500">{helperStatusText}</span>
           <div className="flex-1" />
           <button type="button" className="px-1 py-1 text-sm font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline" onClick={resetForm}>
@@ -787,8 +872,8 @@ function NewBillPage() {
           </button>
           <button
             type="button"
-            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={openPreview}
+            className="min-h-11 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0 lg:px-3"
+            onClick={() => void openPreview()}
             disabled={saveMutation.isPending || customersQuery.isLoading || itemsQuery.isLoading}
           >
             {saveMutation.isPending ? 'Saving...' : 'Save Bill'}
@@ -806,6 +891,21 @@ function NewBillPage() {
               </button>
             </div>
             <div className="max-h-[70vh] overflow-auto p-4">
+              {stockWarnings.length > 0 && (
+                <div className="mx-auto mb-3 max-w-3xl rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <p className="font-semibold">Stock warning</p>
+                  <div className="mt-2 space-y-1">
+                    {stockWarnings.map((warning) => (
+                      <p key={warning.itemName}>
+                        {warning.itemName}: available {formatStockQty(warning.available, warning.unit, warning.type, warning.bagWeight)}, this bill{' '}
+                        {formatStockQty(warning.outgoing, warning.unit, warning.type, warning.bagWeight)}, after bill{' '}
+                        {formatStockQty(warning.after, warning.unit, warning.type, warning.bagWeight)}.
+                      </p>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-xs text-amber-800">Saving is allowed after review.</p>
+                </div>
+              )}
               <div className="flex justify-center">
                 <div
                   ref={previewRef}
@@ -821,6 +921,7 @@ function NewBillPage() {
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <span className="mr-auto text-xs text-slate-500">Ctrl+Enter confirms save</span>
               <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={printPreview}>
                 Print
               </button>
@@ -863,20 +964,20 @@ function NewBillPage() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault()
-                    applyQuickEntry()
+                    void applyQuickEntry()
                   }
                 }}
                 placeholder='party [item] qty [rate=auto] [gst] [date=today|-1|DD-MM-YYYY] [+t 2000] (default item: Spindle (8.5.Gm))'
               />
-              <p className="text-xs text-slate-500">Qty rule: if qty is 50 or less it is treated as bags, else treated as kg.</p>
-              <p className="text-xs text-slate-500">Examples: `sambhu 10` | `sambhu spindle 10 gst +t 2000` | `sambhu tapper 620 790 -1`</p>
+              <p className="text-xs text-slate-500">Gas qty rule: 10 means 10 bags / 500 kg. Use kg suffix for exact kg. Default item is Spindle (8.5GM).</p>
+              <p className="text-xs text-slate-500">Examples: `sambhu 10` | `sambhu spindle 10 gst +t 2000` | `sambhu tapper 620kg 790 -1`</p>
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
               <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsQuickEntryOpen(false)}>
                 Cancel
               </button>
-              <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" onClick={applyQuickEntry}>
-                Apply to Bill Form
+              <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" onClick={() => void applyQuickEntry()}>
+                Preview Command
               </button>
             </div>
           </div>
@@ -904,98 +1005,13 @@ function Metric({ label, value }: { label: string; value: string }) {
   )
 }
 
+function formatStockQty(qty: number, unit: string, type: string, bagWeight: number) {
+  if (type === 'gas') {
+    const bags = qty / (bagWeight || 50)
+    return `${formatInQty(qty, 'kg')} / ${bags.toFixed(Number.isInteger(bags) ? 0 : 1)} bags`
+  }
+  return formatInQty(qty, unit || 'piece')
+}
+
 const inputClass =
   'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
-
-function parseQuickCommandLine(
-  input: string,
-  customers: Array<{ id: string; name: string }>,
-  items: Array<{ id: string; name: string; defaultRate: number }>,
-  today: string,
-  mktRate: number,
-):
-  | {
-      ok: true
-      customer: { id: string; name: string }
-      item: { id: string; name: string; defaultRate: number }
-      qtyKg: number
-      qtyHint: string
-      rate: number
-      gstRate: number
-      manualRateEdited: boolean
-      date: string
-      transport: number
-    }
-  | { ok: false; error: string } {
-  const raw = input.trim()
-  if (!raw) return { ok: false, error: 'Quick command is empty' }
-  const tokens = raw.split(/\s+/).filter(Boolean)
-  if (tokens.length < 2) return { ok: false, error: 'Use: party [item] qty [rate] [gst] [date] [+t amount]' }
-
-  const customer = resolveByName(tokens[0], customers)
-  if (!customer) return { ok: false, error: `Party not found: ${tokens[0]}` }
-
-  let qtyIndex = -1
-  for (let i = 1; i < tokens.length; i += 1) {
-    if (Number.isFinite(Number(tokens[i])) && Number(tokens[i]) > 0) {
-      qtyIndex = i
-      break
-    }
-  }
-  if (qtyIndex < 0) return { ok: false, error: 'Quantity missing in command' }
-  const qtyRaw = Number(tokens[qtyIndex])
-  const qtyKg = qtyRaw <= 50 ? qtyRaw * 50 : qtyRaw
-  const qtyHint = qtyRaw <= 50 ? `${Math.round(qtyRaw)} bags` : `${Math.round(qtyRaw)} kg`
-
-  const itemToken = tokens.slice(1, qtyIndex).join(' ').trim()
-  const defaultItemName = 'Spindle (8.5.Gm)'
-  const fallbackItem = items.find((item) => item.name.toLowerCase() === defaultItemName.toLowerCase()) ?? items[0]
-  const item = itemToken ? resolveByName(itemToken, items) : fallbackItem
-  if (!item) return { ok: false, error: 'Item list is empty' }
-
-  let gstRate = 0
-  let manualRate = 0
-  let hasManualRate = false
-  let date = today
-  let transport = 0
-  for (let i = qtyIndex + 1; i < tokens.length; i += 1) {
-    const token = tokens[i].toLowerCase()
-    if (Number.isFinite(Number(token)) && Number(token) > 0) {
-      manualRate = Number(token)
-      hasManualRate = true
-      continue
-    }
-    if (token === 'gst' || token === 'm') {
-      gstRate = 18
-      continue
-    }
-    if ((token === '+t' || token === '+transport') && i + 1 < tokens.length) {
-      transport = Number(tokens[i + 1]) || transport
-      i += 1
-      continue
-    }
-    date = parseQuickDateToken(token, today)
-  }
-
-  const autoRate = Math.max(0, item.defaultRate + mktRate - (gstRate === 18 ? GST_RATE_DISCOUNT : 0))
-  const rate = hasManualRate ? manualRate : autoRate
-  return { ok: true, customer, item, qtyKg, qtyHint, rate, gstRate, manualRateEdited: hasManualRate, date, transport }
-}
-
-function resolveByName<T extends { name: string }>(token: string, records: T[]) {
-  return findBestNameMatch(records, token, (record) => record.name) ?? null
-}
-
-function parseQuickDateToken(value: string, today: string) {
-  const token = value.trim().toLowerCase()
-  if (!token) return today
-  if (token === 'today' || token === '0') return today
-  if (token === '-1' || token === 'yday' || token === 'yesterday') {
-    const d = new Date(`${today}T00:00:00`)
-    d.setDate(d.getDate() - 1)
-    return getLocalIsoDate(d)
-  }
-  const m = token.match(/^(\d{2})-(\d{2})-(\d{4})$/)
-  if (m) return `${m[3]}-${m[2]}-${m[1]}`
-  return token
-}

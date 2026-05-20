@@ -4,16 +4,17 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
+import { DateInput } from '@/components/ui/date-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { ensurePaymentPersisted, loadCustomerPaymentLedger, loadPaymentCustomers, savePayment, type SavedPaymentReceipt } from '@/data/payments'
 import type { TransactionsContext } from '@/data/transactions'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { compareBusinessDateThenCreatedDesc } from '@/domain/records'
+import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 import { formatFullDate } from '@/lib/date'
 import { buildPaymentPreview } from '@/domain/payment-ledger'
 import { getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
-import { findBestNameMatch } from '@/lib/search'
 
 export const Route = createFileRoute('/new-payment')({
   component: NewPaymentPage,
@@ -39,6 +40,7 @@ function NewPaymentPage() {
   const [lastSavedPayment, setLastSavedPayment] = useState<SavedPaymentReceipt | null>(null)
   const [isQuickPaymentOpen, setIsQuickPaymentOpen] = useState(false)
   const [quickPaymentCommand, setQuickPaymentCommand] = useState('')
+  const [isCommandConfirmOpen, setIsCommandConfirmOpen] = useState(false)
 
   const customersQuery = useQuery({
     queryKey: ['payment-customers'],
@@ -241,23 +243,59 @@ function NewPaymentPage() {
     setStatusText('')
     setIsQuickPaymentOpen(false)
     setQuickPaymentCommand('')
+    setIsCommandConfirmOpen(false)
   }
 
-  function applyQuickPaymentCommand() {
-    const parsed = parsePaymentCommand(quickPaymentCommand, customersQuery.data ?? [], today)
+  function applyPaymentCommand(input: string) {
+    const parsed = parseContextCommand(input, 'payment', {
+      customers: customersQuery.data ?? [],
+      today,
+    })
     if (!parsed.ok) {
       setStatusText(parsed.error)
       return
     }
-    setCustomerId(parsed.customer.id)
-    setAmount(parsed.amount)
-    setMode(parsed.mode)
-    setDate(parsed.date)
-    setNote(parsed.note)
-    setStatusText('Command applied. Review and save.')
+    if (parsed.command.kind !== 'payment') {
+      setStatusText('This command is not a payment command.')
+      return
+    }
+    setCustomerId(parsed.command.customer.id)
+    setAmount(parsed.command.amount)
+    setMode(parsed.command.mode)
+    setDate(parsed.command.date)
+    setNote(parsed.command.note)
+    setStatusText(`Command ready: ${parsed.command.customer.name} | ${formatInrInteger(parsed.command.amount)} | ${parsed.command.mode}`)
     setIsQuickPaymentOpen(false)
     setQuickPaymentCommand('')
+    setIsCommandConfirmOpen(true)
   }
+
+  function applyQuickPaymentCommand() {
+    applyPaymentCommand(quickPaymentCommand)
+  }
+
+  async function confirmCommandPayment() {
+    try {
+      await saveMutation.mutateAsync()
+      setIsCommandConfirmOpen(false)
+    } catch {
+      // saveMutation sets visible status text.
+    }
+  }
+
+  useEffect(() => {
+    if (customersQuery.isLoading) return
+    const raw = window.sessionStorage.getItem(PENDING_COMMAND_STORAGE_KEY)
+    if (!raw) return
+    try {
+      const pending = JSON.parse(raw) as { kind?: string; body?: string; createdAt?: number }
+      if (pending.kind !== 'payment' || !pending.body || Date.now() - Number(pending.createdAt ?? 0) > 60_000) return
+      window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
+      applyPaymentCommand(pending.body)
+    } catch {
+      window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
+    }
+  }, [customersQuery.isLoading, customersQuery.data])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -270,13 +308,25 @@ function NewPaymentPage() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  useEffect(() => {
+    if (!isCommandConfirmOpen) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.ctrlKey && event.key === 'Enter') {
+        event.preventDefault()
+        void confirmCommandPayment()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isCommandConfirmOpen, customerId, amount, mode, date, note, saveMutation.isPending])
+
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-4 text-sm font-semibold text-slate-900">Payment Details</h2>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Date">
-            <input className={inputClass} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <DateInput className={inputClass} value={date} onChange={setDate} />
           </Field>
           <Field label="Customer">
             <SearchableCombobox
@@ -464,7 +514,43 @@ function NewPaymentPage() {
                 Cancel
               </button>
               <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" onClick={applyQuickPaymentCommand}>
-                Apply to Payment Form
+                Review Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {isCommandConfirmOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-200 px-4 py-3">
+              <h3 className="text-base font-semibold text-slate-900">Confirm Payment</h3>
+              <p className="mt-1 text-xs text-slate-500">Ctrl+Enter confirms save</p>
+            </div>
+            <div className="space-y-2 px-4 py-4 text-sm text-slate-700">
+              <ConfirmRow label="Party" value={selectedCustomer?.name ?? 'Unknown'} />
+              <ConfirmRow label="Amount" value={formatInrInteger(amount)} />
+              <ConfirmRow label="Mode" value={mode} />
+              <ConfirmRow label="Date" value={formatFullDate(date)} />
+              {paymentPreview && (
+                <ConfirmRow
+                  label={paymentPreview.outstandingAfterPayment >= 0 ? 'After Payment' : 'Advance After'}
+                  value={formatInrInteger(Math.abs(paymentPreview.outstandingAfterPayment))}
+                />
+              )}
+              {note && <ConfirmRow label="Note" value={note} />}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsCommandConfirmOpen(false)}>
+                Back to Edit
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void confirmCommandPayment()}
+                disabled={saveMutation.isPending || !customerId || amount <= 0}
+              >
+                {saveMutation.isPending ? 'Saving...' : 'Confirm & Save'}
               </button>
             </div>
           </div>
@@ -492,61 +578,14 @@ function Metric({ label, value }: { label: string; value: string }) {
   )
 }
 
+function ConfirmRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-md bg-slate-50 px-3 py-2">
+      <span className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">{label}</span>
+      <span className="text-right font-medium text-slate-900">{value}</span>
+    </div>
+  )
+}
+
 const inputClass =
   'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
-
-function parsePaymentCommand(
-  input: string,
-  customers: Array<{ id: string; name: string }>,
-  today: string,
-):
-  | { ok: true; customer: { id: string; name: string }; amount: number; mode: 'Cash' | 'Bank'; date: string; note: string }
-  | { ok: false; error: string } {
-  const raw = input.trim()
-  if (!raw) return { ok: false, error: 'Type payment command first.' }
-  const noteMatch = raw.match(/"([^"]*)"/)
-  const note = noteMatch?.[1]?.trim() ?? ''
-  const withoutNote = noteMatch ? raw.replace(noteMatch[0], '').trim() : raw
-  const tokens = withoutNote.split(/\s+/).filter(Boolean)
-  const offset = tokens[0]?.toLowerCase() === 'p' ? 1 : 0
-  if (tokens.length < 2 + offset) return { ok: false, error: 'Use: party amount [mode] [date]' }
-  const partyToken = tokens[0 + offset]
-  const customer = resolveCustomer(partyToken, customers)
-  if (!customer) return { ok: false, error: `Party not found: ${partyToken}` }
-  const amount = parseAmountToken(tokens[1 + offset])
-  if (!(amount > 0)) return { ok: false, error: 'Invalid payment amount' }
-
-  let mode: 'Cash' | 'Bank' = 'Cash'
-  let date = today
-  for (const token of tokens.slice(2 + offset)) {
-    const lower = token.toLowerCase()
-    if (lower === 'cash') mode = 'Cash'
-    else if (lower === 'bank' || lower === 'cheque') mode = 'Bank'
-    else date = parseDateToken(lower, today)
-  }
-
-  return { ok: true, customer, amount, mode, date, note }
-}
-
-function resolveCustomer(token: string, customers: Array<{ id: string; name: string }>) {
-  return findBestNameMatch(customers, token, (customer) => customer.name) ?? null
-}
-
-function parseAmountToken(token: string) {
-  const normalized = token.toLowerCase().replaceAll(',', '')
-  if (normalized.endsWith('l')) return Number(normalized.slice(0, -1)) * 100000
-  if (normalized.endsWith('c')) return Number(normalized.slice(0, -1)) * 10000000
-  return Number(normalized)
-}
-
-function parseDateToken(token: string, today: string) {
-  if (token === 'today' || token === '0') return today
-  if (token === '-1' || token === 'yday' || token === 'yesterday') {
-    const d = new Date(`${today}T00:00:00`)
-    d.setDate(d.getDate() - 1)
-    return getLocalIsoDate(d)
-  }
-  const m = token.match(/^(\d{2})-(\d{2})-(\d{4})$/)
-  if (m) return `${m[3]}-${m[2]}-${m[1]}`
-  return token
-}

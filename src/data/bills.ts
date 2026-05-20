@@ -9,14 +9,26 @@ const bagsFromQtyKg = (qtyKg: number) => {
   return Math.round(qtyKg * BAGS_PER_KG)
 }
 
-async function assertBillNumberAvailable(bookNo: number, billNo: number) {
+export async function assertBillNumberAvailable(bookNo: number, billNo: number) {
   const existing = await pb
     .collection('bills')
     .getFirstListItem(`book_no = ${bookNo} && bill_no = ${billNo}`)
     .catch(() => null)
   if (existing) {
-    throw new Error(`Bill ${bookNo}/${billNo} already exists.`)
+    const nextBillNo = await suggestNextBillNo(bookNo, billNo)
+    throw new Error(`Bill ${bookNo}/${billNo} already exists. Next available: ${bookNo}/${nextBillNo}`)
   }
+}
+
+export async function suggestNextBillNo(bookNo: number, billNo: number) {
+  const records = await pb.collection('bills').getFullList({
+    filter: `book_no = ${bookNo}`,
+    sort: 'bill_no',
+  })
+  const used = new Set(records.map((record) => Number(record.bill_no ?? 0)).filter((value) => Number.isFinite(value) && value > 0))
+  let next = Math.max(1, billNo)
+  while (used.has(next)) next += 1
+  return next
 }
 
 type SaveBillInput = {
@@ -30,7 +42,7 @@ type SaveBillInput = {
   gstRate: number
   gstAmount: number
   lrList: string[]
-  items: Array<BillItemInput & { itemName: string }>
+  items: Array<BillItemInput & { itemId?: string; itemName: string }>
 }
 
 export async function saveBillWithItems(input: SaveBillInput) {
@@ -64,6 +76,7 @@ export async function saveBillWithItems(input: SaveBillInput) {
       for (const row of input.items) {
         const created = await pb.collection('bill_items').create({
           bill: bill.id,
+          item: row.itemId || '',
           item_name: row.itemName,
           qty: row.qty,
           rate: row.rate,

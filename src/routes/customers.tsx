@@ -4,6 +4,7 @@ import { Edit3, Plus } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
+import { DateInput } from '@/components/ui/date-input'
 import { createCustomer, loadCustomersWithLedgerContext, toggleCustomerActive, updateCustomer } from '@/data/customers'
 import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
 import { formatFullDate } from '@/lib/date'
@@ -196,7 +197,7 @@ function CustomersPage() {
               <input className={inputClass} type="number" value={formState.openingBalance || ''} onChange={(event) => setFormState((prev) => ({ ...prev, openingBalance: Number(event.target.value || 0) }))} />
             </Field>
             <Field label="Opening Balance Date">
-              <input className={inputClass} type="date" value={formState.openingBalanceDate} onChange={(event) => setFormState((prev) => ({ ...prev, openingBalanceDate: event.target.value }))} />
+              <DateInput className={inputClass} value={formState.openingBalanceDate} onChange={(nextDate) => setFormState((prev) => ({ ...prev, openingBalanceDate: nextDate }))} />
             </Field>
             <Field label="Status">
               <select className={inputClass} value={formState.active ? 'yes' : 'no'} onChange={(event) => setFormState((prev) => ({ ...prev, active: event.target.value === 'yes' }))}>

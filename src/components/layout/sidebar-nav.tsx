@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import type { ComponentType } from 'react'
-import { BookOpen, Boxes, Calendar, CalendarDays, CreditCard, Database, FilePlus2, LayoutDashboard, Printer, ScrollText, Users, X } from 'lucide-react'
+import { BookOpen, Boxes, Calendar, CalendarDays, CreditCard, Database, Download, FilePlus2, HeartPulse, LayoutDashboard, PackagePlus, Printer, ScrollText, Users, X } from 'lucide-react'
 
 type NavGroup = {
   label: string
@@ -13,6 +13,7 @@ const groups: NavGroup[] = [
     label: 'Transactions',
     items: [
       { to: '/new-bill', title: 'Bills', icon: FilePlus2 },
+      { to: '/stock', title: 'Stock', icon: PackagePlus },
       { to: '/new-payment', title: 'Payments', icon: CreditCard },
       { to: '/transactions', title: 'Logs', icon: ScrollText },
       { to: '/print-bill', title: 'Print Bill', icon: Printer },
@@ -30,12 +31,14 @@ const groups: NavGroup[] = [
     items: [
       { to: '/calendar', title: 'Calendar', icon: Calendar },
       { to: '/monthly-report', title: 'Company Report', icon: CalendarDays },
+      { to: '/export-reports', title: 'Exports', icon: Download },
     ],
   },
   {
     label: 'Setup',
     items: [
       { to: '/items', title: 'Items', icon: Boxes },
+      { to: '/data-health', title: 'Data Health', icon: HeartPulse },
       { to: '/backup', title: 'Backup', icon: Database },
     ],
   },

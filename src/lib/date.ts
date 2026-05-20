@@ -31,6 +31,18 @@ export function formatFullDate(dateText: string): string {
   return `${day}-${month}-${year}`
 }
 
+export function parseDisplayDate(dateText: string): string {
+  const trimmed = String(dateText ?? '').trim()
+  const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(trimmed)
+  if (!match) return ''
+  const [, day, month, year] = match
+  const iso = `${year}-${month}-${day}`
+  const parsed = parseIsoDate(iso)
+  if (!parsed) return ''
+  if (formatFullDate(iso) !== trimmed) return ''
+  return iso
+}
+
 export function formatDateTime(dateText: string): string {
   if (!dateText) return '-'
   const parsed = new Date(normalizeDateLike(dateText))
