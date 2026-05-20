@@ -259,12 +259,12 @@ export function StockPage() {
   }
 
   return (
-    <div className="w-full space-y-5 px-3 pb-24 pt-4 sm:px-5 lg:px-7">
-      <section className="rounded-2xl border border-slate-200/70 bg-white/95 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+    <div className="w-full space-y-4 px-3 pb-24 pt-3 sm:px-4 lg:px-6">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-lg font-semibold text-slate-950">Current Stock</h3>
-            <p className="mt-1 text-sm text-slate-500">Item + party buckets with closing balance and monthly movement.</p>
+            <h3 className="text-base font-semibold text-slate-950">Current Stock</h3>
+            <p className="mt-0.5 text-xs text-slate-500">Item + party buckets with opening, stock in, sold, adjustment, and closing.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <StockSummaryPill label="Buckets" value={String(stockItems.length)} />
@@ -287,14 +287,14 @@ export function StockPage() {
         )}
       </section>
 
-      <section className="rounded-2xl border border-slate-200/70 bg-white/95 p-5 shadow-[0_14px_40px_rgba(15,23,42,0.045)]">
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         {statusText && (
-          <p className="mb-4 rounded-lg border border-slate-200/80 bg-slate-50/80 px-3 py-2 text-xs text-slate-600" role="status" aria-live="polite">
+          <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600" role="status" aria-live="polite">
             {statusText}
           </p>
         )}
         <div className="mb-4 overflow-x-auto no-scrollbar">
-          <div className="inline-flex min-w-max rounded-xl border border-slate-200/70 bg-slate-100/60 p-1 shadow-inner shadow-white/50">
+          <div className="inline-flex min-w-max rounded-lg border border-slate-200 bg-slate-50 p-1">
             <PanelButton active={activePanel === 'opening'} onClick={() => setActivePanel('opening')} icon={<Warehouse size={14} />}>Opening</PanelButton>
             <PanelButton active={activePanel === 'receive'} onClick={() => setActivePanel('receive')} icon={<PackagePlus size={14} />}>Receive</PanelButton>
             <PanelButton active={activePanel === 'adjust'} onClick={() => setActivePanel('adjust')} icon={<SlidersHorizontal size={14} />}>Adjust</PanelButton>
@@ -341,12 +341,12 @@ export function StockPage() {
                 <input className={inputClass} value={openingNote} onChange={(event) => setOpeningNote(event.target.value)} placeholder="Opening balance note" />
               </Field>
               <div className="sticky bottom-0 z-20 -mx-5 flex items-end gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur md:static md:mx-0 md:border-t-0 md:bg-transparent md:p-0">
-                <button type="button" className={secondaryButtonClass} onClick={resetOpeningForm}>
+                <button type="button" className="h-11 rounded-md border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50 lg:h-10 lg:px-3" onClick={resetOpeningForm}>
                   Clear
                 </button>
                 <button
                   type="button"
-                  className={primaryButtonClass}
+                  className="inline-flex h-11 flex-1 items-center justify-center gap-1 rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 md:flex-none lg:h-10 lg:px-3"
                   onClick={() => void openingMutation.mutateAsync()}
                   disabled={!openingItemId || !openingCustomerId || openingMutation.isPending}
                 >
@@ -404,12 +404,12 @@ export function StockPage() {
                 <input className={inputClass} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Production batch, source, remark" />
               </Field>
               <div className="sticky bottom-0 z-20 -mx-5 flex items-end gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur md:static md:mx-0 md:border-t-0 md:bg-transparent md:p-0">
-                <button type="button" className={secondaryButtonClass} onClick={resetStockInForm}>
+                <button type="button" className="h-11 rounded-md border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50 lg:h-10 lg:px-3" onClick={resetStockInForm}>
                   Clear
                 </button>
                 <button
                   type="button"
-                  className={primaryButtonClass}
+                  className="inline-flex h-11 flex-1 items-center justify-center gap-1 rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 md:flex-none lg:h-10 lg:px-3"
                   onClick={() => void saveMutation.mutateAsync()}
                   disabled={!itemId || !customerId || parseNonNegativeNumber(qtyInput) <= 0 || saveMutation.isPending}
                 >
@@ -458,12 +458,12 @@ export function StockPage() {
                 <input className={inputClass} value={adjustmentNote} onChange={(event) => setAdjustmentNote(event.target.value)} placeholder="Damage, correction, physical count" />
               </Field>
               <div className="sticky bottom-0 z-20 -mx-5 flex items-end gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur md:static md:mx-0 md:border-t-0 md:bg-transparent md:p-0">
-                <button type="button" className={secondaryButtonClass} onClick={resetAdjustmentForm}>
+                <button type="button" className="h-11 rounded-md border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50 lg:h-10 lg:px-3" onClick={resetAdjustmentForm}>
                   Clear
                 </button>
                 <button
                   type="button"
-                  className={primaryButtonClass}
+                  className="inline-flex h-11 flex-1 items-center justify-center gap-1 rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 md:flex-none lg:h-10 lg:px-3"
                   onClick={() => void adjustmentMutation.mutateAsync()}
                   disabled={!adjustmentItemId || !adjustmentCustomerId || Number(adjustmentQtyInput) === 0 || adjustmentMutation.isPending}
                 >
@@ -565,8 +565,8 @@ function PanelButton({ active, onClick, icon, children }: { active: boolean; onC
   return (
     <button
       type="button"
-      className={`inline-flex h-10 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition ${
-        active ? 'bg-white text-slate-950 shadow-sm ring-1 ring-slate-200/70' : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+      className={`inline-flex h-10 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition ${
+        active ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
       }`}
       onClick={onClick}
     >
@@ -579,9 +579,9 @@ function PanelButton({ active, onClick, icon, children }: { active: boolean; onC
 function WorkspacePanel({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   return (
     <div>
-      <div className="mb-5">
-        <h3 className="text-base font-semibold text-slate-950">{title}</h3>
-        <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
+      <div className="mb-4">
+        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <p className="mt-1 text-xs text-slate-500">{subtitle}</p>
       </div>
       {children}
     </div>
@@ -589,11 +589,11 @@ function WorkspacePanel({ title, subtitle, children }: { title: string; subtitle
 }
 
 function StockSummaryPill({ label, value, tone = 'slate' }: { label: string; value: string; tone?: 'slate' | 'green' | 'red' }) {
-  const toneClass = tone === 'red' ? 'border-red-200/80 bg-red-50 text-red-700' : tone === 'green' ? 'border-emerald-200/80 bg-emerald-50 text-emerald-700' : 'border-slate-200/80 bg-slate-50 text-slate-700'
+  const toneClass = tone === 'red' ? 'border-red-200 bg-red-50 text-red-700' : tone === 'green' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-700'
   return (
-    <div className={`rounded-xl border px-3.5 py-2.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${toneClass}`}>
-      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] opacity-75">{label}</div>
-      <div className="mt-1 font-mono text-sm font-semibold">{value}</div>
+    <div className={`rounded-md border px-3 py-2 ${toneClass}`}>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.08em]">{label}</div>
+      <div className="mt-0.5 font-mono text-sm font-semibold">{value}</div>
     </div>
   )
 }
@@ -604,8 +604,8 @@ function CurrentStockGlance({ rows, onOpenLedger }: { rows: CurrentStockRecord[]
   }
 
   return (
-    <div className="h-[30vh] min-h-[270px] overflow-y-auto pr-1">
-      <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+    <div className="h-[30vh] min-h-[260px] overflow-y-auto pr-1">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {rows.map((item) => {
           const needsAttention = item.currentStock <= 0
           const closing = formatStockQtyParts(item.currentStock, item)
@@ -613,40 +613,35 @@ function CurrentStockGlance({ rows, onOpenLedger }: { rows: CurrentStockRecord[]
           const monthSold = formatStockQtyParts(item.totalOut, item)
           const monthAdjustment = formatStockQtyParts(item.totalAdjustment, item)
           return (
-            <article
-              key={item.id}
-              className={`rounded-2xl border p-4 shadow-[0_10px_28px_rgba(15,23,42,0.05)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_36px_rgba(15,23,42,0.08)] ${
-                needsAttention ? 'border-red-200/80 bg-red-50/50' : 'border-slate-200/70 bg-white'
-              }`}
-            >
-              <div className="flex min-w-0 items-start justify-between gap-3">
+            <article key={item.id} className={`rounded-lg border p-3 shadow-sm ${needsAttention ? 'border-red-200 bg-red-50/60' : 'border-slate-200 bg-white'}`}>
+              <div className="flex min-w-0 items-start justify-between gap-2">
                 <div className="min-w-0">
                   <h4 className="truncate text-sm font-semibold text-slate-950">{item.itemName}</h4>
-                  <p className="mt-1 truncate text-xs text-slate-500">{item.customerName}</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">{item.customerName}</p>
                 </div>
-                <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] ${needsAttention ? 'bg-red-100 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] ${needsAttention ? 'bg-red-100 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
                   {needsAttention ? 'Check' : 'Stock'}
                 </span>
               </div>
 
-              <div className="mt-4 rounded-xl bg-slate-50/80 px-3.5 py-3 ring-1 ring-inset ring-slate-200/70">
+              <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2.5">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Closing Balance</div>
                 <div className={`mt-1 flex items-baseline gap-1.5 font-mono ${item.currentStock < 0 ? 'text-red-700' : 'text-slate-950'}`}>
-                  <span className="text-3xl font-bold leading-none">{closing.main}</span>
+                  <span className="text-2xl font-bold leading-none">{closing.main}</span>
                   <span className="text-xs font-medium text-slate-500">{closing.secondary}</span>
                 </div>
               </div>
 
-              <div className="mt-3 rounded-xl bg-white/80 px-3.5 py-2.5 text-xs text-slate-600 ring-1 ring-inset ring-slate-200/70">
+              <div className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">This Month</div>
-                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px]">
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px]">
                   <span>In {monthIn.main}</span>
                   <span>Sold {monthSold.main}</span>
                   <span>Adj {monthAdjustment.main}</span>
                 </div>
               </div>
 
-              <button type="button" className="mt-3 w-full rounded-lg bg-slate-950 px-3 py-2 text-xs font-medium text-white shadow-sm transition hover:bg-slate-800" onClick={() => onOpenLedger(item)}>
+              <button type="button" className="mt-3 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onOpenLedger(item)}>
                 Open Ledger
               </button>
             </article>
@@ -659,10 +654,10 @@ function CurrentStockGlance({ rows, onOpenLedger }: { rows: CurrentStockRecord[]
 
 function StockReportTable({ rows }: { rows: Array<Awaited<ReturnType<typeof loadMonthlyStockReport>>[number]> }) {
   return (
-    <div className="overflow-x-auto rounded-xl ring-1 ring-slate-200/70 no-scrollbar">
+    <div className="overflow-x-auto no-scrollbar">
       <table className="w-full min-w-[860px]">
         <thead>
-          <tr className="bg-slate-50/80">
+          <tr className="bg-slate-50">
             <Th>Item</Th>
             <Th>Party</Th>
             <Th right>Opening</Th>
@@ -676,7 +671,7 @@ function StockReportTable({ rows }: { rows: Array<Awaited<ReturnType<typeof load
           {rows.length === 0 && <EmptyRow colSpan={7} text="No stock items configured." />}
           {rows.map((row, index) => {
             return (
-              <tr key={row.id} className={`border-t border-slate-100/80 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}>
+              <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                 <Td strong>{row.itemName}</Td>
                 <Td>{row.customerName}</Td>
                 <Td right mono>{formatStockQty(row.opening, row)}</Td>
@@ -695,10 +690,10 @@ function StockReportTable({ rows }: { rows: Array<Awaited<ReturnType<typeof load
 
 function OpeningTable({ rows, items }: { rows: Array<Awaited<ReturnType<typeof loadStockOpenings>>[number]>; items: ItemRecord[] }) {
   return (
-    <div className="overflow-x-auto rounded-xl ring-1 ring-slate-200/70 no-scrollbar">
+    <div className="overflow-x-auto no-scrollbar">
       <table className="w-full min-w-[820px]">
         <thead>
-          <tr className="bg-slate-50/80">
+          <tr className="bg-slate-50">
             <Th>Date</Th><Th>Item</Th><Th>Party</Th><Th right>Opening</Th><Th>Note</Th>
           </tr>
         </thead>
@@ -707,7 +702,7 @@ function OpeningTable({ rows, items }: { rows: Array<Awaited<ReturnType<typeof l
           {rows.map((row, index) => {
             const item = items.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
             return (
-              <tr key={row.id} className={`border-t border-slate-100/80 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}>
+              <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                 <Td>{row.date ? formatFullDate(row.date) : '-'}</Td>
                 <Td strong>{row.itemName}</Td>
                 <Td>{row.customerName}</Td>
@@ -724,10 +719,10 @@ function OpeningTable({ rows, items }: { rows: Array<Awaited<ReturnType<typeof l
 
 function StockInTable({ rows, items, onEdit, onDelete, deleting }: { rows: Array<Awaited<ReturnType<typeof loadStockIn>>[number]>; items: ItemRecord[]; onEdit: (row: Awaited<ReturnType<typeof loadStockIn>>[number]) => void; onDelete: (id: string) => void; deleting: boolean }) {
   return (
-    <div className="overflow-x-auto rounded-xl ring-1 ring-slate-200/70 no-scrollbar">
+    <div className="overflow-x-auto no-scrollbar">
       <table className="w-full min-w-[820px]">
         <thead>
-          <tr className="bg-slate-50/80">
+          <tr className="bg-slate-50">
             <Th>Date</Th><Th>Item</Th><Th>Party</Th><Th right>Qty</Th><Th>Note</Th><Th right>Action</Th>
           </tr>
         </thead>
@@ -736,7 +731,7 @@ function StockInTable({ rows, items, onEdit, onDelete, deleting }: { rows: Array
           {rows.map((row, index) => {
             const item = items.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
             return (
-              <tr key={row.id} className={`border-t border-slate-100/80 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}>
+              <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                 <Td>{formatFullDate(row.date)}</Td>
                 <Td strong>{row.itemName}</Td>
                 <Td>{row.customerName}</Td>
@@ -744,10 +739,10 @@ function StockInTable({ rows, items, onEdit, onDelete, deleting }: { rows: Array
                 <Td>{row.note || '-'}</Td>
                 <Td right>
                   <div className="inline-flex gap-2">
-                    <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200/70" onClick={() => onEdit(row)}>
+                    <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onEdit(row)}>
                       <Edit3 size={12} /> Edit
                     </button>
-                    <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => onDelete(row.id)} disabled={deleting}>
+                    <button type="button" className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => onDelete(row.id)} disabled={deleting}>
                       <Trash2 size={12} /> Delete
                     </button>
                   </div>
@@ -763,22 +758,22 @@ function StockInTable({ rows, items, onEdit, onDelete, deleting }: { rows: Array
 
 function AdjustmentTable({ rows, items, onDelete, deleting }: { rows: Array<Awaited<ReturnType<typeof loadStockAdjustments>>[number]>; items: ItemRecord[]; onDelete: (id: string) => void; deleting: boolean }) {
   return (
-    <div className="overflow-x-auto rounded-xl ring-1 ring-slate-200/70 no-scrollbar">
+    <div className="overflow-x-auto no-scrollbar">
       <table className="w-full min-w-[760px]">
-        <thead><tr className="bg-slate-50/80"><Th>Date</Th><Th>Item</Th><Th>Party</Th><Th right>Adjustment</Th><Th>Note</Th><Th right>Action</Th></tr></thead>
+        <thead><tr className="bg-slate-50"><Th>Date</Th><Th>Item</Th><Th>Party</Th><Th right>Adjustment</Th><Th>Note</Th><Th right>Action</Th></tr></thead>
         <tbody>
           {rows.length === 0 && <EmptyRow colSpan={6} text="No stock adjustments yet." />}
           {rows.map((row, index) => {
             const item = items.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
             return (
-              <tr key={row.id} className={`border-t border-slate-100/80 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}>
+              <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                 <Td>{formatFullDate(row.date)}</Td>
                 <Td strong>{row.itemName}</Td>
                 <Td>{row.customerName}</Td>
                 <Td right mono>{formatStockQty(row.qty, item)}</Td>
                 <Td>{row.note || '-'}</Td>
                 <Td right>
-                  <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => onDelete(row.id)} disabled={deleting}>
+                  <button type="button" className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => onDelete(row.id)} disabled={deleting}>
                     <Trash2 size={12} /> Delete
                   </button>
                 </Td>
@@ -797,13 +792,13 @@ function findGeneralCustomer(customers: StockCustomerOption[]) {
 
 function LedgerTable({ rows, item }: { rows: Array<Awaited<ReturnType<typeof loadStockLedger>>[number]>; item?: ItemRecord }) {
   return (
-    <div className="overflow-x-auto rounded-xl ring-1 ring-slate-200/70 no-scrollbar">
+    <div className="overflow-x-auto no-scrollbar">
       <table className="w-full min-w-[860px]">
-        <thead><tr className="bg-slate-50/80"><Th>Date</Th><Th>Type</Th><Th right>In</Th><Th right>Out</Th><Th right>Balance</Th><Th>Note</Th></tr></thead>
+        <thead><tr className="bg-slate-50"><Th>Date</Th><Th>Type</Th><Th right>In</Th><Th right>Out</Th><Th right>Balance</Th><Th>Note</Th></tr></thead>
         <tbody>
           {rows.length === 0 && <EmptyRow colSpan={6} text="No ledger movement found." />}
           {rows.map((row, index) => (
-            <tr key={row.id} className={`border-t border-slate-100/80 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}>
+            <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
               <Td>{row.date ? formatFullDate(row.date) : '-'}</Td>
               <Td strong>{row.type}</Td>
               <Td right mono>{row.inQty ? formatStockQty(row.inQty, item) : '-'}</Td>
@@ -873,10 +868,4 @@ function formatStockQtyParts(qty: number, item?: { type?: string; unit?: string;
 }
 
 const inputClass =
-  'h-10 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-[0_1px_2px_rgba(15,23,42,0.03)] outline-none transition placeholder:text-slate-400 hover:border-slate-300 focus:border-slate-400 focus:ring-4 focus:ring-slate-200/60'
-
-const primaryButtonClass =
-  'inline-flex h-11 flex-1 items-center justify-center gap-1.5 rounded-lg bg-slate-950 px-4 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 md:flex-none lg:h-10 lg:px-3'
-
-const secondaryButtonClass =
-  'h-11 rounded-lg bg-slate-100 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-200/80 lg:h-10 lg:px-3'
+  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
