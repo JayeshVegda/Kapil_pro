@@ -608,6 +608,10 @@ function CurrentStockGlance({ rows, onOpenLedger }: { rows: CurrentStockRecord[]
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {rows.map((item) => {
           const needsAttention = item.currentStock <= 0
+          const closing = formatStockQtyParts(item.currentStock, item)
+          const monthIn = formatStockQtyParts(item.totalIn, item)
+          const monthSold = formatStockQtyParts(item.totalOut, item)
+          const monthAdjustment = formatStockQtyParts(item.totalAdjustment, item)
           return (
             <article key={item.id} className={`rounded-lg border p-3 shadow-sm ${needsAttention ? 'border-red-200 bg-red-50/60' : 'border-slate-200 bg-white'}`}>
               <div className="flex min-w-0 items-start justify-between gap-2">
@@ -620,16 +624,21 @@ function CurrentStockGlance({ rows, onOpenLedger }: { rows: CurrentStockRecord[]
                 </span>
               </div>
 
-              <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Closing</div>
-                <div className={`mt-0.5 font-mono text-lg font-bold ${item.currentStock < 0 ? 'text-red-700' : 'text-slate-950'}`}>{formatStockQty(item.currentStock, item)}</div>
+              <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2.5">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Closing Balance</div>
+                <div className={`mt-1 flex items-baseline gap-1.5 font-mono ${item.currentStock < 0 ? 'text-red-700' : 'text-slate-950'}`}>
+                  <span className="text-2xl font-bold leading-none">{closing.main}</span>
+                  <span className="text-xs font-medium text-slate-500">{closing.secondary}</span>
+                </div>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                <StockMiniMetric label="Opening" value={formatStockQty(item.openingStock, item)} />
-                <StockMiniMetric label="Stock In" value={formatStockQty(item.totalIn, item)} />
-                <StockMiniMetric label="Sold" value={formatStockQty(item.totalOut, item)} />
-                <StockMiniMetric label="Adjustment" value={formatStockQty(item.totalAdjustment, item)} />
+              <div className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">This Month</div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px]">
+                  <span>In {monthIn.main}</span>
+                  <span>Sold {monthSold.main}</span>
+                  <span>Adj {monthAdjustment.main}</span>
+                </div>
               </div>
 
               <button type="button" className="mt-3 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onOpenLedger(item)}>
@@ -639,15 +648,6 @@ function CurrentStockGlance({ rows, onOpenLedger }: { rows: CurrentStockRecord[]
           )
         })}
       </div>
-    </div>
-  )
-}
-
-function StockMiniMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md bg-slate-50 px-2.5 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">{label}</div>
-      <div className="mt-0.5 truncate font-mono text-xs font-semibold text-slate-800">{value}</div>
     </div>
   )
 }
@@ -855,6 +855,16 @@ function formatStockQty(qty: number, item?: { type?: string; unit?: string; bagW
     return `${formatInQty(qty, 'kg')} / ${bagText}`
   }
   return formatInQty(qty, unitLabel(item ? { unit: item.unit ?? '' } : null))
+}
+
+function formatStockQtyParts(qty: number, item?: { type?: string; unit?: string; bagWeight?: number } | null) {
+  if (item?.type === 'gas') {
+    const bagWeight = item.bagWeight || 50
+    const bags = qty / bagWeight
+    const bagsText = `${bags.toFixed(Number.isInteger(bags) ? 0 : 1)} bags`
+    return { main: bagsText, secondary: `(${formatInQty(qty, 'kg')})` }
+  }
+  return { main: formatInQty(qty, unitLabel(item ? { unit: item.unit ?? '' } : null)), secondary: '' }
 }
 
 const inputClass =
