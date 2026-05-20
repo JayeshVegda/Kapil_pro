@@ -362,6 +362,11 @@ export function AppShell() {
       setCommandInput(suggestion.value ?? '')
       return
     }
+    if (suggestion.kind === 'customer') {
+      setCommandInput(suggestion.value ?? '')
+      setCommandError('')
+      return
+    }
     if (suggestion.value) setCommandInput((value) => replaceLastCommandToken(value, suggestion.value ?? ''))
   }
 
@@ -953,7 +958,9 @@ function buildCommandSuggestions(
   const resolved = splitCommandPrefix(raw, 'neutral')
   if (resolved.kind === 'bill') {
     const customerMatch = resolveBestPrefixForDraft(deps.customers, resolved.body, customerSearchTextForDraft)
-    if (!resolved.body.trim() || !customerMatch.record) return buildCustomerSuggestions(resolved.body, deps.customers, 'b ')
+    const bodyHasTrailingSpace = /\s$/.test(input)
+    const bodyWords = resolved.body.trim().split(/\s+/).filter(Boolean)
+    if (!resolved.body.trim() || !customerMatch.record || (customerMatch.usedWords >= bodyWords.length && !bodyHasTrailingSpace)) return buildCustomerSuggestions(resolved.body, deps.customers, 'b ')
     const remainingBody = resolved.body.trim().split(/\s+/).slice(customerMatch.usedWords).join(' ')
     return buildItemSuggestions(getBillItemQuery(remainingBody), deps.items)
   }
