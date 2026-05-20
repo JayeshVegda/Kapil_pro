@@ -32,6 +32,8 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
 }
 
 const DOC_TITLE_SUFFIX = 'Kapil Billing'
+const COMMAND_HISTORY_STORAGE_KEY = 'kapil-command-history-v1'
+const COMMAND_HISTORY_LIMIT = 20
 
 const commandRoutes = [
   { label: 'Dashboard', path: '/' },
@@ -60,7 +62,7 @@ type CommandSuggestion = {
   id: string
   label: string
   detail: string
-  kind: 'customer' | 'item' | 'mode' | 'help' | 'route' | 'action'
+  kind: 'customer' | 'item' | 'mode' | 'help' | 'route' | 'action' | 'history'
   value?: string
   path?: string
 }
@@ -81,6 +83,7 @@ export function AppShell() {
   const [commandError, setCommandError] = useState('')
   const [activeCommandSuggestionIndex, setActiveCommandSuggestionIndex] = useState(0)
   const [billSession, setBillSession] = useState<BillSession | null>(null)
+  const [commandHistory, setCommandHistory] = useState<string[]>(() => loadCommandHistory())
   const [adminSettings, setAdminSettings] = useState(getAdminControlSettings)
   const quickSearchRef = useRef<HTMLLabelElement | null>(null)
   const navigate = useNavigate()
@@ -149,8 +152,9 @@ export function AppShell() {
       buildCommandSuggestions(commandInput, commandMode, billSession, {
         customers: commandDepsQuery.data?.customers ?? [],
         items: commandDepsQuery.data?.items ?? [],
+        history: commandHistory,
       }),
-    [billSession, commandDepsQuery.data, commandInput, commandMode],
+    [billSession, commandDepsQuery.data, commandHistory, commandInput, commandMode],
   )
 
   useEffect(() => {
@@ -216,7 +220,14 @@ export function AppShell() {
 
   function runGlobalCommand() {
     const raw = commandInput.trim()
+    if (maybeClearHistoryCommand(raw)) {
+      setCommandHistory(clearCommandHistory())
+      setCommandInput('')
+      setCommandError('Command history cleared.')
+      return
+    }
     if (commandMode === 'search') {
+      if (raw.length > 1) rememberCommand(raw)
       runModeSuggestion(commandSuggestions[activeCommandSuggestionIndex] ?? commandSuggestions[0])
       return
     }
@@ -225,6 +236,7 @@ export function AppShell() {
       return
     }
     if (commandMode === 'action') {
+      if (raw.length > 1) rememberCommand(raw)
       runModeSuggestion(commandSuggestions[activeCommandSuggestionIndex] ?? commandSuggestions[0])
       return
     }
@@ -277,6 +289,7 @@ export function AppShell() {
     setCommandError('')
     setCommandOpen(false)
     setCommandInput('')
+    rememberCommand(raw)
     if (parsed.kind === 'print') {
       void navigate({ to: '/print-bill', search: { billRef: body, billId: '' } })
       return
@@ -294,12 +307,19 @@ export function AppShell() {
       return
     }
     const body = [billSession.customer.name, ...billSession.lines, ...billSession.modifiers].join(' ')
+    const historyCommand = `b ${body}`
     setCommandError('')
     setCommandOpen(false)
     setCommandInput('')
     setBillSession(null)
+    rememberCommand(historyCommand)
     window.sessionStorage.setItem(PENDING_COMMAND_STORAGE_KEY, JSON.stringify({ kind: 'bill', body, createdAt: Date.now() }))
     void navigate({ to: '/new-bill' })
+  }
+
+  function rememberCommand(command: string) {
+    const next = saveCommandHistory(command)
+    setCommandHistory(next)
   }
 
   function runModeSuggestion(suggestion: CommandSuggestion | undefined) {
@@ -323,6 +343,17 @@ export function AppShell() {
 
   function applyCommandSuggestion(suggestion: CommandSuggestion | undefined) {
     if (!suggestion) return
+    if (suggestion.kind === 'action' && suggestion.value === 'clear history') {
+      setCommandHistory(clearCommandHistory())
+      setCommandInput('')
+      setCommandError('Command history cleared.')
+      return
+    }
+    if (suggestion.kind === 'history') {
+      setCommandInput(suggestion.value ?? '')
+      setCommandError('')
+      return
+    }
     if (billSession && suggestion.kind === 'action') {
       applyBillSessionAction(suggestion.value ?? '')
       return
@@ -781,7 +812,7 @@ function CommandSuggestionList({
           onClick={() => onChoose(suggestion)}
         >
           <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${index === activeIndex ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
-            {suggestion.kind === 'help' ? <HelpCircle size={15} /> : suggestion.kind === 'mode' || suggestion.kind === 'action' || suggestion.kind === 'route' ? <TerminalSquare size={15} /> : <Search size={15} />}
+            {suggestion.kind === 'history' ? <Clock3 size={15} /> : suggestion.kind === 'help' ? <HelpCircle size={15} /> : suggestion.kind === 'mode' || suggestion.kind === 'action' || suggestion.kind === 'route' ? <TerminalSquare size={15} /> : <Search size={15} />}
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold">{suggestion.label}</span>
@@ -889,11 +920,13 @@ function buildCommandSuggestions(
   deps: {
     customers: Array<{ id: string; name: string; companyName?: string; customerName?: string }>
     items: Array<{ id: string; name: string; defaultRate?: number; type?: string; unit?: string; bagWeight?: number }>
+    history: string[]
   },
 ): CommandSuggestion[] {
   const raw = input.trim()
   if (!raw && !billSession) {
     return [
+      ...buildHistorySuggestions('', deps.history).slice(0, 5),
       { id: 'mode-search', label: '/ search', detail: 'Find party ledger quickly', kind: 'mode', value: '/' },
       { id: 'mode-help', label: '? help', detail: 'Explain command formats for staff', kind: 'mode', value: '?' },
       { id: 'mode-action', label: ': actions', detail: 'Jump to pages and tools', kind: 'mode', value: ':' },
@@ -926,12 +959,64 @@ function buildCommandSuggestions(
   }
   if (resolved.kind === 'payment') return buildCustomerSuggestions(resolved.body, deps.customers, 'p ')
   if (resolved.kind === 'stock') return buildItemSuggestions(getBillItemQuery(resolved.body), deps.items)
-  if (!resolved.kind) return buildCommandStarterSuggestions(raw)
+  if (!resolved.kind) return [...buildHistorySuggestions(raw, deps.history), ...buildCommandStarterSuggestions(raw, deps.history)].slice(0, 8)
+  return [...buildHistorySuggestions(raw, deps.history).slice(0, 3)]
+}
+
+function buildHistorySuggestions(query: string, history: string[]): CommandSuggestion[] {
+  const clean = query.trim()
+  const matches = clean ? filterRankedNameMatches(history, clean, (entry) => entry) : history
+  return matches.slice(0, 6).map((entry, index) => ({
+    id: `history-${index}-${entry}`,
+    label: entry,
+    detail: 'Recent command - Tab to fill, Enter to run after filling',
+    kind: 'history' as const,
+    value: entry,
+  }))
+}
+
+function loadCommandHistory() {
+  if (typeof window === 'undefined') return []
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(COMMAND_HISTORY_STORAGE_KEY) ?? '[]')
+    return Array.isArray(parsed) ? parsed.map((entry) => String(entry ?? '').trim()).filter(Boolean).slice(0, COMMAND_HISTORY_LIMIT) : []
+  } catch {
+    return []
+  }
+}
+
+function saveCommandHistory(command: string) {
+  const clean = command.trim().replace(/\s+/g, ' ')
+  if (!clean || typeof window === 'undefined') return loadCommandHistory()
+  const next = [clean, ...loadCommandHistory().filter((entry) => entry.toLowerCase() !== clean.toLowerCase())].slice(0, COMMAND_HISTORY_LIMIT)
+  window.localStorage.setItem(COMMAND_HISTORY_STORAGE_KEY, JSON.stringify(next))
+  return next
+}
+
+function clearCommandHistory() {
+  if (typeof window === 'undefined') return []
+  window.localStorage.removeItem(COMMAND_HISTORY_STORAGE_KEY)
   return []
 }
 
-function buildCommandStarterSuggestions(query: string): CommandSuggestion[] {
+function maybeClearHistoryCommand(input: string) {
+  const normalized = input.trim().toLowerCase()
+  return normalized === 'clear history' || normalized === ':clear history' || normalized === ':history clear'
+}
+
+function shouldShowClearHistory(input: string) {
+  const normalized = input.trim().toLowerCase()
+  return normalized === 'clear' || normalized === 'clear h' || normalized === ':clear' || normalized === ':history'
+}
+
+function buildHistoryControlSuggestion(input: string, history: string[]): CommandSuggestion[] {
+  if (history.length === 0 || !shouldShowClearHistory(input)) return []
+  return [{ id: 'history-clear', label: 'Clear command history', detail: 'Remove saved Ctrl+K history from this browser', kind: 'action' as const, value: 'clear history' }]
+}
+
+function buildCommandStarterSuggestions(query: string, history: string[] = []): CommandSuggestion[] {
   const starters = [
+    ...buildHistoryControlSuggestion(query, history),
     { id: 'start-bill', label: 'b bill', detail: 'Create bill or start bill session', kind: 'mode' as const, value: 'b ' },
     { id: 'start-payment', label: 'p payment', detail: 'Record customer payment', kind: 'mode' as const, value: 'p ' },
     { id: 'start-stock', label: 's stock', detail: 'Add stock in', kind: 'mode' as const, value: 's ' },
