@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ClipboardList, Edit3, History, PackagePlus, SlidersHorizontal, Trash2, Warehouse } from 'lucide-react'
+import { ClipboardList, Edit3, History, PackagePlus, SlidersHorizontal, Trash2, Warehouse } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
@@ -26,7 +26,6 @@ import {
   type StockCustomerOption,
 } from '@/data/stock'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
-import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 import { formatInQty, parseNonNegativeNumber } from '@/lib/inr-format'
 import { matchesAnyRankedQuery } from '@/lib/search'
 
@@ -73,9 +72,6 @@ export function StockPage() {
   const [reportMonth, setReportMonth] = useState(() => getLocalIsoDate().slice(0, 7))
   const [activePanel, setActivePanel] = useState<StockPanel>('receive')
   const [statusText, setStatusText] = useState('')
-  const [quickStockCommand, setQuickStockCommand] = useState('')
-  const [isQuickStockOpen, setIsQuickStockOpen] = useState(false)
-  const [isStockConfirmOpen, setIsStockConfirmOpen] = useState(false)
 
   const itemsQuery = useQuery({ queryKey: ['items-options'], queryFn: loadItems })
   const customersQuery = useQuery({ queryKey: ['stock-customers'], queryFn: loadStockCustomers })
@@ -110,8 +106,6 @@ export function StockPage() {
   const filteredStockInRows = gasStockInRows.filter((row) => matchesAnyRankedQuery([row.itemName, row.customerName, row.date, formatFullDate(row.date)], search))
   const stockItems = currentStockQuery.data ?? []
   const attentionItems = stockItems.filter((item) => item.currentStock <= 0)
-  const positiveItems = stockItems.filter((item) => item.currentStock > 0)
-  const totalStockEntries = gasStockInRows.length + gasAdjustmentRows.length
   const selectedLedgerItem = gasItems.find((row) => row.id === ledgerItemId)
   const selectedLedgerCustomer = customers.find((row) => row.id === ledgerCustomerId)
 
@@ -214,7 +208,6 @@ export function StockPage() {
     setCustomerId(findGeneralCustomer(customers)?.id ?? '')
     setQtyInput('0')
     setNote('')
-    setIsStockConfirmOpen(false)
   }
 
   function resetOpeningForm() {
@@ -251,169 +244,14 @@ export function StockPage() {
     setActivePanel('receive')
   }
 
-  function applyStockCommand(input: string) {
-    const parsed = parseContextCommand(input, 'stock', {
-      items: gasItems,
-      today,
-    })
-    if (!parsed.ok) {
-      setStatusText(parsed.error)
-      return
-    }
-    if (parsed.command.kind !== 'stock') {
-      setStatusText('This command is not a stock command.')
-      return
-    }
-    setEditingId(null)
-    setDate(parsed.command.date)
-    setItemId(parsed.command.item.id)
-    setQtyInput(String(parsed.command.qty))
-    setNote(parsed.command.note)
-    setActivePanel('receive')
-    const general = findGeneralCustomer(customers)
-    if (general) setCustomerId(general.id)
-    setStatusText(`Command ready: ${parsed.command.item.name} | ${general?.name ?? 'General'} | ${parsed.command.displayQty}`)
-    setIsQuickStockOpen(false)
-    setQuickStockCommand('')
-    setIsStockConfirmOpen(true)
-  }
-
-  function applyQuickStockCommand() {
-    applyStockCommand(quickStockCommand)
-  }
-
-  async function confirmStockCommand() {
-    try {
-      await saveMutation.mutateAsync()
-      setIsStockConfirmOpen(false)
-    } catch {
-      // mutation shows status text
-    }
-  }
-
-  useEffect(() => {
-    if (itemsQuery.isLoading) return
-    const raw = window.sessionStorage.getItem(PENDING_COMMAND_STORAGE_KEY)
-    if (!raw) return
-    try {
-      const pending = JSON.parse(raw) as { kind?: string; body?: string; createdAt?: number }
-      if (pending.kind !== 'stock' || !pending.body || Date.now() - Number(pending.createdAt ?? 0) > 60_000) return
-      window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
-      applyStockCommand(pending.body)
-    } catch {
-      window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
-    }
-  }, [itemsQuery.isLoading, gasItems])
-
-  useEffect(() => {
-    if (!isStockConfirmOpen) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey && event.key === 'Enter') {
-        event.preventDefault()
-        void confirmStockCommand()
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isStockConfirmOpen, itemId, qtyInput, date, note, saveMutation.isPending])
-
   return (
     <div className="w-full space-y-4 px-3 pb-24 pt-3 sm:px-4 lg:px-6">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Finished goods</p>
-            <h2 className="mt-1 text-lg font-semibold text-slate-950">Stock Control</h2>
-            <p className="mt-1 max-w-2xl text-sm text-slate-500">Receive finished goods, correct physical stock, review monthly movement, and audit every item from one place.</p>
-          </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:min-w-[34rem]">
-            <StockStat label="Tracked Items" value={String(stockItems.length)} icon={<Warehouse size={14} />} />
-            <StockStat label="In Stock" value={String(positiveItems.length)} icon={<PackagePlus size={14} />} />
-            <StockStat label="Needs Attention" value={String(attentionItems.length)} tone={attentionItems.length > 0 ? 'red' : 'green'} icon={<AlertTriangle size={14} />} />
-            <StockStat label="Entries" value={String(totalStockEntries)} icon={<History size={14} />} />
-          </div>
-        </div>
-        <div className="mt-3 flex justify-end">
-          <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" onClick={() => setIsQuickStockOpen(true)}>
-            Stock Command
-          </button>
-        </div>
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         {statusText && (
-          <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600" role="status" aria-live="polite">
+          <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600" role="status" aria-live="polite">
             {statusText}
           </p>
         )}
-      </section>
-
-      {isQuickStockOpen && (
-        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <h3 className="text-base font-semibold text-slate-900">Stock Command</h3>
-              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickStockOpen(false)}>
-                Close
-              </button>
-            </div>
-            <div className="space-y-2 px-4 py-4">
-              <input
-                autoFocus
-                className={inputClass}
-                value={quickStockCommand}
-                onChange={(event) => setQuickStockCommand(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    applyQuickStockCommand()
-                  }
-                }}
-                placeholder='item qty [date=today|-1|DD-MM-YYYY] ["note"]'
-              />
-              <p className="text-xs text-slate-500">Gas qty rule: 20 means 20 bags. Use kg suffix for exact kg.</p>
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
-              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsQuickStockOpen(false)}>
-                Cancel
-              </button>
-              <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" onClick={applyQuickStockCommand}>
-                Review Stock In
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isStockConfirmOpen && (
-        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl">
-            <div className="border-b border-slate-200 px-4 py-3">
-              <h3 className="text-base font-semibold text-slate-900">Confirm Stock In</h3>
-              <p className="mt-1 text-xs text-slate-500">Ctrl+Enter confirms save</p>
-            </div>
-            <div className="space-y-2 px-4 py-4 text-sm text-slate-700">
-              <ConfirmRow label="Item" value={selectedItem?.name ?? 'Unknown'} />
-              <ConfirmRow label="Party" value={selectedCustomer?.name ?? 'Unknown'} />
-              <ConfirmRow label="Qty" value={formatStockQty(parseNonNegativeNumber(qtyInput), selectedItem)} />
-              <ConfirmRow label="Date" value={formatFullDate(date)} />
-              {note && <ConfirmRow label="Note" value={note} />}
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
-              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsStockConfirmOpen(false)}>
-                Back to Edit
-              </button>
-              <button
-                type="button"
-                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={() => void confirmStockCommand()}
-                disabled={!itemId || !customerId || parseNonNegativeNumber(qtyInput) <= 0 || saveMutation.isPending}
-              >
-                {saveMutation.isPending ? 'Saving...' : 'Confirm & Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 overflow-x-auto no-scrollbar">
           <div className="inline-flex min-w-max rounded-lg border border-slate-200 bg-slate-50 p-1">
             <PanelButton active={activePanel === 'opening'} onClick={() => setActivePanel('opening')} icon={<Warehouse size={14} />}>Opening</PanelButton>
@@ -700,19 +538,6 @@ async function invalidateStockQueries(queryClient: ReturnType<typeof useQueryCli
   ])
 }
 
-function StockStat({ label, value, icon, tone = 'slate' }: { label: string; value: string; icon: ReactNode; tone?: 'slate' | 'green' | 'red' }) {
-  const toneClass = tone === 'red' ? 'border-red-200 bg-red-50 text-red-700' : tone === 'green' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-700'
-  return (
-    <div className={`min-h-[4.75rem] rounded-lg border p-3 ${toneClass}`}>
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em]">
-        {icon}
-        <span>{label}</span>
-      </div>
-      <p className="mt-1 font-mono text-2xl font-bold leading-tight">{value}</p>
-    </div>
-  )
-}
-
 function PanelButton({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: ReactNode; children: ReactNode }) {
   return (
     <button
@@ -953,15 +778,6 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <span className="text-xs font-medium text-slate-600">{label}</span>
       {children}
     </label>
-  )
-}
-
-function ConfirmRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start justify-between gap-4 rounded-md bg-slate-50 px-3 py-2">
-      <span className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">{label}</span>
-      <span className="text-right font-medium text-slate-900">{value}</span>
-    </div>
   )
 }
 
