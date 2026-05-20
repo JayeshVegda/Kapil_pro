@@ -931,17 +931,20 @@ function NewBillPage() {
       </section>
 
       {isPreviewOpen && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <h3 className="text-base font-semibold text-slate-900">Bill Preview & Confirmation</h3>
-              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsPreviewOpen(false)}>
+        <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-900/60 px-3 py-4 sm:px-4 sm:py-8">
+          <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-[820px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-4rem)]">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+              <div className="min-w-0">
+                <h3 className="truncate text-base font-semibold text-slate-900">Bill Preview & Confirmation</h3>
+                <p className="mt-0.5 text-xs text-slate-500">Review the exact print layout before saving.</p>
+              </div>
+              <button type="button" className="shrink-0 rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsPreviewOpen(false)}>
                 Close
               </button>
             </div>
-            <div className="max-h-[70vh] overflow-auto p-4">
+            <div className="min-h-0 flex-1 overflow-auto bg-slate-50 px-3 py-4 sm:px-4">
               {stockWarnings.length > 0 && (
-                <div className="mx-auto mb-3 max-w-3xl rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <div className="mx-auto mb-3 max-w-[14cm] rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 shadow-sm">
                   <p className="font-semibold">Stock warning</p>
                   <div className="mt-2 space-y-1">
                     {stockWarnings.map((warning) => (
@@ -955,10 +958,10 @@ function NewBillPage() {
                   <p className="mt-2 text-xs text-amber-800">Saving is allowed after review.</p>
                 </div>
               )}
-              <div className="flex justify-center">
+              <div className="mx-auto flex w-full max-w-[14cm] justify-center">
                 <div
                   ref={previewRef}
-                  className={BILL_PREVIEW_CARD_CLASS}
+                  className={`${BILL_PREVIEW_CARD_CLASS} w-full`}
                   style={{ width: `${BILL_PRINT_PAGE_WIDTH_CM}cm`, maxWidth: '100%' }}
                 >
                 {draftPrintProps ? (
@@ -969,8 +972,9 @@ function NewBillPage() {
                 </div>
               </div>
             </div>
-            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
-              <span className="mr-auto text-xs text-slate-500">Ctrl+Enter confirms save</span>
+            <div className="grid shrink-0 gap-3 border-t border-slate-200 bg-white px-4 py-3 md:grid-cols-[1fr_auto] md:items-center">
+              <span className="text-xs text-slate-500">Ctrl+Enter confirms save</span>
+              <div className="flex flex-wrap justify-start gap-2 md:justify-end">
               <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={printPreview}>
                 Print
               </button>
@@ -991,6 +995,7 @@ function NewBillPage() {
               >
                 {saveMutation.isPending ? 'Saving...' : 'Confirm & Save'}
               </button>
+              </div>
             </div>
           </div>
         </div>
