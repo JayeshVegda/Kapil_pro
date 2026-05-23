@@ -299,6 +299,12 @@ export async function saveStockOpening(payload: { itemId: string; itemName: stri
   })
 }
 
+export async function deleteStockOpening(id: string) {
+  await runDataOperation('delete-stock-opening', async () => {
+    await pb.collection('stock_openings').delete(id)
+  })
+}
+
 export async function loadStockIn(): Promise<StockInRecord[]> {
   const records = await pb.collection('stock_in').getFullList({ sort: '-date', expand: 'item,customer' })
   return (records as PBRecord[]).map(mapStockIn)
@@ -349,6 +355,21 @@ export async function saveStockAdjustment(payload: { itemId: string; itemName: s
   await runDataOperation('save-stock-adjustment', async () => {
     await assertGasStockItem(payload.itemId)
     await pb.collection('stock_adjustments').create({
+      item: payload.itemId,
+      item_name: payload.itemName.trim(),
+      customer: payload.customerId,
+      customer_name: payload.customerName.trim(),
+      date: payload.date,
+      qty: payload.qty,
+      note: payload.note.trim(),
+    })
+  })
+}
+
+export async function updateStockAdjustment(id: string, payload: { itemId: string; itemName: string; customerId: string; customerName: string; date: string; qty: number; note: string }) {
+  await runDataOperation('update-stock-adjustment', async () => {
+    await assertGasStockItem(payload.itemId)
+    await pb.collection('stock_adjustments').update(id, {
       item: payload.itemId,
       item_name: payload.itemName.trim(),
       customer: payload.customerId,

@@ -1,15 +1,25 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ClipboardList, Edit3, History, PackagePlus, Search, SlidersHorizontal, Trash2, Warehouse } from 'lucide-react'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  ClipboardList,
+  Download,
+  FileText,
+  PackagePlus,
+  Search,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
+import { buildStockInventorySummary, StockInventoryStrip } from '@/components/stock/stock-inventory-strip'
 import { DateInput } from '@/components/ui/date-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
-import { isGasStockItem, loadItems, type ItemRecord } from '@/data/items'
+import { isGasStockItem, loadItems } from '@/data/items'
 import {
   deleteStockAdjustment,
   deleteStockIn,
+  deleteStockOpening,
   ensureGeneralCustomer,
   loadCurrentStock,
   loadMonthlyStockReport,
@@ -18,15 +28,20 @@ import {
   loadStockIn,
   loadStockLedger,
   loadStockOpenings,
-  saveStockOpening,
   saveStockAdjustment,
   saveStockIn,
+  saveStockOpening,
+  updateStockAdjustment,
   updateStockIn,
   type CurrentStockRecord,
+  type MonthlyStockReportRow,
   type StockCustomerOption,
+  type StockInRecord,
+  type StockLedgerRow,
+  type StockOpeningRecord,
 } from '@/data/stock'
-import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
-import { formatInQty, parseNonNegativeNumber } from '@/lib/inr-format'
+import { formatFullDate, getLocalIsoDate } from '@/lib/date'
+import { formatInQty } from '@/lib/inr-format'
 import { matchesAnyRankedQuery } from '@/lib/search'
 import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 
@@ -34,7 +49,7 @@ export const Route = createFileRoute('/stock-in')({
   component: StockInPage,
 })
 
-const stockInSchema = z.object({
+const stockEntrySchema = z.object({
   itemId: z.string().trim().min(1, 'Please select an item'),
   customerId: z.string().trim().min(1, 'Please select a party'),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid stock date'),
@@ -42,153 +57,158 @@ const stockInSchema = z.object({
   note: z.string(),
 })
 
-const adjustmentSchema = stockInSchema.extend({
-  qty: z.number().refine((value) => value !== 0, 'Adjustment qty is required'),
+const adjustmentSchema = stockEntrySchema.extend({
+  mode: z.enum(['add', 'subtract', 'set']),
+  reason: z.string(),
 })
 
-type StockPanel = 'opening' | 'receive' | 'adjust'
-type AuditPanel = 'ledger' | 'logs' | 'report'
+type ReceiveMode = 'receive' | 'opening'
+type AdjustmentMode = 'add' | 'subtract' | 'set'
+type WorkspaceTab = 'receive' | 'opening' | 'adjust' | 'report'
+type EditingLog = { type: 'received' | 'adjusted'; id: string } | null
+type StockLogRow = {
+  id: string
+  rawId: string
+  itemId: string
+  customerId: string
+  type: 'received' | 'adjusted'
+  date: string
+  itemName: string
+  customerName: string
+  qty: number
+  note: string
+}
 
 export function StockPage() {
   const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
+  const currentMonth = today.slice(0, 7)
+  const previousMonth = previousMonthKey(currentMonth)
+  const financialYearMonths = useMemo(() => fiscalYearMonthKeys(today), [today])
+
+  const [statusText, setStatusText] = useState('')
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('receive')
+  const [detailItem, setDetailItem] = useState<CurrentStockRecord | null>(null)
+  const [receiveMode, setReceiveMode] = useState<ReceiveMode>('receive')
   const [date, setDate] = useState(today)
   const [itemId, setItemId] = useState('')
   const [customerId, setCustomerId] = useState('')
   const [qtyInput, setQtyInput] = useState('0')
   const [note, setNote] = useState('')
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [openingDate, setOpeningDate] = useState(today)
-  const [openingItemId, setOpeningItemId] = useState('')
-  const [openingCustomerId, setOpeningCustomerId] = useState('')
-  const [openingQtyInput, setOpeningQtyInput] = useState('0')
-  const [openingNote, setOpeningNote] = useState('')
-  const [adjustmentDate, setAdjustmentDate] = useState(today)
-  const [adjustmentItemId, setAdjustmentItemId] = useState('')
-  const [adjustmentCustomerId, setAdjustmentCustomerId] = useState('')
-  const [adjustmentQtyInput, setAdjustmentQtyInput] = useState('0')
-  const [adjustmentNote, setAdjustmentNote] = useState('')
-  const [search, setSearch] = useState('')
-  const [stockSearch, setStockSearch] = useState('')
-  const [ledgerItemId, setLedgerItemId] = useState('')
-  const [ledgerCustomerId, setLedgerCustomerId] = useState('')
-  const [reportMonth, setReportMonth] = useState(() => getLocalIsoDate().slice(0, 7))
-  const [activePanel, setActivePanel] = useState<StockPanel>('receive')
-  const [auditPanel, setAuditPanel] = useState<AuditPanel>('ledger')
-  const [statusText, setStatusText] = useState('')
+  const [adjustmentMode, setAdjustmentMode] = useState<AdjustmentMode>('add')
+  const [adjustmentReason, setAdjustmentReason] = useState('')
+  const [editingLog, setEditingLog] = useState<EditingLog>(null)
+  const [reportMonth, setReportMonth] = useState(currentMonth)
+  const [logSearch, setLogSearch] = useState('')
+  const [logType, setLogType] = useState<'all' | 'received' | 'adjusted'>('all')
 
   const itemsQuery = useQuery({ queryKey: ['items-options'], queryFn: loadItems })
   const customersQuery = useQuery({ queryKey: ['stock-customers'], queryFn: loadStockCustomers })
-  const openingsQuery = useQuery({ queryKey: ['stock-openings'], queryFn: loadStockOpenings })
   const currentStockQuery = useQuery({ queryKey: ['current-stock'], queryFn: loadCurrentStock })
-  const stockInQuery = useQuery({ queryKey: ['stock-in-log'], queryFn: loadStockIn })
-  const adjustmentsQuery = useQuery({ queryKey: ['stock-adjustments-log'], queryFn: loadStockAdjustments })
-  const ledgerQuery = useQuery({
-    queryKey: ['stock-ledger', ledgerItemId, ledgerCustomerId],
-    queryFn: () => loadStockLedger(ledgerItemId, ledgerCustomerId),
-    enabled: Boolean(ledgerItemId && ledgerCustomerId),
+  const currentMonthReportQuery = useQuery({
+    queryKey: ['monthly-stock-report', currentMonth],
+    queryFn: () => loadMonthlyStockReport(currentMonth),
+  })
+  const previousMonthReportQuery = useQuery({
+    queryKey: ['monthly-stock-report', previousMonth],
+    queryFn: () => loadMonthlyStockReport(previousMonth),
+  })
+  const financialYearReportQueries = useQueries({
+    queries: financialYearMonths.map((month) => ({
+      queryKey: ['monthly-stock-report', month],
+      queryFn: () => loadMonthlyStockReport(month),
+    })),
   })
   const stockReportQuery = useQuery({
     queryKey: ['monthly-stock-report', reportMonth],
     queryFn: () => loadMonthlyStockReport(reportMonth),
+    enabled: activeTab === 'report',
+  })
+  const stockInQuery = useQuery({
+    queryKey: ['stock-in-log'],
+    queryFn: loadStockIn,
+  })
+  const adjustmentsQuery = useQuery({
+    queryKey: ['stock-adjustments-log'],
+    queryFn: loadStockAdjustments,
+  })
+  const openingsQuery = useQuery({
+    queryKey: ['stock-openings'],
+    queryFn: loadStockOpenings,
+  })
+  const detailLedgerQuery = useQuery({
+    queryKey: ['stock-ledger', detailItem?.itemId ?? '', detailItem?.customerId ?? ''],
+    queryFn: () => loadStockLedger(detailItem?.itemId ?? '', detailItem?.customerId ?? ''),
+    enabled: Boolean(detailItem),
   })
 
   const gasItems = useMemo(() => (itemsQuery.data ?? []).filter(isGasStockItem), [itemsQuery.data])
   const gasItemKeys = useMemo(() => new Set(gasItems.flatMap((item) => [item.id, item.name.trim().toLowerCase()])), [gasItems])
   const customers = customersQuery.data ?? []
+  const stockItems = currentStockQuery.data ?? []
+  const fiscalRows = financialYearReportQueries.flatMap((query) => query.data ?? [])
+  const fiscalReportRows = buildFiscalReportRows(financialYearReportQueries.map((query) => query.data ?? []))
   const selectedItem = gasItems.find((item) => item.id === itemId)
   const selectedCustomer = customers.find((customer) => customer.id === customerId)
-  const selectedOpeningItem = gasItems.find((item) => item.id === openingItemId)
-  const selectedOpeningCustomer = customers.find((customer) => customer.id === openingCustomerId)
-  const selectedAdjustmentItem = gasItems.find((item) => item.id === adjustmentItemId)
-  const selectedAdjustmentCustomer = customers.find((customer) => customer.id === adjustmentCustomerId)
-  const selectedUnit = unitLabel(selectedItem)
-  const openingUnit = unitLabel(selectedOpeningItem)
-  const adjustmentUnit = unitLabel(selectedAdjustmentItem)
-  const gasStockInRows = (stockInQuery.data ?? []).filter((row) => gasItemKeys.has(row.itemId) || gasItemKeys.has(row.itemName.trim().toLowerCase()))
-  const gasAdjustmentRows = (adjustmentsQuery.data ?? []).filter((row) => gasItemKeys.has(row.itemId) || gasItemKeys.has(row.itemName.trim().toLowerCase()))
-  const filteredStockInRows = gasStockInRows.filter((row) => matchesAnyRankedQuery([row.itemName, row.customerName, row.date, formatFullDate(row.date)], search))
-  const stockItems = currentStockQuery.data ?? []
-  const attentionItems = stockItems.filter((item) => item.currentStock <= 0)
-  const positiveItems = stockItems.filter((item) => item.currentStock > 0)
-  const totalClosingStock = stockItems.reduce((sum, item) => sum + item.currentStock, 0)
-  const normalizedStockSearch = stockSearch.trim()
-  const stockGlanceRows = useMemo(
-    () =>
-      stockItems
-        .filter((row) => matchesAnyRankedQuery([row.itemName, row.customerName], normalizedStockSearch))
-        .sort((a, b) => {
-        const aAttention = a.currentStock <= 0 ? 0 : 1
-        const bAttention = b.currentStock <= 0 ? 0 : 1
-        if (aAttention !== bAttention) return aAttention - bAttention
-        const itemCompare = a.itemName.localeCompare(b.itemName)
-        if (itemCompare !== 0) return itemCompare
-        return a.customerName.localeCompare(b.customerName)
-      }),
-    [stockItems, normalizedStockSearch],
-  )
-  const selectedLedgerItem = gasItems.find((row) => row.id === ledgerItemId)
-  const selectedLedgerCustomer = customers.find((row) => row.id === ledgerCustomerId)
+  const selectedBucket = stockItems.find((item) => item.itemId === itemId && item.customerId === customerId)
+  const sortedStockItems = useMemo(() => [...stockItems].sort((a, b) => a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName)), [stockItems])
+  const summary = useMemo(() => {
+    return buildStockInventorySummary({
+      stockItems,
+      currentRows: currentMonthReportQuery.data ?? [],
+      previousRows: previousMonthReportQuery.data ?? [],
+      fiscalRows,
+    })
+  }, [currentMonthReportQuery.data, financialYearReportQueries, previousMonthReportQuery.data, stockItems])
+  const logs = useMemo(() => {
+    const received = (stockInQuery.data ?? [])
+      .filter((row) => gasItemKeys.has(row.itemId) || gasItemKeys.has(row.itemName.trim().toLowerCase()))
+      .map((row) => ({ id: `received-${row.id}`, rawId: row.id, itemId: row.itemId, customerId: row.customerId, type: 'received' as const, date: row.date, itemName: row.itemName, customerName: row.customerName, qty: row.qty, note: row.note }))
+    const adjusted = (adjustmentsQuery.data ?? [])
+      .filter((row) => gasItemKeys.has(row.itemId) || gasItemKeys.has(row.itemName.trim().toLowerCase()))
+      .map((row) => ({ id: `adjusted-${row.id}`, rawId: row.id, itemId: row.itemId, customerId: row.customerId, type: 'adjusted' as const, date: row.date, itemName: row.itemName, customerName: row.customerName, qty: row.qty, note: row.note }))
+    return [...received, ...adjusted]
+      .filter((row) => logType === 'all' || row.type === logType)
+      .filter((row) => matchesAnyRankedQuery([row.itemName, row.customerName, row.date, row.type, row.note], logSearch))
+      .sort((a, b) => b.date.localeCompare(a.date))
+  }, [adjustmentsQuery.data, gasItemKeys, logSearch, logType, stockInQuery.data])
 
   useEffect(() => {
     if (customersQuery.isLoading || customers.length > 0) return
     void ensureGeneralCustomer().then(async (general) => {
-      setCustomerDefaults(general.id)
+      setCustomerId(general.id)
       await queryClient.invalidateQueries({ queryKey: ['stock-customers'] })
     })
   }, [customers.length, customersQuery.isLoading, queryClient])
 
   useEffect(() => {
     const general = findGeneralCustomer(customers)
-    if (!general) return
-    setCustomerDefaults(general.id)
+    if (general) setCustomerId((current) => current || general.id)
   }, [customers])
 
-  const saveMutation = useMutation({
+  const receiveMutation = useMutation({
     mutationFn: async () => {
-      const parsed = stockInSchema.safeParse({ itemId, customerId, date, qty: parseNonNegativeNumber(qtyInput), note })
+      if (!selectedItem) throw new Error('Please select an item')
+      if (!selectedCustomer) throw new Error('Please select a party')
+      const qty = parseStockQtyInput(qtyInput, selectedItem)
+      const parsed = stockEntrySchema.safeParse({ itemId, customerId, date, qty, note })
       if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid stock entry')
-      const item = selectedItem
-      const customer = selectedCustomer
-      if (!item) throw new Error('Please select an item')
-      if (!customer) throw new Error('Please select a party')
-      const payload = { itemId: item.id, itemName: item.name, customerId: customer.id, customerName: customer.name, date: parsed.data.date, qty: parsed.data.qty, note: parsed.data.note }
-      if (editingId) {
-        await updateStockIn(editingId, payload)
-      } else {
-        await saveStockIn(payload)
+      const payload = {
+        itemId: selectedItem.id,
+        itemName: selectedItem.name,
+        customerId: selectedCustomer.id,
+        customerName: selectedCustomer.name,
+        date: parsed.data.date,
+        qty: parsed.data.qty,
+        note: parsed.data.note,
       }
+      if (editingLog?.type === 'received') await updateStockIn(editingLog.id, payload)
+      else if (receiveMode === 'opening') await saveStockOpening(payload)
+      else await saveStockIn(payload)
     },
     onSuccess: async () => {
-      setStatusText(editingId ? 'Stock in updated.' : 'Stock in saved.')
-      resetStockInForm()
-      await invalidateStockQueries(queryClient)
-    },
-    onError: (error) => setStatusText(toUserMessage(error)),
-  })
-
-  const openingMutation = useMutation({
-    mutationFn: async () => {
-      const parsed = stockInSchema.safeParse({ itemId: openingItemId, customerId: openingCustomerId, date: openingDate, qty: parseNonNegativeNumber(openingQtyInput), note: openingNote })
-      if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid opening stock')
-      const item = selectedOpeningItem
-      const customer = selectedOpeningCustomer
-      if (!item) throw new Error('Please select an item')
-      if (!customer) throw new Error('Please select a party')
-      await saveStockOpening({ itemId: item.id, itemName: item.name, customerId: customer.id, customerName: customer.name, date: parsed.data.date, qty: parsed.data.qty, note: parsed.data.note })
-    },
-    onSuccess: async () => {
-      setStatusText('Opening stock saved.')
-      resetOpeningForm()
-      await invalidateStockQueries(queryClient)
-    },
-    onError: (error) => setStatusText(toUserMessage(error)),
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: deleteStockIn,
-    onSuccess: async () => {
-      setStatusText('Stock in entry deleted.')
+      setStatusText('')
+      resetEntryForm()
       await invalidateStockQueries(queryClient)
     },
     onError: (error) => setStatusText(toUserMessage(error)),
@@ -196,18 +216,45 @@ export function StockPage() {
 
   const adjustmentMutation = useMutation({
     mutationFn: async () => {
-      const qty = Number(adjustmentQtyInput)
-      const parsed = adjustmentSchema.safeParse({ itemId: adjustmentItemId, customerId: adjustmentCustomerId, date: adjustmentDate, qty: Number.isFinite(qty) ? qty : 0, note: adjustmentNote })
+      if (!selectedItem) throw new Error('Please select an item')
+      if (!selectedCustomer) throw new Error('Please select a party')
+      const inputQty = parseStockQtyInput(qtyInput, selectedItem)
+      const parsed = adjustmentSchema.safeParse({
+        itemId,
+        customerId,
+        date,
+        qty: inputQty,
+        note,
+        mode: adjustmentMode,
+        reason: adjustmentReason,
+      })
       if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid adjustment')
-      const item = selectedAdjustmentItem
-      const customer = selectedAdjustmentCustomer
-      if (!item) throw new Error('Please select an item')
-      if (!customer) throw new Error('Please select a party')
-      await saveStockAdjustment({ itemId: item.id, itemName: item.name, customerId: customer.id, customerName: customer.name, date: parsed.data.date, qty: parsed.data.qty, note: parsed.data.note })
+      const qty = adjustmentQty(parsed.data.qty, adjustmentMode, selectedBucket?.currentStock ?? 0)
+      if (qty === 0) throw new Error('Adjustment qty is zero.')
+      const payload = {
+        itemId: selectedItem.id,
+        itemName: selectedItem.name,
+        customerId: selectedCustomer.id,
+        customerName: selectedCustomer.name,
+        date: parsed.data.date,
+        qty,
+        note: [adjustmentReason.trim(), note.trim()].filter(Boolean).join(' - '),
+      }
+      if (editingLog?.type === 'adjusted') await updateStockAdjustment(editingLog.id, payload)
+      else await saveStockAdjustment(payload)
     },
     onSuccess: async () => {
-      setStatusText('Stock adjustment saved.')
-      resetAdjustmentForm()
+      setStatusText('')
+      resetEntryForm()
+      await invalidateStockQueries(queryClient)
+    },
+    onError: (error) => setStatusText(toUserMessage(error)),
+  })
+
+  const deleteReceivedMutation = useMutation({
+    mutationFn: deleteStockIn,
+    onSuccess: async () => {
+      setStatusText('')
       await invalidateStockQueries(queryClient)
     },
     onError: (error) => setStatusText(toUserMessage(error)),
@@ -216,42 +263,61 @@ export function StockPage() {
   const deleteAdjustmentMutation = useMutation({
     mutationFn: deleteStockAdjustment,
     onSuccess: async () => {
-      setStatusText('Stock adjustment deleted.')
+      setStatusText('')
       await invalidateStockQueries(queryClient)
     },
     onError: (error) => setStatusText(toUserMessage(error)),
   })
 
-  function resetStockInForm() {
-    setEditingId(null)
+  const deleteOpeningMutation = useMutation({
+    mutationFn: deleteStockOpening,
+    onSuccess: async () => {
+      setStatusText('')
+      await invalidateStockQueries(queryClient)
+    },
+    onError: (error) => setStatusText(toUserMessage(error)),
+  })
+
+  function resetEntryForm() {
     setDate(today)
     setItemId('')
     setCustomerId(findGeneralCustomer(customers)?.id ?? '')
     setQtyInput('0')
     setNote('')
+    setReceiveMode('receive')
+    setAdjustmentMode('add')
+    setAdjustmentReason('')
+    setEditingLog(null)
   }
 
-  function resetOpeningForm() {
-    setOpeningDate(today)
-    setOpeningItemId('')
-    setOpeningCustomerId(findGeneralCustomer(customers)?.id ?? '')
-    setOpeningQtyInput('0')
-    setOpeningNote('')
+  function openReceive(row?: CurrentStockRecord) {
+    setReceiveMode('receive')
+    setDate(today)
+    setItemId(row?.itemId ?? '')
+    setCustomerId(row?.customerId || findGeneralCustomer(customers)?.id || '')
+    setQtyInput('0')
+    setNote('')
+    setStatusText('')
+    setEditingLog(null)
+    setActiveTab('receive')
   }
 
-  function resetAdjustmentForm() {
-    setAdjustmentDate(today)
-    setAdjustmentItemId('')
-    setAdjustmentCustomerId(findGeneralCustomer(customers)?.id ?? '')
-    setAdjustmentQtyInput('0')
-    setAdjustmentNote('')
+  function openAdjust(row?: CurrentStockRecord) {
+    setAdjustmentMode('add')
+    setDate(today)
+    setItemId(row?.itemId ?? '')
+    setCustomerId(row?.customerId || findGeneralCustomer(customers)?.id || '')
+    setQtyInput('0')
+    setAdjustmentReason('')
+    setNote('')
+    setStatusText('')
+    setEditingLog(null)
+    setActiveTab('adjust')
   }
 
-  function setCustomerDefaults(nextCustomerId: string) {
-    setCustomerId((current) => current || nextCustomerId)
-    setOpeningCustomerId((current) => current || nextCustomerId)
-    setAdjustmentCustomerId((current) => current || nextCustomerId)
-    setLedgerCustomerId((current) => current || nextCustomerId)
+  function openDetail(row: CurrentStockRecord) {
+    setDetailItem(row)
+    setStatusText('')
   }
 
   function applyStockCommand(input: string) {
@@ -268,13 +334,14 @@ export function StockPage() {
       return
     }
     const general = findGeneralCustomer(customers)
-    setEditingId(null)
+    setReceiveMode('receive')
+    setEditingLog(null)
     setDate(parsed.command.date)
     setItemId(parsed.command.item.id)
     setCustomerId(general?.id ?? customerId)
-    setQtyInput(String(parsed.command.qty))
+    setQtyInput(String(kgToBags(parsed.command.qty, parsed.command.item)))
     setNote(parsed.command.note)
-    setActivePanel('receive')
+    setActiveTab('receive')
     setStatusText(`Command ready: ${parsed.command.item.name} | ${parsed.command.displayQty}`)
   }
 
@@ -285,7 +352,11 @@ export function StockPage() {
     if (!raw) return
     try {
       const pending = JSON.parse(raw) as { kind?: string; body?: string; createdAt?: number }
-      if (pending.kind !== 'stock' || !pending.body || Date.now() - Number(pending.createdAt ?? 0) > 60_000) return
+      if (pending.kind !== 'stock') return
+      if (!pending.body || Date.now() - Number(pending.createdAt ?? 0) > 60_000) {
+        window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
+        return
+      }
       window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
       applyStockCommand(pending.body)
     } catch {
@@ -293,348 +364,227 @@ export function StockPage() {
     }
   }, [customers.length, customersQuery.isLoading, gasItems, itemsQuery.isLoading])
 
-  function startEditStockIn(row: NonNullable<typeof stockInQuery.data>[number]) {
-    setEditingId(row.id)
+  function exportMonthlyCsv() {
+    const rows = stockReportQuery.data ?? []
+    const csvRows = [
+      ['Item', 'Party', 'Opening', 'Stock In', 'Sold', 'Adjustment', 'Closing'],
+      ...rows.map((row) => [row.itemName, row.customerName, row.opening, row.stockIn, row.sold, row.adjustment, row.closing]),
+    ]
+    downloadCsv(`stock-report-${reportMonth}.csv`, csvRows)
+  }
+
+  function exportLogsCsv() {
+    downloadCsv('stock-logs.csv', [
+      ['Date', 'Type', 'Item', 'Party', 'Qty', 'Note'],
+      ...logs.map((row) => [row.date, row.type, row.itemName, row.customerName, row.qty, row.note]),
+    ])
+  }
+
+  function editLog(row: StockLogRow) {
+    setEditingLog({ type: row.type, id: row.rawId })
     setDate(row.date)
     setItemId(row.itemId)
     setCustomerId(row.customerId)
-    setQtyInput(String(row.qty))
+    setQtyInput(String(Math.abs(kgToBags(row.qty, stockItems.find((item) => item.itemId === row.itemId)))))
     setNote(row.note)
+    setAdjustmentReason(row.type === 'adjusted' ? row.note : '')
+    setAdjustmentMode(row.type === 'adjusted' && row.qty < 0 ? 'subtract' : 'add')
+    setActiveTab(row.type === 'received' ? 'receive' : 'adjust')
     setStatusText('')
-    setActivePanel('receive')
   }
 
-  function selectBucketForReceive(row: CurrentStockRecord) {
-    setEditingId(null)
-    setDate(today)
+  function editOpening(row: StockOpeningRecord) {
+    const item = gasItems.find((entry) => entry.id === row.itemId || entry.name === row.itemName) ?? stockItems.find((entry) => entry.itemId === row.itemId || entry.itemName === row.itemName)
+    setReceiveMode('opening')
+    setActiveTab('opening')
+    setDate(row.date || today)
     setItemId(row.itemId)
     setCustomerId(row.customerId)
-    setQtyInput('0')
-    setNote('')
+    setQtyInput(String(kgToBags(row.qty, item)))
+    setNote(row.note)
+    setEditingLog(null)
     setStatusText('')
-    setActivePanel('receive')
   }
 
-  function selectBucketForAdjust(row: CurrentStockRecord) {
-    setAdjustmentDate(today)
-    setAdjustmentItemId(row.itemId)
-    setAdjustmentCustomerId(row.customerId)
-    setAdjustmentQtyInput('0')
-    setAdjustmentNote('')
-    setStatusText('')
-    setActivePanel('adjust')
-  }
-
-  function selectBucketForLedger(row: CurrentStockRecord) {
-    setLedgerItemId(row.itemId)
-    setLedgerCustomerId(row.customerId)
-    setAuditPanel('ledger')
+  function deleteLog(row: StockLogRow) {
+    if (row.type === 'received') void deleteReceivedMutation.mutateAsync(row.rawId)
+    else void deleteAdjustmentMutation.mutateAsync(row.rawId)
   }
 
   return (
-    <div className="w-full space-y-4 px-3 pb-24 pt-3 sm:px-4 lg:px-6">
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <StockSummaryPill label="Total Buckets" value={String(stockItems.length)} />
-        <StockSummaryPill label="In Stock" value={String(positiveItems.length)} tone="green" />
-        <StockSummaryPill label="Needs Attention" value={String(attentionItems.length)} tone={attentionItems.length > 0 ? 'red' : 'slate'} />
-        <StockSummaryPill label="Closing Stock" value={formatStockQty(totalClosingStock, gasItems[0])} />
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-base font-semibold text-slate-950">Inventory</h3>
-            <p className="mt-0.5 text-xs text-slate-500">Search item + party buckets, check closing stock, and act quickly.</p>
-          </div>
-          <label className="relative w-full sm:w-80">
-            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              className={`${inputClass} pl-9`}
-              value={stockSearch}
-              onChange={(event) => setStockSearch(event.target.value)}
-              placeholder="Search item or party..."
-            />
-          </label>
-        </div>
-        {currentStockQuery.isLoading && <p className="rounded-md bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">Loading stock...</p>}
-        {currentStockQuery.isError && <ErrorText error={currentStockQuery.error} fallback="Unable to load stock." />}
-        {!currentStockQuery.isLoading && !currentStockQuery.isError && (
-          <CurrentStockGlance
-            rows={stockGlanceRows}
-            onReceive={selectBucketForReceive}
-            onAdjust={selectBucketForAdjust}
-            onOpenLedger={selectBucketForLedger}
-          />
-        )}
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        {statusText && (
-          <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600" role="status" aria-live="polite">
+    <div className="w-full space-y-3 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+      {statusText && (
+        <section>
+          <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 shadow-sm" role="status" aria-live="polite">
             {statusText}
           </p>
-        )}
-        <div className="mb-4 overflow-x-auto no-scrollbar">
-          <div className="inline-flex min-w-max rounded-lg border border-slate-200 bg-slate-50 p-1">
-            <PanelButton active={activePanel === 'opening'} onClick={() => setActivePanel('opening')} icon={<Warehouse size={14} />}>Opening</PanelButton>
-            <PanelButton active={activePanel === 'receive'} onClick={() => setActivePanel('receive')} icon={<PackagePlus size={14} />}>Receive</PanelButton>
-            <PanelButton active={activePanel === 'adjust'} onClick={() => setActivePanel('adjust')} icon={<SlidersHorizontal size={14} />}>Adjust</PanelButton>
-          </div>
-        </div>
+        </section>
+      )}
 
-        {activePanel === 'opening' && (
-          <WorkspacePanel title="Opening Stock" subtitle="Set opening stock for each item and party bucket. Saving again updates the same item + party opening.">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[150px_1fr_1fr_160px_1fr_auto]">
-              <Field label="Date">
-                <DateInput className={inputClass} value={openingDate} onChange={setOpeningDate} />
-              </Field>
-              <Field label="Item">
-                <SearchableCombobox
-                  options={gasItems}
-                  value={openingItemId}
-                  onChange={setOpeningItemId}
-                  inputClassName={inputClass}
-                  placeholder={itemsQuery.isLoading ? 'Loading items...' : 'Search item...'}
-                  disabled={itemsQuery.isLoading || itemsQuery.isError}
-                  emptyText="No matching gas part found."
-                  maxResults={25}
-                />
-              </Field>
-              <Field label="Party">
-                <SearchableCombobox
-                  options={customers}
-                  value={openingCustomerId}
-                  onChange={setOpeningCustomerId}
-                  inputClassName={inputClass}
-                  placeholder={customersQuery.isLoading ? 'Loading parties...' : 'Search party...'}
-                  disabled={customersQuery.isLoading || customersQuery.isError}
-                  emptyText="No matching party found."
-                  maxResults={25}
-                />
-              </Field>
-              <Field label={`Opening (${openingUnit})`}>
-                <input className={inputClass} type="number" value={openingQtyInput} onChange={(event) => setOpeningQtyInput(event.target.value)} />
-              </Field>
-              <Field label="Note">
-                <input className={inputClass} value={openingNote} onChange={(event) => setOpeningNote(event.target.value)} placeholder="Opening balance note" />
-              </Field>
-              <div className="sticky bottom-0 z-20 -mx-5 flex items-end gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur md:static md:mx-0 md:border-t-0 md:bg-transparent md:p-0">
-                <button type="button" className="h-11 rounded-md border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50 lg:h-10 lg:px-3" onClick={resetOpeningForm}>
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-11 flex-1 items-center justify-center gap-1 rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 md:flex-none lg:h-10 lg:px-3"
-                  onClick={() => void openingMutation.mutateAsync()}
-                  disabled={!openingItemId || !openingCustomerId || openingMutation.isPending}
-                >
-                  <Warehouse size={14} />
-                  {openingMutation.isPending ? 'Saving...' : 'Save Opening'}
-                </button>
-              </div>
-            </div>
-            <div className="mt-5">
-              <OpeningTable rows={openingsQuery.data ?? []} items={gasItems} />
-            </div>
-          </WorkspacePanel>
-        )}
-
-        {activePanel === 'receive' && (
-          <WorkspacePanel title={editingId ? 'Edit Stock Receipt' : 'Receive Finished Goods'} subtitle="Add stock produced or received into finished goods inventory.">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[150px_1fr_1fr_160px_1fr_auto]">
-              <Field label="Date">
-                <DateInput className={inputClass} value={date} onChange={setDate} />
-              </Field>
-              <Field label="Item">
-                <SearchableCombobox
-                  options={gasItems}
-                  value={itemId}
-                  onChange={(nextId) => {
-                    setItemId(nextId)
-                    setStatusText('')
-                  }}
-                  inputClassName={inputClass}
-                  placeholder={itemsQuery.isLoading ? 'Loading items...' : 'Search item...'}
-                  disabled={itemsQuery.isLoading || itemsQuery.isError}
-                  emptyText="No matching gas part found."
-                  maxResults={25}
-                />
-              </Field>
-              <Field label="Party">
-                <SearchableCombobox
-                  options={customers}
-                  value={customerId}
-                  onChange={(nextId) => {
-                    setCustomerId(nextId)
-                    setStatusText('')
-                  }}
-                  inputClassName={inputClass}
-                  placeholder={customersQuery.isLoading ? 'Loading parties...' : 'Search party...'}
-                  disabled={customersQuery.isLoading || customersQuery.isError}
-                  emptyText="No matching party found."
-                  maxResults={25}
-                />
-              </Field>
-              <Field label={`Qty (${selectedUnit})`}>
-                <input className={inputClass} type="number" value={qtyInput} onChange={(event) => setQtyInput(event.target.value)} />
-              </Field>
-              <Field label="Note">
-                <input className={inputClass} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Production batch, source, remark" />
-              </Field>
-              <div className="sticky bottom-0 z-20 -mx-5 flex items-end gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur md:static md:mx-0 md:border-t-0 md:bg-transparent md:p-0">
-                <button type="button" className="h-11 rounded-md border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50 lg:h-10 lg:px-3" onClick={resetStockInForm}>
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-11 flex-1 items-center justify-center gap-1 rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 md:flex-none lg:h-10 lg:px-3"
-                  onClick={() => void saveMutation.mutateAsync()}
-                  disabled={!itemId || !customerId || parseNonNegativeNumber(qtyInput) <= 0 || saveMutation.isPending}
-                >
-                  <PackagePlus size={14} />
-                  {saveMutation.isPending ? 'Saving...' : editingId ? 'Update' : 'Save'}
-                </button>
-              </div>
-            </div>
-          </WorkspacePanel>
-        )}
-
-        {activePanel === 'adjust' && (
-          <WorkspacePanel title="Manual Stock Adjustment" subtitle="Use for physical count corrections, damage, shortage, or audit corrections. Positive adds stock, negative removes stock.">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[150px_1fr_1fr_160px_1fr_auto]">
-              <Field label="Date">
-                <DateInput className={inputClass} value={adjustmentDate} onChange={setAdjustmentDate} />
-              </Field>
-              <Field label="Item">
-                <SearchableCombobox
-                  options={gasItems}
-                  value={adjustmentItemId}
-                  onChange={setAdjustmentItemId}
-                  inputClassName={inputClass}
-                  placeholder={itemsQuery.isLoading ? 'Loading items...' : 'Search item...'}
-                  disabled={itemsQuery.isLoading || itemsQuery.isError}
-                  emptyText="No matching gas part found."
-                  maxResults={25}
-                />
-              </Field>
-              <Field label="Party">
-                <SearchableCombobox
-                  options={customers}
-                  value={adjustmentCustomerId}
-                  onChange={setAdjustmentCustomerId}
-                  inputClassName={inputClass}
-                  placeholder={customersQuery.isLoading ? 'Loading parties...' : 'Search party...'}
-                  disabled={customersQuery.isLoading || customersQuery.isError}
-                  emptyText="No matching party found."
-                  maxResults={25}
-                />
-              </Field>
-              <Field label={`Adjustment (${adjustmentUnit})`}>
-                <input className={inputClass} type="number" value={adjustmentQtyInput} onChange={(event) => setAdjustmentQtyInput(event.target.value)} />
-              </Field>
-              <Field label="Reason / Note">
-                <input className={inputClass} value={adjustmentNote} onChange={(event) => setAdjustmentNote(event.target.value)} placeholder="Damage, correction, physical count" />
-              </Field>
-              <div className="sticky bottom-0 z-20 -mx-5 flex items-end gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur md:static md:mx-0 md:border-t-0 md:bg-transparent md:p-0">
-                <button type="button" className="h-11 rounded-md border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50 lg:h-10 lg:px-3" onClick={resetAdjustmentForm}>
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex h-11 flex-1 items-center justify-center gap-1 rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 md:flex-none lg:h-10 lg:px-3"
-                  onClick={() => void adjustmentMutation.mutateAsync()}
-                  disabled={!adjustmentItemId || !adjustmentCustomerId || Number(adjustmentQtyInput) === 0 || adjustmentMutation.isPending}
-                >
-                  <SlidersHorizontal size={14} />
-                  {adjustmentMutation.isPending ? 'Saving...' : 'Save'}
-                </button>
-              </div>
-            </div>
-          </WorkspacePanel>
-        )}
-
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900">Audit & Reports</h3>
-            <p className="mt-1 text-xs text-slate-500">Open ledger, review logs, and check monthly movement when needed.</p>
-          </div>
-          <div className="inline-flex min-w-max rounded-lg border border-slate-200 bg-slate-50 p-1">
-            <PanelButton active={auditPanel === 'ledger'} onClick={() => setAuditPanel('ledger')} icon={<History size={14} />}>Ledger</PanelButton>
-            <PanelButton active={auditPanel === 'logs'} onClick={() => setAuditPanel('logs')} icon={<Warehouse size={14} />}>Logs</PanelButton>
-            <PanelButton active={auditPanel === 'report'} onClick={() => setAuditPanel('report')} icon={<ClipboardList size={14} />}>Report</PanelButton>
-          </div>
-        </div>
-
-        {auditPanel === 'report' && (
-          <WorkspacePanel title="Monthly Stock Report" subtitle={`${formatMonthYear(reportMonth)} opening, stock in, sold, adjustment, closing.`}>
-            <div className="mb-3 flex justify-end">
-              <input className={`${inputClass} w-44`} type="month" value={reportMonth} onChange={(event) => setReportMonth(event.target.value)} />
-            </div>
-            {stockReportQuery.isLoading && <p className="text-sm text-slate-500">Loading stock report...</p>}
-            {stockReportQuery.isError && <ErrorText error={stockReportQuery.error} fallback="Unable to load stock report." />}
-            {!stockReportQuery.isLoading && !stockReportQuery.isError && <StockReportTable rows={stockReportQuery.data ?? []} />}
-          </WorkspacePanel>
-        )}
-
-        {auditPanel === 'ledger' && (
-          <WorkspacePanel title="Item + Party Stock Ledger" subtitle={selectedLedgerItem && selectedLedgerCustomer ? `Full movement for ${selectedLedgerItem.name} / ${selectedLedgerCustomer.name}` : 'Select an item and party to inspect opening, receipts, sold, adjustments, and running balance.'}>
-            <div className="mb-3 grid max-w-3xl grid-cols-1 gap-3 md:grid-cols-2">
-              <SearchableCombobox
-                options={gasItems}
-                value={ledgerItemId}
-                onChange={setLedgerItemId}
-                inputClassName={inputClass}
-                placeholder={itemsQuery.isLoading ? 'Loading items...' : 'Search item ledger...'}
-                disabled={itemsQuery.isLoading || itemsQuery.isError}
-                emptyText="No matching gas part found."
-                maxResults={25}
-              />
-              <SearchableCombobox
-                options={customers}
-                value={ledgerCustomerId}
-                onChange={setLedgerCustomerId}
-                inputClassName={inputClass}
-                placeholder={customersQuery.isLoading ? 'Loading parties...' : 'Search party ledger...'}
-                disabled={customersQuery.isLoading || customersQuery.isError}
-                emptyText="No matching party found."
-                maxResults={25}
-              />
-            </div>
-            {(!ledgerItemId || !ledgerCustomerId) && <p className="text-sm text-slate-500">Select an item and party to view full movement.</p>}
-            {ledgerQuery.isLoading && <p className="text-sm text-slate-500">Loading ledger...</p>}
-            {ledgerQuery.isError && <ErrorText error={ledgerQuery.error} fallback="Unable to load stock ledger." />}
-            {ledgerItemId && ledgerCustomerId && !ledgerQuery.isLoading && !ledgerQuery.isError && (
-              <LedgerTable rows={ledgerQuery.data ?? []} item={selectedLedgerItem} />
-            )}
-          </WorkspacePanel>
-        )}
-
-        {auditPanel === 'logs' && (
-          <WorkspacePanel title="Stock Logs" subtitle="Review and correct stock receipts and manual adjustments.">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <h4 className="text-sm font-semibold text-slate-900">Stock In Log</h4>
-              <input className={`${inputClass} max-w-xs`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search item or DD-MM-YYYY" />
-            </div>
-            {stockInQuery.isLoading && <p className="text-sm text-slate-500">Loading stock in log...</p>}
-            {stockInQuery.isError && <ErrorText error={stockInQuery.error} fallback="Unable to load stock in log." />}
-            {!stockInQuery.isLoading && !stockInQuery.isError && (
-                <StockInTable rows={filteredStockInRows} items={gasItems} onEdit={startEditStockIn} onDelete={(id) => void deleteMutation.mutateAsync(id)} deleting={deleteMutation.isPending} />
-            )}
-            <div className="mt-6 border-t border-slate-100 pt-4">
-              <h4 className="mb-3 text-sm font-semibold text-slate-900">Adjustment Log</h4>
-              {adjustmentsQuery.isLoading && <p className="text-sm text-slate-500">Loading adjustments...</p>}
-              {adjustmentsQuery.isError && <ErrorText error={adjustmentsQuery.error} fallback="Unable to load adjustments." />}
-              {!adjustmentsQuery.isLoading && !adjustmentsQuery.isError && (
-                <AdjustmentTable rows={gasAdjustmentRows} items={gasItems} onDelete={(id) => void deleteAdjustmentMutation.mutateAsync(id)} deleting={deleteAdjustmentMutation.isPending} />
-              )}
-            </div>
-          </WorkspacePanel>
+      <section>
+        {currentStockQuery.isLoading && <p className="rounded-lg bg-white px-3 py-10 text-center text-sm text-slate-500 shadow-sm">Loading stock...</p>}
+        {currentStockQuery.isError && <ErrorText error={currentStockQuery.error} fallback="Unable to load stock." />}
+        {!currentStockQuery.isLoading && !currentStockQuery.isError && (
+          <StockInventoryStrip rows={sortedStockItems} summary={summary} item={stockItems[0]} onSelect={openDetail} />
         )}
       </section>
 
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 bg-slate-100/80 px-3 py-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <ActionButton active={activeTab === 'receive'} icon={<PackagePlus size={16} />} onClick={() => openReceive()}>Receive Stock</ActionButton>
+            <ActionButton active={activeTab === 'opening'} icon={<PackagePlus size={16} />} onClick={() => {
+              openReceive()
+              setReceiveMode('opening')
+              setActiveTab('opening')
+            }}>Opening Balance</ActionButton>
+            <ActionButton active={activeTab === 'adjust'} icon={<SlidersHorizontal size={16} />} onClick={() => openAdjust()}>Adjust Stock</ActionButton>
+            <ActionButton active={activeTab === 'report'} icon={<ClipboardList size={16} />} onClick={() => setActiveTab('report')}>Report</ActionButton>
+          </div>
+        </div>
+
+        <div className="bg-white p-4">
+          {activeTab === 'receive' && (
+            <>
+              {editingLog?.type === 'received' && <WorkspaceHeader title="Edit Stock Receipt" subtitle="Update the saved stock receipt." />}
+              <ReceiveForm
+                date={date}
+                setDate={setDate}
+                itemId={itemId}
+                setItemId={setItemId}
+                customerId={customerId}
+                setCustomerId={setCustomerId}
+                qtyInput={qtyInput}
+                setQtyInput={setQtyInput}
+                note={note}
+                setNote={setNote}
+                items={gasItems}
+                customers={customers}
+                selectedItem={selectedItem}
+                recentRows={(stockInQuery.data ?? []).slice(0, 5)}
+                itemsLoading={itemsQuery.isLoading}
+                customersLoading={customersQuery.isLoading}
+                pending={receiveMutation.isPending}
+                onCancel={resetEntryForm}
+                onSave={() => void receiveMutation.mutateAsync()}
+                showRecent
+              />
+            </>
+          )}
+          {activeTab === 'opening' && (
+            <>
+              <ReceiveForm
+                date={date}
+                setDate={setDate}
+                itemId={itemId}
+                setItemId={setItemId}
+                customerId={customerId}
+                setCustomerId={setCustomerId}
+                qtyInput={qtyInput}
+                setQtyInput={setQtyInput}
+                note={note}
+                setNote={setNote}
+                items={gasItems}
+                customers={customers}
+                selectedItem={selectedItem}
+                recentRows={(stockInQuery.data ?? []).slice(0, 5)}
+                itemsLoading={itemsQuery.isLoading}
+                customersLoading={customersQuery.isLoading}
+                pending={receiveMutation.isPending}
+                onCancel={resetEntryForm}
+                onSave={() => void receiveMutation.mutateAsync()}
+                showRecent={false}
+              />
+              <OpeningBalancesTable
+                rows={openingsQuery.data ?? []}
+                items={gasItems}
+                loading={openingsQuery.isLoading}
+                error={openingsQuery.error}
+                deleting={deleteOpeningMutation.isPending}
+                onEdit={editOpening}
+                onDelete={(id) => void deleteOpeningMutation.mutateAsync(id)}
+              />
+            </>
+          )}
+          {activeTab === 'adjust' && (
+            <>
+              {editingLog?.type === 'adjusted' && <WorkspaceHeader title="Edit Stock Adjustment" subtitle="Update the saved stock adjustment." />}
+              <AdjustForm
+                date={date}
+                setDate={setDate}
+                itemId={itemId}
+                setItemId={setItemId}
+                customerId={customerId}
+                setCustomerId={setCustomerId}
+                qtyInput={qtyInput}
+                setQtyInput={setQtyInput}
+                note={note}
+                setNote={setNote}
+                reason={adjustmentReason}
+                setReason={setAdjustmentReason}
+                mode={adjustmentMode}
+                setMode={setAdjustmentMode}
+                items={gasItems}
+                customers={customers}
+                selectedItem={selectedItem}
+                currentStock={selectedBucket?.currentStock ?? 0}
+                itemsLoading={itemsQuery.isLoading}
+                customersLoading={customersQuery.isLoading}
+                pending={adjustmentMutation.isPending}
+                onCancel={resetEntryForm}
+                onSave={() => void adjustmentMutation.mutateAsync()}
+              />
+            </>
+          )}
+          {activeTab === 'report' && (
+            <ReportPanel
+              month={reportMonth}
+              setMonth={setReportMonth}
+              rows={stockReportQuery.data ?? []}
+              yearRows={fiscalReportRows}
+              loading={stockReportQuery.isLoading}
+              error={stockReportQuery.error}
+              onExport={exportMonthlyCsv}
+            />
+          )}
+        </div>
+      </section>
+
+      <section id="stock-logs" className="overflow-hidden rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <WorkspaceHeader
+          title="Recent Stock Logs"
+          subtitle="Review, edit, delete, and export stock receipts or adjustments."
+          actions={<LogsControls search={logSearch} setSearch={setLogSearch} type={logType} setType={setLogType} onExport={exportLogsCsv} disabled={logs.length === 0} />}
+        />
+        <LogsPanel
+          rows={logs}
+          stockItems={stockItems}
+          loading={stockInQuery.isLoading || adjustmentsQuery.isLoading}
+          error={stockInQuery.error ?? adjustmentsQuery.error}
+          deleting={deleteReceivedMutation.isPending || deleteAdjustmentMutation.isPending}
+          onEdit={editLog}
+          onDelete={deleteLog}
+        />
+      </section>
+
+      {detailItem && (
+        <ModalShell title={detailItem.itemName} wide onClose={() => setDetailItem(null)}>
+          <ItemDetailContent
+            item={detailItem}
+            ledgerRows={detailLedgerQuery.data ?? []}
+            loading={detailLedgerQuery.isLoading}
+            error={detailLedgerQuery.error}
+            onReceive={() => {
+              setDetailItem(null)
+              openReceive(detailItem)
+            }}
+            onAdjust={() => {
+              setDetailItem(null)
+              openAdjust(detailItem)
+            }}
+          />
+        </ModalShell>
+      )}
     </div>
   )
 }
@@ -654,121 +604,604 @@ async function invalidateStockQueries(queryClient: ReturnType<typeof useQueryCli
   ])
 }
 
-function PanelButton({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: ReactNode; children: ReactNode }) {
+function ActionButton({ active, icon, onClick, children }: { active: boolean; icon: ReactNode; onClick: () => void; children: ReactNode }) {
   return (
-    <button
-      type="button"
-      className={`inline-flex h-10 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition ${
-        active ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
-      }`}
-      onClick={onClick}
-    >
+    <button type="button" className={`${active ? 'border-blue-600 bg-blue-600 text-white shadow-sm' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50/70 hover:text-slate-950'} inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border px-4 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-blue-300/60`} onClick={onClick}>
       {icon}
       {children}
     </button>
   )
 }
 
-function WorkspacePanel({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
+function WorkspaceHeader({ title, subtitle, actions }: { title: string; subtitle: string; actions?: ReactNode }) {
   return (
-    <div>
-      <div className="mb-4">
-        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+    <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
+      <div>
+        <h3 className="text-base font-semibold tracking-tight text-slate-950">{title}</h3>
         <p className="mt-1 text-xs text-slate-500">{subtitle}</p>
       </div>
-      {children}
+      {actions && <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div>}
     </div>
   )
 }
 
-function StockSummaryPill({ label, value, tone = 'slate' }: { label: string; value: string; tone?: 'slate' | 'green' | 'red' }) {
-  const toneClass = tone === 'red' ? 'border-red-200 bg-red-50 text-red-700' : tone === 'green' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-700'
-  return (
-    <div className={`rounded-md border px-3 py-2 ${toneClass}`}>
-      <div className="text-[10px] font-semibold uppercase tracking-[0.08em]">{label}</div>
-      <div className="mt-0.5 font-mono text-sm font-semibold">{value}</div>
-    </div>
-  )
-}
-
-function CurrentStockGlance({
+function ReportPanel({
+  month,
+  setMonth,
   rows,
-  onReceive,
-  onAdjust,
-  onOpenLedger,
+  yearRows,
+  loading,
+  error,
+  onExport,
 }: {
-  rows: CurrentStockRecord[]
-  onReceive: (item: CurrentStockRecord) => void
-  onAdjust: (item: CurrentStockRecord) => void
-  onOpenLedger: (item: CurrentStockRecord) => void
+  month: string
+  setMonth: (value: string) => void
+  rows: MonthlyStockReportRow[]
+  yearRows: MonthlyStockReportRow[]
+  loading: boolean
+  error: unknown
+  onExport: () => void
 }) {
-  if (rows.length === 0) {
-    return <p className="rounded-md bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">No finished goods stock buckets configured.</p>
-  }
-
+  const [view, setView] = useState<'monthly' | 'yearly' | 'item'>('monthly')
+  const activeRows = view === 'yearly' ? aggregateReportRows(yearRows) : rows
+  const totals = activeRows.reduce(
+    (acc, row) => ({
+      opening: acc.opening + row.opening,
+      stockIn: acc.stockIn + row.stockIn,
+      sold: acc.sold + row.sold,
+      adjustment: acc.adjustment + row.adjustment,
+      closing: acc.closing + row.closing,
+    }),
+    { opening: 0, stockIn: 0, sold: 0, adjustment: 0, closing: 0 },
+  )
+  const sample = activeRows[0] ?? rows[0] ?? yearRows[0]
   return (
-    <div className="h-[30vh] min-h-[260px] overflow-y-auto pr-1">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-        {rows.map((item) => {
-          const isNegative = item.currentStock < 0
-          const needsAttention = item.currentStock <= 0
-          const closing = formatStockQtyParts(item.currentStock, item)
-          const monthIn = formatStockQtyParts(item.stockInThisMonth, item)
-          const monthSold = formatStockQtyParts(item.soldThisMonth, item)
-          const monthAdjustment = formatStockQtyParts(item.adjustmentThisMonth, item)
-          const statusLabel = isNegative ? 'Negative' : needsAttention ? 'Attention' : 'In Stock'
-          const statusClass = isNegative ? 'bg-red-100 text-red-700' : needsAttention ? 'bg-amber-100 text-amber-800' : 'bg-emerald-50 text-emerald-700'
-          return (
-            <article key={item.id} className={`rounded-lg border p-3 shadow-sm ${isNegative ? 'border-red-200 bg-red-50/60' : needsAttention ? 'border-amber-200 bg-amber-50/60' : 'border-slate-200 bg-white'}`}>
-              <div className="flex min-w-0 items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <h4 className="truncate text-sm font-semibold text-slate-950">{item.itemName}</h4>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">{item.customerName}</p>
-                </div>
-                <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] ${statusClass}`}>
-                  {statusLabel}
-                </span>
-              </div>
+    <div>
+      <div className="mb-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50/70 p-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+          <ReportMetric label="Opening" qty={totals.opening} item={sample} />
+          <ReportMetric label="Received" qty={totals.stockIn} item={sample} />
+          <ReportMetric label="Sold" qty={totals.sold} item={sample} />
+          <ReportMetric label="Adjusted" qty={totals.adjustment} item={sample} />
+          <ReportMetric label="Closing" qty={totals.closing} item={sample} strong />
+        </div>
+        <div className="grid gap-2 sm:grid-cols-[auto_minmax(180px,1fr)_auto] xl:min-w-[520px]">
+          <div className="inline-grid grid-cols-3 rounded-md border border-slate-200 bg-white p-1 shadow-sm">
+            <ReportViewButton active={view === 'monthly'} onClick={() => setView('monthly')}>Monthly</ReportViewButton>
+            <ReportViewButton active={view === 'yearly'} onClick={() => setView('yearly')}>Yearly</ReportViewButton>
+            <ReportViewButton active={view === 'item'} onClick={() => setView('item')}>Item Wise</ReportViewButton>
+          </div>
+          <input className={`${inputClass} min-w-0`} type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" className={secondaryButtonClass} onClick={() => window.print()}>
+              <FileText size={16} />
+              PDF
+            </button>
+            <button type="button" className={secondaryButtonClass} onClick={onExport} disabled={rows.length === 0}>
+              <Download size={16} />
+              Excel
+            </button>
+          </div>
+        </div>
+      </div>
+      {loading && <p className="rounded-md bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">Loading stock report...</p>}
+      {Boolean(error) && <ErrorText error={error} fallback="Unable to load stock report." />}
+      {!loading && !error && view !== 'item' && <StockReportTable rows={activeRows} />}
+      {!loading && !error && view === 'item' && <ItemReportTable rows={rows} />}
+    </div>
+  )
+}
 
-              <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2.5">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Closing Balance</div>
-                <div className={`mt-1 flex items-baseline gap-1.5 font-mono ${item.currentStock < 0 ? 'text-red-700' : 'text-slate-950'}`}>
-                  <span className="text-2xl font-bold leading-none">{closing.main}</span>
-                  <span className="text-xs font-medium text-slate-500">{closing.secondary}</span>
-                </div>
-              </div>
+function ReportViewButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" className={`h-9 rounded px-3 text-sm font-medium transition ${active ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`} onClick={onClick}>
+      {children}
+    </button>
+  )
+}
 
-              <div className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">This Month</div>
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px]">
-                  <span>In {monthIn.main}</span>
-                  <span>Sold {monthSold.main}</span>
-                  <span>Adj {monthAdjustment.main}</span>
-                </div>
-              </div>
-
-              <div className="mt-3 grid grid-cols-3 gap-2">
-                <button type="button" className="rounded-md bg-slate-900 px-2 py-1.5 text-xs font-medium text-white hover:bg-slate-800" onClick={() => onReceive(item)}>
-                  Receive
-                </button>
-                <button type="button" className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onAdjust(item)}>
-                  Adjust
-                </button>
-                <button type="button" className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onOpenLedger(item)}>
-                  Ledger
-                </button>
-              </div>
-            </article>
-          )
-        })}
+function ReportMetric({ label, qty, item, strong = false }: { label: string; qty: number; item?: { type?: string; unit?: string; bagWeight?: number }; strong?: boolean }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50/80 px-3 py-2">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+      <div className={`mt-1 ${strong ? 'text-slate-950' : 'text-slate-700'}`}>
+        <StockQtyText qty={qty} item={item} />
       </div>
     </div>
   )
 }
 
-function StockReportTable({ rows }: { rows: Array<Awaited<ReturnType<typeof loadMonthlyStockReport>>[number]> }) {
+function LogsPanel({
+  rows,
+  stockItems,
+  loading,
+  error,
+  deleting,
+  onEdit,
+  onDelete,
+}: {
+  rows: StockLogRow[]
+  stockItems: CurrentStockRecord[]
+  loading: boolean
+  error: unknown
+  deleting: boolean
+  onEdit: (row: StockLogRow) => void
+  onDelete: (row: StockLogRow) => void
+}) {
   return (
-    <div className="overflow-x-auto no-scrollbar">
+    <div>
+      {loading && <p className="rounded-md bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">Loading logs...</p>}
+      {Boolean(error) && <ErrorText error={error} fallback="Unable to load logs." />}
+      {!loading && !error && <LogsTable rows={rows} stockItems={stockItems} onEdit={onEdit} onDelete={onDelete} deleting={deleting} />}
+    </div>
+  )
+}
+
+function LogsControls({
+  search,
+  setSearch,
+  type,
+  setType,
+  onExport,
+  disabled,
+}: {
+  search: string
+  setSearch: (value: string) => void
+  type: 'all' | 'received' | 'adjusted'
+  setType: (value: 'all' | 'received' | 'adjusted') => void
+  onExport: () => void
+  disabled: boolean
+}) {
+  return (
+    <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:flex-nowrap md:items-center">
+      <label className="relative w-64 max-w-full">
+        <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <input className={`${inputClass} pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search logs..." />
+      </label>
+      <select className={`${inputClass} w-36`} value={type} onChange={(event) => setType(event.target.value as 'all' | 'received' | 'adjusted')}>
+        <option value="all">All types</option>
+        <option value="received">Received</option>
+        <option value="adjusted">Adjusted</option>
+      </select>
+      <button type="button" className={secondaryButtonClass} onClick={onExport} disabled={disabled}>
+        <Download size={16} />
+        Export
+      </button>
+    </div>
+  )
+}
+
+function ItemDetailContent({
+  item,
+  ledgerRows,
+  loading,
+  error,
+  onReceive,
+  onAdjust,
+}: {
+  item: CurrentStockRecord
+  ledgerRows: StockLedgerRow[]
+  loading: boolean
+  error: unknown
+  onReceive: () => void
+  onAdjust: () => void
+}) {
+  const net = item.stockInThisMonth + item.adjustmentThisMonth - item.soldThisMonth
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+        <DetailMetric label="Current" value={formatBagCount(item.currentStock, item)} sub={formatStockQty(item.currentStock, item)} />
+        <DetailMetric label="Received" value={formatBagCount(item.stockInThisMonth, item)} tone="green" />
+        <DetailMetric label="Sold" value={formatBagCount(item.soldThisMonth, item)} tone="red" />
+        <DetailMetric label="Net" value={formatBagCount(net, item)} tone={net < 0 ? 'red' : net > 0 ? 'green' : 'slate'} />
+      </div>
+      <div className="flex flex-wrap justify-end gap-2">
+        <button type="button" className={secondaryButtonClass} onClick={onAdjust}>
+          <SlidersHorizontal size={16} />
+          Adjust
+        </button>
+        <button type="button" className={primaryButtonClass} onClick={onReceive}>
+          <PackagePlus size={16} />
+          Receive
+        </button>
+      </div>
+      <div>
+        <h4 className="mb-3 text-sm font-semibold text-slate-900">Full Ledger</h4>
+        {loading && <p className="rounded-md bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">Loading ledger...</p>}
+        {Boolean(error) && <ErrorText error={error} fallback="Unable to load ledger." />}
+        {!loading && !error && <LedgerTable rows={ledgerRows} item={item} />}
+      </div>
+    </div>
+  )
+}
+
+function DetailMetric({ label, value, sub, tone = 'slate' }: { label: string; value: string; sub?: string; tone?: 'slate' | 'green' | 'red' }) {
+  const toneClass = tone === 'green' ? 'text-emerald-700' : tone === 'red' ? 'text-red-700' : 'text-slate-950'
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50/80 px-3 py-2">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+      <p className={`mt-1 font-mono text-lg font-bold ${toneClass}`}>{value}</p>
+      {sub && <p className="mt-0.5 font-mono text-xs text-slate-500">{sub}</p>}
+    </div>
+  )
+}
+
+function ReceiveForm({
+  date,
+  setDate,
+  itemId,
+  setItemId,
+  customerId,
+  setCustomerId,
+  qtyInput,
+  setQtyInput,
+  note,
+  setNote,
+  items,
+  customers,
+  selectedItem,
+  recentRows,
+  itemsLoading,
+  customersLoading,
+  pending,
+  onCancel,
+  onSave,
+  showRecent = true,
+}: {
+  date: string
+  setDate: (value: string) => void
+  itemId: string
+  setItemId: (value: string) => void
+  customerId: string
+  setCustomerId: (value: string) => void
+  qtyInput: string
+  setQtyInput: (value: string) => void
+  note: string
+  setNote: (value: string) => void
+  items: Array<{ id: string; name: string }>
+  customers: StockCustomerOption[]
+  selectedItem?: { unit: string; type?: string; bagWeight?: number } | null
+  recentRows: StockInRecord[]
+  itemsLoading: boolean
+  customersLoading: boolean
+  pending: boolean
+  onCancel: () => void
+  onSave: () => void
+  showRecent?: boolean
+}) {
+  return (
+    <>
+      <StockEntryFields
+        date={date}
+        setDate={setDate}
+        itemId={itemId}
+        setItemId={setItemId}
+        customerId={customerId}
+        setCustomerId={setCustomerId}
+        qtyInput={qtyInput}
+        setQtyInput={setQtyInput}
+        note={note}
+        setNote={setNote}
+        items={items}
+        customers={customers}
+        itemsLoading={itemsLoading}
+        customersLoading={customersLoading}
+        notePlaceholder="Production batch, source, or remark"
+        actions={<FormActions onCancel={onCancel} onSave={onSave} pending={pending} disabled={!itemId || !customerId || parseStockQtyInput(qtyInput, selectedItem) <= 0} saveText="Save" />}
+      />
+      {showRecent && <RecentReceived rows={recentRows} items={items} />}
+    </>
+  )
+}
+
+function AdjustForm({
+  date,
+  setDate,
+  itemId,
+  setItemId,
+  customerId,
+  setCustomerId,
+  qtyInput,
+  setQtyInput,
+  note,
+  setNote,
+  reason,
+  setReason,
+  mode,
+  setMode,
+  items,
+  customers,
+  selectedItem,
+  currentStock,
+  itemsLoading,
+  customersLoading,
+  pending,
+  onCancel,
+  onSave,
+}: {
+  date: string
+  setDate: (value: string) => void
+  itemId: string
+  setItemId: (value: string) => void
+  customerId: string
+  setCustomerId: (value: string) => void
+  qtyInput: string
+  setQtyInput: (value: string) => void
+  note: string
+  setNote: (value: string) => void
+  reason: string
+  setReason: (value: string) => void
+  mode: AdjustmentMode
+  setMode: (value: AdjustmentMode) => void
+  items: Array<{ id: string; name: string }>
+  customers: StockCustomerOption[]
+  selectedItem?: { unit: string; type?: string; bagWeight?: number } | null
+  currentStock: number
+  itemsLoading: boolean
+  customersLoading: boolean
+  pending: boolean
+  onCancel: () => void
+  onSave: () => void
+}) {
+  return (
+    <>
+      <div className="mb-3 inline-grid grid-cols-3 gap-1 rounded-md border border-slate-200 bg-slate-100 p-1 md:w-[420px]">
+        <ModeButton active={mode === 'add'} onClick={() => setMode('add')}>Add</ModeButton>
+        <ModeButton active={mode === 'subtract'} onClick={() => setMode('subtract')}>Subtract</ModeButton>
+        <ModeButton active={mode === 'set'} onClick={() => setMode('set')}>Set</ModeButton>
+      </div>
+      {itemId && (
+        <p className="mb-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          Current stock: <span className="font-mono font-semibold text-slate-900"><StockQtyText qty={currentStock} item={selectedItem} /></span>
+        </p>
+      )}
+      <StockEntryFields
+        date={date}
+        setDate={setDate}
+        itemId={itemId}
+        setItemId={setItemId}
+        customerId={customerId}
+        setCustomerId={setCustomerId}
+        qtyInput={qtyInput}
+        setQtyInput={setQtyInput}
+        note={note}
+        setNote={setNote}
+        items={items}
+        customers={customers}
+        itemsLoading={itemsLoading}
+        customersLoading={customersLoading}
+        qtyLabel={mode === 'set' ? `Set To (${unitLabel(selectedItem)})` : `Quantity (${unitLabel(selectedItem)})`}
+        notePlaceholder="Extra remark"
+        actions={<FormActions onCancel={onCancel} onSave={onSave} pending={pending} disabled={!itemId || !customerId || parseStockQtyInput(qtyInput, selectedItem) <= 0} saveText="Save Adjustment" />}
+      />
+      <div className="mt-3 max-w-xl">
+        <Field label="Reason">
+          <input className={inputClass} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Damage, correction, physical count" />
+        </Field>
+      </div>
+    </>
+  )
+}
+
+function RecentReceived({ rows, items }: { rows: StockInRecord[]; items: Array<{ id: string; name: string; type?: string; unit?: string; bagWeight?: number }> }) {
+  return (
+    <div className="mt-5 border-t border-slate-100 pt-4">
+      <div className="mb-2 flex items-center justify-between">
+        <h4 className="text-sm font-semibold text-slate-900">Recent Received Stock</h4>
+        <span className="text-xs text-slate-500">{rows.length} latest</span>
+      </div>
+      <div className={tableShellClass}>
+        <table className="w-full min-w-[680px]">
+          <thead>
+            <tr className="bg-slate-50">
+              <Th>Date</Th>
+              <Th>Item</Th>
+              <Th>Party</Th>
+              <Th right>Qty</Th>
+              <Th>Note</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && <EmptyRow colSpan={5} text="No recent stock receipts." />}
+            {rows.map((row, index) => (
+              <tr key={row.id} className={tableRowClass(index)}>
+                <Td>{row.date ? formatFullDate(row.date) : '-'}</Td>
+                <Td strong>{row.itemName}</Td>
+                <Td>{row.customerName}</Td>
+                <Td right mono><StockQtyText qty={row.qty} item={items.find((item) => item.id === row.itemId || item.name === row.itemName)} /></Td>
+                <Td>{row.note || '-'}</Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function OpeningBalancesTable({
+  rows,
+  items,
+  loading,
+  error,
+  deleting,
+  onEdit,
+  onDelete,
+}: {
+  rows: StockOpeningRecord[]
+  items: Array<{ id: string; name: string; type?: string; unit?: string; bagWeight?: number }>
+  loading: boolean
+  error: unknown
+  deleting: boolean
+  onEdit: (row: StockOpeningRecord) => void
+  onDelete: (id: string) => void
+}) {
+  return (
+    <div className="mt-5 border-t border-slate-100 pt-4">
+      <div className="mb-2 flex items-center justify-between">
+        <h4 className="text-sm font-semibold text-slate-900">Opening Balances</h4>
+        <span className="text-xs text-slate-500">{rows.length} entries</span>
+      </div>
+      {loading && <p className="rounded-md bg-slate-50 px-3 py-8 text-center text-sm text-slate-500">Loading opening balances...</p>}
+      {Boolean(error) && <ErrorText error={error} fallback="Unable to load opening balances." />}
+      {!loading && !error && (
+        <div className={tableShellClass}>
+          <table className="w-full min-w-[760px]">
+            <thead>
+              <tr className="bg-slate-50">
+                <Th>Date</Th>
+                <Th>Item</Th>
+                <Th>Party</Th>
+                <Th right>Opening</Th>
+                <Th>Note</Th>
+                <Th right>Action</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && <EmptyRow colSpan={6} text="No opening balances set." />}
+              {rows.map((row, index) => (
+                <tr key={row.id} className={tableRowClass(index)}>
+                  <Td>{row.date ? formatFullDate(row.date) : '-'}</Td>
+                  <Td strong>{row.itemName}</Td>
+                  <Td>{row.customerName}</Td>
+                  <Td right mono><StockQtyText qty={row.qty} item={items.find((item) => item.id === row.itemId || item.name === row.itemName)} /></Td>
+                  <Td>{row.note || '-'}</Td>
+                  <Td right>
+                    <div className="inline-flex gap-2">
+                      <button type="button" className={rowActionButtonClass} onClick={() => onEdit(row)}>Edit</button>
+                      <button type="button" className={rowDeleteButtonClass} onClick={() => onDelete(row.id)} disabled={deleting}>Delete</button>
+                    </div>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StockEntryFields({
+  date,
+  setDate,
+  itemId,
+  setItemId,
+  customerId,
+  setCustomerId,
+  qtyInput,
+  setQtyInput,
+  note,
+  setNote,
+  items,
+  customers,
+  itemsLoading,
+  customersLoading,
+  qtyLabel,
+  notePlaceholder,
+  actions,
+}: {
+  date: string
+  setDate: (value: string) => void
+  itemId: string
+  setItemId: (value: string) => void
+  customerId: string
+  setCustomerId: (value: string) => void
+  qtyInput: string
+  setQtyInput: (value: string) => void
+  note: string
+  setNote: (value: string) => void
+  items: Array<{ id: string; name: string }>
+  customers: StockCustomerOption[]
+  itemsLoading: boolean
+  customersLoading: boolean
+  qtyLabel?: string
+  notePlaceholder: string
+  actions?: ReactNode
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-3 rounded-md border border-slate-200 bg-slate-50/70 p-3 xl:grid-cols-[130px_minmax(170px,1fr)_minmax(170px,1fr)_120px_minmax(180px,1fr)_auto]">
+      <Field label="Date">
+        <DateInput className={inputClass} value={date} onChange={setDate} />
+      </Field>
+      <Field label="Item">
+        <SearchableCombobox
+          options={items}
+          value={itemId}
+          onChange={setItemId}
+          inputClassName={inputClass}
+          placeholder={itemsLoading ? 'Loading items...' : 'Search item...'}
+          disabled={itemsLoading}
+          emptyText="No matching gas part found."
+          maxResults={25}
+        />
+      </Field>
+      <Field label="Party">
+        <SearchableCombobox
+          options={customers}
+          value={customerId}
+          onChange={setCustomerId}
+          inputClassName={inputClass}
+          placeholder={customersLoading ? 'Loading parties...' : 'Search party...'}
+          disabled={customersLoading}
+          emptyText="No matching party found."
+          maxResults={25}
+        />
+      </Field>
+      <div>
+        <Field label={qtyLabel ?? 'Quantity'}>
+          <input className={inputClass} value={qtyInput} onChange={(event) => setQtyInput(event.target.value)} placeholder="5 or 250 kg" />
+        </Field>
+      </div>
+      <div>
+        <Field label="Notes">
+          <input className={inputClass} value={note} onChange={(event) => setNote(event.target.value)} placeholder={notePlaceholder} />
+        </Field>
+      </div>
+      {actions && <div className="flex items-end justify-end gap-2">{actions}</div>}
+    </div>
+  )
+}
+
+function FormActions({ onCancel, onSave, pending, disabled, saveText }: { onCancel: () => void; onSave: () => void; pending: boolean; disabled: boolean; saveText: string }) {
+  return (
+    <>
+      <button type="button" className={secondaryButtonClass} onClick={onCancel}>Clear</button>
+      <button type="button" className={primaryButtonClass} onClick={onSave} disabled={disabled || pending}>
+        <PackagePlus size={16} />
+        {pending ? 'Saving...' : saveText}
+      </button>
+    </>
+  )
+}
+
+function ModalShell({ title, wide = false, onClose, children }: { title: string; wide?: boolean; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
+      <div className={`max-h-[92vh] w-full overflow-auto rounded-xl border border-slate-200 bg-white shadow-2xl ${wide ? 'max-w-6xl' : 'max-w-2xl'}`}>
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4">
+          <h3 className="text-base font-semibold text-slate-950">{title}</h3>
+          <button type="button" className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+function ModeButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" className={`h-9 rounded-[5px] px-3 text-sm font-medium transition ${active ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-700 hover:bg-white'}`} onClick={onClick}>
+      {children}
+    </button>
+  )
+}
+
+function StockReportTable({ rows }: { rows: MonthlyStockReportRow[] }) {
+  return (
+    <div className={tableShellClass}>
       <table className="w-full min-w-[860px]">
         <thead>
           <tr className="bg-slate-50">
@@ -783,113 +1216,134 @@ function StockReportTable({ rows }: { rows: Array<Awaited<ReturnType<typeof load
         </thead>
         <tbody>
           {rows.length === 0 && <EmptyRow colSpan={7} text="No stock items configured." />}
-          {rows.map((row, index) => {
-            return (
-              <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-                <Td strong>{row.itemName}</Td>
-                <Td>{row.customerName}</Td>
-                <Td right mono>{formatStockQty(row.opening, row)}</Td>
-                <Td right mono>{formatStockQty(row.stockIn, row)}</Td>
-                <Td right mono>{formatStockQty(row.sold, row)}</Td>
-                <Td right mono>{formatStockQty(row.adjustment, row)}</Td>
-                <Td right mono>{formatStockQty(row.closing, row)}</Td>
-              </tr>
-            )
-          })}
+          {rows.map((row, index) => (
+            <tr key={row.id} className={tableRowClass(index)}>
+              <Td strong>{row.itemName}</Td>
+              <Td>{row.customerName}</Td>
+              <Td right mono><StockQtyText qty={row.opening} item={row} /></Td>
+              <Td right mono><StockQtyText qty={row.stockIn} item={row} /></Td>
+              <Td right mono><StockQtyText qty={row.sold} item={row} /></Td>
+              <Td right mono><StockQtyText qty={row.adjustment} item={row} /></Td>
+              <Td right mono strong><StockQtyText qty={row.closing} item={row} /></Td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
   )
 }
 
-function OpeningTable({ rows, items }: { rows: Array<Awaited<ReturnType<typeof loadStockOpenings>>[number]>; items: ItemRecord[] }) {
+function ItemReportTable({ rows }: { rows: MonthlyStockReportRow[] }) {
+  const itemRows = aggregateItemReportRows(rows)
   return (
-    <div className="overflow-x-auto no-scrollbar">
+    <div className={tableShellClass}>
       <table className="w-full min-w-[820px]">
         <thead>
           <tr className="bg-slate-50">
-            <Th>Date</Th><Th>Item</Th><Th>Party</Th><Th right>Opening</Th><Th>Note</Th>
+            <Th>Item</Th>
+            <Th right>Opening</Th>
+            <Th right>Received</Th>
+            <Th right>Sold</Th>
+            <Th right>Adjusted</Th>
+            <Th right>Closing</Th>
+            <Th right>Movement</Th>
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={5} text="No opening stock records found." />}
+          {itemRows.length === 0 && <EmptyRow colSpan={7} text="No item movement for this month." />}
+          {itemRows.map((row, index) => (
+            <tr key={row.id} className={tableRowClass(index)}>
+              <Td strong>{row.itemName}</Td>
+              <Td right mono><StockQtyText qty={row.opening} item={row} /></Td>
+              <Td right mono><StockQtyText qty={row.stockIn} item={row} /></Td>
+              <Td right mono><StockQtyText qty={row.sold} item={row} /></Td>
+              <Td right mono><StockQtyText qty={row.adjustment} item={row} /></Td>
+              <Td right mono strong><StockQtyText qty={row.closing} item={row} /></Td>
+              <Td right mono>{formatPercent(row.opening ? ((row.closing - row.opening) / Math.abs(row.opening)) * 100 : row.closing ? 100 : 0)}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function LedgerTable({ rows, item }: { rows: StockLedgerRow[]; item?: CurrentStockRecord }) {
+  return (
+    <div className={tableShellClass}>
+      <table className="w-full min-w-[820px]">
+        <thead>
+          <tr className="bg-slate-50">
+            <Th>Date</Th>
+            <Th>Type</Th>
+            <Th right>In</Th>
+            <Th right>Out</Th>
+            <Th right>Balance</Th>
+            <Th>Note</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && <EmptyRow colSpan={6} text="No ledger movement found." />}
+          {rows.map((row, index) => (
+            <tr key={row.id} className={tableRowClass(index)}>
+              <Td>{row.date ? formatFullDate(row.date) : '-'}</Td>
+              <Td strong>{row.type}</Td>
+              <Td right mono>{row.inQty ? <StockQtyText qty={row.inQty} item={item} /> : '-'}</Td>
+              <Td right mono>{row.outQty ? <StockQtyText qty={row.outQty} item={item} /> : '-'}</Td>
+              <Td right mono><StockQtyText qty={row.balance} item={item} /></Td>
+              <Td>{row.note || '-'}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function LogsTable({
+  rows,
+  stockItems,
+  onEdit,
+  onDelete,
+  deleting,
+}: {
+  rows: StockLogRow[]
+  stockItems: CurrentStockRecord[]
+  onEdit: (row: StockLogRow) => void
+  onDelete: (row: StockLogRow) => void
+  deleting: boolean
+}) {
+  return (
+    <div className={tableShellClass}>
+      <table className="w-full min-w-[820px]">
+        <thead>
+          <tr className="bg-slate-50">
+            <Th>Date</Th>
+            <Th>Type</Th>
+            <Th>Item</Th>
+            <Th>Party</Th>
+            <Th right>Qty</Th>
+            <Th>Note</Th>
+            <Th right>Action</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && <EmptyRow colSpan={7} text="No stock logs found." />}
           {rows.map((row, index) => {
-            const item = items.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
+            const item = stockItems.find((stockItem) => stockItem.itemName === row.itemName)
             return (
-              <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
+              <tr key={row.id} className={tableRowClass(index)}>
                 <Td>{row.date ? formatFullDate(row.date) : '-'}</Td>
-                <Td strong>{row.itemName}</Td>
+                <Td><StockLogTypeBadge type={row.type} /></Td>
+                <Td>{row.itemName}</Td>
                 <Td>{row.customerName}</Td>
-                <Td right mono>{formatStockQty(row.qty, item)}</Td>
-                <Td>{row.note || '-'}</Td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function StockInTable({ rows, items, onEdit, onDelete, deleting }: { rows: Array<Awaited<ReturnType<typeof loadStockIn>>[number]>; items: ItemRecord[]; onEdit: (row: Awaited<ReturnType<typeof loadStockIn>>[number]) => void; onDelete: (id: string) => void; deleting: boolean }) {
-  return (
-    <div className="overflow-x-auto no-scrollbar">
-      <table className="w-full min-w-[820px]">
-        <thead>
-          <tr className="bg-slate-50">
-            <Th>Date</Th><Th>Item</Th><Th>Party</Th><Th right>Qty</Th><Th>Note</Th><Th right>Action</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={6} text="No stock in entries found." />}
-          {rows.map((row, index) => {
-            const item = items.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
-            return (
-              <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-                <Td>{formatFullDate(row.date)}</Td>
-                <Td strong>{row.itemName}</Td>
-                <Td>{row.customerName}</Td>
-                <Td right mono>{formatStockQty(row.qty, item)}</Td>
+                <Td right mono><StockQtyText qty={row.qty} item={item} /></Td>
                 <Td>{row.note || '-'}</Td>
                 <Td right>
                   <div className="inline-flex gap-2">
-                    <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => onEdit(row)}>
-                      <Edit3 size={12} /> Edit
-                    </button>
-                    <button type="button" className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => onDelete(row.id)} disabled={deleting}>
-                      <Trash2 size={12} /> Delete
-                    </button>
+                    <button type="button" className={rowActionButtonClass} onClick={() => onEdit(row)}>Edit</button>
+                    <button type="button" className={rowDeleteButtonClass} onClick={() => onDelete(row)} disabled={deleting}>Delete</button>
                   </div>
-                </Td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function AdjustmentTable({ rows, items, onDelete, deleting }: { rows: Array<Awaited<ReturnType<typeof loadStockAdjustments>>[number]>; items: ItemRecord[]; onDelete: (id: string) => void; deleting: boolean }) {
-  return (
-    <div className="overflow-x-auto no-scrollbar">
-      <table className="w-full min-w-[760px]">
-        <thead><tr className="bg-slate-50"><Th>Date</Th><Th>Item</Th><Th>Party</Th><Th right>Adjustment</Th><Th>Note</Th><Th right>Action</Th></tr></thead>
-        <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={6} text="No stock adjustments yet." />}
-          {rows.map((row, index) => {
-            const item = items.find((entry) => entry.id === row.itemId || entry.name === row.itemName)
-            return (
-              <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-                <Td>{formatFullDate(row.date)}</Td>
-                <Td strong>{row.itemName}</Td>
-                <Td>{row.customerName}</Td>
-                <Td right mono>{formatStockQty(row.qty, item)}</Td>
-                <Td>{row.note || '-'}</Td>
-                <Td right>
-                  <button type="button" className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => onDelete(row.id)} disabled={deleting}>
-                    <Trash2 size={12} /> Delete
-                  </button>
                 </Td>
               </tr>
             )
@@ -904,27 +1358,111 @@ function findGeneralCustomer(customers: StockCustomerOption[]) {
   return customers.find((customer) => customer.customerName.toLowerCase() === 'general' || customer.companyName.toLowerCase() === 'general')
 }
 
-function LedgerTable({ rows, item }: { rows: Array<Awaited<ReturnType<typeof loadStockLedger>>[number]>; item?: ItemRecord }) {
-  return (
-    <div className="overflow-x-auto no-scrollbar">
-      <table className="w-full min-w-[860px]">
-        <thead><tr className="bg-slate-50"><Th>Date</Th><Th>Type</Th><Th right>In</Th><Th right>Out</Th><Th right>Balance</Th><Th>Note</Th></tr></thead>
-        <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={6} text="No ledger movement found." />}
-          {rows.map((row, index) => (
-            <tr key={row.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-              <Td>{row.date ? formatFullDate(row.date) : '-'}</Td>
-              <Td strong>{row.type}</Td>
-              <Td right mono>{row.inQty ? formatStockQty(row.inQty, item) : '-'}</Td>
-              <Td right mono>{row.outQty ? formatStockQty(row.outQty, item) : '-'}</Td>
-              <Td right mono>{formatStockQty(row.balance, item)}</Td>
-              <Td>{row.note || '-'}</Td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
+function StockLogTypeBadge({ type }: { type: StockLogRow['type'] }) {
+  const typeClass = type === 'received' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-800'
+  return <span className={`inline-flex rounded border px-2 py-0.5 text-xs font-medium ${typeClass}`}>{type === 'received' ? 'Received' : 'Adjusted'}</span>
+}
+
+function adjustmentQty(inputQty: number, mode: AdjustmentMode, currentStock: number) {
+  if (mode === 'subtract') return -inputQty
+  if (mode === 'set') return inputQty - currentStock
+  return inputQty
+}
+
+function kgToBags(value: number, item?: { type?: string; bagWeight?: number } | null) {
+  if (item?.type !== 'gas') return value
+  return value / (item.bagWeight || 50)
+}
+
+function parseStockQtyInput(raw: string, item?: { type?: string; bagWeight?: number } | null) {
+  const value = Number(String(raw).toLowerCase().replace(/[^0-9. -]/g, ''))
+  if (!Number.isFinite(value) || value <= 0) return 0
+  const isKg = /\bkg|kgs|kilo|kilogram/.test(String(raw).toLowerCase())
+  if (item?.type === 'gas' && !isKg) return value * (item.bagWeight || 50)
+  return value
+}
+
+function aggregateReportRows(rows: MonthlyStockReportRow[]) {
+  const byBucket = new Map<string, MonthlyStockReportRow>()
+  for (const row of rows) {
+    const key = `${row.itemId || row.itemName}::${row.customerId || row.customerName}`
+    const existing = byBucket.get(key)
+    if (!existing) {
+      byBucket.set(key, { ...row })
+      continue
+    }
+    existing.opening += row.opening
+    existing.stockIn += row.stockIn
+    existing.sold += row.sold
+    existing.adjustment += row.adjustment
+    existing.closing += row.closing
+  }
+  return [...byBucket.values()].sort((a, b) => a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName))
+}
+
+function buildFiscalReportRows(monthRows: MonthlyStockReportRow[][]) {
+  const byBucket = new Map<string, MonthlyStockReportRow>()
+  for (const rows of monthRows) {
+    for (const row of rows) {
+      const key = `${row.itemId || row.itemName}::${row.customerId || row.customerName}`
+      const existing = byBucket.get(key)
+      if (!existing) {
+        byBucket.set(key, { ...row })
+        continue
+      }
+      existing.stockIn += row.stockIn
+      existing.sold += row.sold
+      existing.adjustment += row.adjustment
+      existing.closing = row.closing
+    }
+  }
+  return [...byBucket.values()].sort((a, b) => a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName))
+}
+
+function aggregateItemReportRows(rows: MonthlyStockReportRow[]) {
+  const byItem = new Map<string, MonthlyStockReportRow>()
+  for (const row of rows) {
+    const key = row.itemId || row.itemName
+    const existing = byItem.get(key)
+    if (!existing) {
+      byItem.set(key, { ...row, id: `item-${key}`, customerName: 'All parties' })
+      continue
+    }
+    existing.opening += row.opening
+    existing.stockIn += row.stockIn
+    existing.sold += row.sold
+    existing.adjustment += row.adjustment
+    existing.closing += row.closing
+  }
+  return [...byItem.values()].sort((a, b) => a.itemName.localeCompare(b.itemName))
+}
+
+function fiscalYearMonthKeys(today: string) {
+  const [yearRaw, monthRaw] = today.slice(0, 7).split('-')
+  const year = Number(yearRaw)
+  const month = Number(monthRaw)
+  const startYear = month >= 4 ? year : year - 1
+  return Array.from({ length: 12 }, (_, index) => {
+    const date = new Date(startYear, 3 + index, 1)
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+  })
+}
+
+function previousMonthKey(monthKey: string) {
+  const [yearRaw, monthRaw] = monthKey.split('-')
+  const date = new Date(Number(yearRaw), Number(monthRaw) - 2, 1)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+function downloadCsv(filename: string, rows: Array<Array<string | number>>) {
+  const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 function ErrorText({ error, fallback }: { error: unknown; fallback: string }) {
@@ -941,11 +1479,11 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function Th({ children, right = false }: { children: ReactNode; right?: boolean }) {
-  return <th className={`px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500 ${right ? 'text-right' : 'text-left'}`}>{children}</th>
+  return <th className={`border-b border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 ${right ? 'text-right' : 'text-left'}`}>{children}</th>
 }
 
 function Td({ children, right = false, mono = false, strong = false }: { children: ReactNode; right?: boolean; mono?: boolean; strong?: boolean }) {
-  return <td className={`px-3 py-3 text-sm text-slate-700 ${right ? 'text-right' : ''} ${mono ? 'font-mono' : ''} ${strong ? 'font-medium text-slate-800' : ''}`}>{children}</td>
+  return <td className={`px-3 py-2.5 text-sm text-slate-700 ${right ? 'text-right' : ''} ${mono ? 'font-mono' : ''} ${strong ? 'font-medium text-slate-900' : ''}`}>{children}</td>
 }
 
 function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
@@ -957,29 +1495,53 @@ function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
 }
 
 function unitLabel(item?: { unit: string } | null) {
-  if (!item?.unit) return 'pieces'
+  if (!item?.unit) return 'kg'
   return item.unit === 'piece' ? 'pieces' : item.unit
 }
 
+function formatBagCount(qty: number, item?: { type?: string; bagWeight?: number } | null) {
+  if (item?.type !== 'gas') return formatInQty(qty, 'kg')
+  const bagWeight = item.bagWeight || 50
+  const bags = qty / bagWeight
+  return `${bags.toFixed(Number.isInteger(bags) ? 0 : 1)} bags`
+}
+
 function formatStockQty(qty: number, item?: { type?: string; unit?: string; bagWeight?: number } | null) {
-  if (item?.type === 'gas') {
-    const bagWeight = item.bagWeight || 50
-    const bags = qty / bagWeight
-    const bagText = `${bags.toFixed(Number.isInteger(bags) ? 0 : 1)} bags`
-    return `${formatInQty(qty, 'kg')} / ${bagText}`
-  }
+  if (item?.type === 'gas') return formatInQty(qty, 'kg')
   return formatInQty(qty, unitLabel(item ? { unit: item.unit ?? '' } : null))
 }
 
-function formatStockQtyParts(qty: number, item?: { type?: string; unit?: string; bagWeight?: number } | null) {
-  if (item?.type === 'gas') {
-    const bagWeight = item.bagWeight || 50
-    const bags = qty / bagWeight
-    const bagsText = `${bags.toFixed(Number.isInteger(bags) ? 0 : 1)} bags`
-    return { main: bagsText, secondary: `(${formatInQty(qty, 'kg')})` }
-  }
-  return { main: formatInQty(qty, unitLabel(item ? { unit: item.unit ?? '' } : null)), secondary: '' }
+function StockQtyText({ qty, item }: { qty: number; item?: { type?: string; unit?: string; bagWeight?: number } | null }) {
+  return (
+    <span className="inline-flex flex-col items-end leading-tight">
+      <span className="font-mono text-sm font-semibold text-slate-800">{formatBagCount(qty, item)}</span>
+      <span className="font-mono text-[11px] text-slate-500">{formatStockQty(qty, item)}</span>
+    </span>
+  )
+}
+
+function formatPercent(value: number) {
+  const prefix = value > 0 ? '+' : ''
+  return `${prefix}${value.toFixed(Math.abs(value) >= 10 ? 0 : 1)}%`
+}
+
+const primaryButtonClass =
+  'inline-flex h-10 items-center justify-center gap-2 rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60'
+
+const secondaryButtonClass =
+  'inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60'
+
+const tableShellClass = 'overflow-x-auto rounded-md border border-slate-200 no-scrollbar'
+
+const rowActionButtonClass =
+  'min-h-9 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-100'
+
+const rowDeleteButtonClass =
+  'min-h-9 rounded-md border border-red-300 bg-white px-2.5 py-1 text-xs font-medium text-red-700 transition hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-100 disabled:opacity-60'
+
+function tableRowClass(index: number) {
+  return `border-t border-slate-100 transition hover:bg-blue-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`
 }
 
 const inputClass =
-  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100'

@@ -12,6 +12,8 @@ const num = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+const key = (value: unknown) => String(value ?? '').trim().toLowerCase()
+
 const bagsFromQtyKg = (qtyKg: number) => {
   if (!(qtyKg > 0)) return 0
   return Math.round(qtyKg * BAGS_PER_KG)
@@ -55,6 +57,7 @@ export type TransactionsContext = {
   }>
   billItems: Array<{
     billId: string
+    itemId: string
     itemName: string
     qty: number
     rate: number
@@ -100,6 +103,7 @@ export async function loadTransactionsContext(): Promise<TransactionsContext> {
     })),
     billItems: (billItemsRaw as PBRecord[]).map((row) => ({
       billId: String(row.bill ?? ''),
+      itemId: String(row.item ?? ''),
       itemName: String(row.item_name ?? ''),
       qty: num(row.qty),
       rate: num(row.rate),
@@ -147,13 +151,17 @@ export async function updateBillWithItems(
     const existingItems = await pb.collection('bill_items').getFullList({
       filter: `bill = "${billId}"`,
     })
+    const masterItems = await pb.collection('items').getFullList({ sort: 'name' })
+    const itemIdByName = new Map((masterItems as PBRecord[]).map((item) => [key(item.name), item.id]))
     await pb.collection('bills').update(billId, nextBillPayload)
 
     const createdItemIds: string[] = []
     try {
       for (const item of input.items) {
+        const itemId = item.itemId || itemIdByName.get(key(item.itemName)) || ''
         const created = await pb.collection('bill_items').create({
           bill: billId,
+          item: itemId,
           item_name: item.itemName,
           qty: item.qty,
           rate: item.rate,
@@ -217,9 +225,13 @@ export async function restoreBillFromSnapshot(snapshot: BillSnapshot) {
       gst_amount: snapshot.gstAmount ?? 0,
       lr_no: snapshot.lrNo,
     })
+    const masterItems = await pb.collection('items').getFullList({ sort: 'name' })
+    const itemIdByName = new Map((masterItems as PBRecord[]).map((item) => [key(item.name), item.id]))
     for (const item of snapshot.items) {
+      const itemId = item.itemId || itemIdByName.get(key(item.itemName)) || ''
       await pb.collection('bill_items').create({
         bill: bill.id,
+        item: itemId,
         item_name: item.itemName,
         qty: item.qty,
         rate: item.rate,

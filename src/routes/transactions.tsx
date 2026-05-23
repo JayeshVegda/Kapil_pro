@@ -52,6 +52,7 @@ const billSchema = z.object({
   lrNo: z.string(),
   items: z.array(
     z.object({
+      itemId: z.string().optional(),
       itemName: z.string().trim().min(1),
       qty: z.number().positive(),
       rate: z.number().positive(),
@@ -221,7 +222,7 @@ function TransactionsPage() {
         gstRate: row.bill.gstRate,
         gstAmount: row.bill.gstAmount,
         lrNo: row.bill.lrNo,
-        items: row.bill.items.length > 0 ? row.bill.items : [{ itemName: '', qty: 0, rate: 0 }],
+        items: row.bill.items.length > 0 ? row.bill.items : [{ itemId: '', itemName: '', qty: 0, rate: 0 }],
       })
     } else {
       setPaymentDraft({
@@ -246,7 +247,7 @@ function TransactionsPage() {
   }
 
   function addBillItem() {
-    setBillDraft((prev) => (prev ? { ...prev, items: [...prev.items, { itemName: '', qty: 0, rate: 0 }] } : prev))
+    setBillDraft((prev) => (prev ? { ...prev, items: [...prev.items, { itemId: '', itemName: '', qty: 0, rate: 0 }] } : prev))
   }
 
   function removeBillItem(index: number) {
@@ -475,10 +476,18 @@ function TransactionsPage() {
                     <div className="space-y-2">
                       {billDraft.items.map((item, index) => (
                         <div key={index} className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_120px_120px_auto]">
-                          <select className={inputClass} value={item.itemName} onChange={(event) => updateBillItem(index, { itemName: event.target.value })}>
+                          <select
+                            className={inputClass}
+                            value={item.itemId || items.find((entry) => entry.name === item.itemName)?.id || ''}
+                            onChange={(event) => {
+                              const nextId = event.target.value
+                              const selected = items.find((entry) => entry.id === nextId)
+                              updateBillItem(index, { itemId: nextId, itemName: selected?.name ?? '' })
+                            }}
+                          >
                             <option value="">Select item...</option>
                             {items.map((entry) => (
-                              <option key={entry.id} value={entry.name}>
+                              <option key={entry.id} value={entry.id}>
                                 {entry.name}
                               </option>
                             ))}

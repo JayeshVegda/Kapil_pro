@@ -1059,7 +1059,7 @@ function buildItemSuggestions(
   items: Array<{ id: string; name: string; defaultRate?: number; type?: string; unit?: string; bagWeight?: number }>,
 ): CommandSuggestion[] {
   const clean = query.trim()
-  return filterRankedNameMatches(items, clean, (row) => row.name)
+  return filterRankedNameMatches(commandGasItems(items), clean, (row) => row.name)
     .slice(0, 6)
     .map((item) => ({
       id: `item-${item.id}`,
@@ -1237,12 +1237,12 @@ function buildBillDraft(
     const qtyIndex = segment.findIndex((token) => parseAmountForDraft(token) > 0 && !isRateMarkerPrevious(segment, token))
     const itemTokens = segment.slice(0, qtyIndex >= 0 ? qtyIndex : segment.length).filter((token) => !isBillModifierToken(token))
     const itemQuery = itemTokens.join(' ')
-    const item = itemQuery ? findBestNameMatch(deps.items, itemQuery, (row) => row.name) : null
+    const item = itemQuery ? findBestNameMatch(commandGasItems(deps.items), itemQuery, (row) => row.name) : null
     if (item) {
       detectedItems += 1
       const qty = qtyIndex >= 0 ? parseAmountForDraft(segment[qtyIndex]) : 0
       lines.push({ label: detectedItems === 1 ? 'Item' : `Item ${detectedItems}`, value: qty > 0 ? `${item.name} x ${segment[qtyIndex]}` : item.name })
-      if (qty <= 0) suggestions.push(`Add quantity for ${item.name}`)
+      if (qty <= 0) suggestions.push('Add quantity in bags or kg')
     } else if (itemQuery) {
       lines.push({ label: 'Item', value: `Searching: ${itemQuery}` })
       suggestions.push('Pick item name, then quantity')
@@ -1263,7 +1263,7 @@ function buildStockDraft(
   const tokens = body.trim().split(/\s+/).filter(Boolean)
   const qtyIndex = tokens.findIndex((token) => parseAmountForDraft(token) > 0)
   const itemQuery = tokens.slice(0, qtyIndex >= 0 ? qtyIndex : tokens.length).join(' ')
-  const item = itemQuery ? findBestNameMatch(deps.items, itemQuery, (row) => row.name) : null
+  const item = itemQuery ? findBestNameMatch(commandGasItems(deps.items), itemQuery, (row) => row.name) : null
   const qty = qtyIndex >= 0 ? parseAmountForDraft(tokens[qtyIndex]) : 0
   return {
     mode: 'Stock',
@@ -1273,6 +1273,26 @@ function buildStockDraft(
     ],
     suggestions: [!item ? 'Add stock item' : '', qty <= 0 ? 'Add quantity' : '', 'Optional: yday or 15-may', 'Optional: "note"'].filter(Boolean),
   }
+}
+
+function commandGasItems<T extends { type?: string }>(items: T[]) {
+  return items.filter((item) => String(item.type ?? '').toLowerCase() === 'gas')
+}
+
+export function buildCommandSuggestionsForTest(
+  input: string,
+  customers: Array<{ id: string; name: string; companyName?: string; customerName?: string }>,
+  items: Array<{ id: string; name: string; defaultRate?: number; type?: string; unit?: string; bagWeight?: number }>,
+) {
+  return buildCommandSuggestions(input, 'command', null, { customers, items, history: [] })
+}
+
+export function buildCommandDraftForTest(
+  input: string,
+  customers: Array<{ id: string; name: string; companyName?: string; customerName?: string }>,
+  items: Array<{ id: string; name: string; defaultRate?: number; type?: string; unit?: string; bagWeight?: number }>,
+) {
+  return buildCommandDraft(input, 'neutral', { customers, items, today: '2026-05-22' }, null, 'command')
 }
 
 function splitDraftSegments(tokens: string[]) {

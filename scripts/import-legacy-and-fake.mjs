@@ -197,6 +197,7 @@ async function upsertBillsAndBillItems(rows, customerMap, itemMap) {
 
     await pb.collection('bill_items').create({
       bill: bill.id,
+      item: item?.id || '',
       item_name: item?.name || itemName,
       qty,
       rate,
@@ -302,6 +303,7 @@ async function generateExtraFakeData(customerMap, itemMap, billMap) {
       base += amount
       await pb.collection('bill_items').create({
         bill: bill.id,
+        item: item.id,
         item_name: item.name,
         qty,
         rate,

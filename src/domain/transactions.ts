@@ -3,6 +3,7 @@ import { compareBusinessDateThenCreatedDesc, type CanonicalBillRecord, type Cano
 import { matchesAnyRankedQuery } from '@/lib/search'
 
 export type BillItemSnapshot = {
+  itemId?: string
   itemName: string
   qty: number
   rate: number
@@ -88,6 +89,7 @@ type BuildRowsInput = {
   }>
   billItems: Array<{
     billId: string
+    itemId?: string
     itemName: string
     qty: number
     rate: number
@@ -103,7 +105,7 @@ export function buildTransactionRows(input: BuildRowsInput): TransactionRow[] {
   const amountByBill = new Map<string, number>()
   for (const item of input.billItems) {
     const list = itemsByBill.get(item.billId) ?? []
-    list.push({ itemName: item.itemName, qty: item.qty, rate: item.rate })
+    list.push({ itemId: item.itemId, itemName: item.itemName, qty: item.qty, rate: item.rate })
     itemsByBill.set(item.billId, list)
     amountByBill.set(item.billId, (amountByBill.get(item.billId) ?? 0) + item.amount)
   }

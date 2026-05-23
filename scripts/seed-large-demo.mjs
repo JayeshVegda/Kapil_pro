@@ -164,6 +164,7 @@ async function main() {
       const amount = qty * rate
       const bags = Math.max(1, Math.round(qty / randomChoice([40, 50, 60])))
       lineItems.push({
+        item: item.id,
         item_name: String(item.name ?? ''),
         qty,
         rate,
