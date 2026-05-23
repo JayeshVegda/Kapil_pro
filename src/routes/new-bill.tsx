@@ -608,6 +608,11 @@ function NewBillPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Jamnagar Local Rate</p>
             <p className="mt-1 font-mono text-2xl font-bold text-slate-900 tabular-nums">{formatInrInteger(marketRate.rate)}</p>
             <p className="text-xs text-slate-500">{marketRate.rateDate}</p>
+            {marketRate.change != null && marketRate.previousRate != null ? (
+              <p className={`mt-2 inline-flex rounded-md px-2 py-1 text-xs font-semibold ${marketRate.change >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'}`}>
+                Today rate {marketRate.change >= 0 ? '+' : '-'}{formatInrInteger(Math.abs(marketRate.change))} vs previous {formatInrInteger(marketRate.previousRate)}
+              </p>
+            ) : null}
           </div>
           <button
             type="button"

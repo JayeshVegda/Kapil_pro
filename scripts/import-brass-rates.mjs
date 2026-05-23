@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import PocketBase from 'pocketbase'
+import { ensureBrassRatesCollection } from './brass-rates-schema.mjs'
 
 const PB_URL = process.env.PB_URL || 'http://127.0.0.1:8090'
 const PB_ADMIN_EMAIL = process.env.PB_ADMIN_EMAIL
@@ -26,7 +27,8 @@ async function main() {
   await pb.collection('_superusers').authWithPassword(PB_ADMIN_EMAIL, PB_ADMIN_PASSWORD)
   console.log(`Authenticated as ${PB_ADMIN_EMAIL}`)
 
-  await ensureBrassRatesCollection()
+  const schemaStatus = await ensureBrassRatesCollection(pb)
+  console.log(`${schemaStatus === 'created' ? 'Created' : 'Updated'} brass_rates collection schema`)
 
   const csvRows = await readCsvRows(CSV_PATH)
   let created = 0
@@ -60,96 +62,6 @@ async function main() {
   console.log(`CSV rows processed: ${csvRows.length}`)
   console.log(`Created: ${created}, Updated: ${updated}`)
   console.log(`Legacy misc_expenses market_rate rows migrated: ${migratedLegacy}`)
-}
-
-async function ensureBrassRatesCollection() {
-  const existing = await pb.collections.getOne('brass_rates').catch(() => null)
-  const fields = [
-    {
-      name: 'date',
-      type: 'date',
-      required: true,
-      options: { min: '', max: '' },
-    },
-    {
-      name: 'vilaity',
-      type: 'number',
-      required: true,
-      onlyInt: false,
-      min: null,
-      max: null,
-    },
-    {
-      name: 'honey_gulf',
-      type: 'number',
-      required: false,
-      onlyInt: false,
-      min: null,
-      max: null,
-    },
-    {
-      name: 'honey_europe',
-      type: 'number',
-      required: false,
-      onlyInt: false,
-      min: null,
-      max: null,
-    },
-    {
-      name: 'source',
-      type: 'text',
-      required: false,
-      min: 0,
-      max: 0,
-      pattern: '',
-      autogeneratePattern: '',
-    },
-    {
-      name: 'note',
-      type: 'text',
-      required: false,
-      min: 0,
-      max: 0,
-      pattern: '',
-      autogeneratePattern: '',
-    },
-  ]
-  const indexes = ['CREATE UNIQUE INDEX idx_brass_rates_date ON brass_rates (date)']
-
-  const apiRule = '@request.auth.id != ""'
-
-  if (!existing) {
-    await pb.collections.create({
-      name: 'brass_rates',
-      type: 'base',
-      fields,
-      indexes,
-      listRule: apiRule,
-      viewRule: apiRule,
-      createRule: apiRule,
-      updateRule: apiRule,
-      deleteRule: apiRule,
-    })
-    console.log('Created brass_rates collection')
-    return
-  }
-
-  await pb.collections.update(existing.id, {
-    ...existing,
-    fields: mergeCustomFields(existing.fields ?? [], fields),
-    indexes,
-    listRule: apiRule,
-    viewRule: apiRule,
-    createRule: apiRule,
-    updateRule: apiRule,
-    deleteRule: apiRule,
-  })
-  console.log('Updated brass_rates collection schema')
-}
-
-function mergeCustomFields(existingFields, desiredFields) {
-  const systemFields = existingFields.filter((field) => field?.system)
-  return [...systemFields, ...desiredFields]
 }
 
 async function readCsvRows(path) {
