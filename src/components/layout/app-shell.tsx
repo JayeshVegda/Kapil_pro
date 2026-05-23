@@ -207,6 +207,7 @@ export function AppShell() {
     if (!result) return
     setQuickSearch('')
     setQuickSearchOpen(false)
+    if (result.kind === 'Rate') return
     if (result.kind === 'Bill' && result.billId) {
       void navigate({ to: '/print-bill', search: { billId: result.billId, billRef: '' } })
       return
@@ -215,7 +216,9 @@ export function AppShell() {
       void navigate({ to: '/transactions', search: { focusKind: 'payment', focusId: result.paymentId } })
       return
     }
-    void navigate({ to: '/ledger', search: { customerId: result.customerId, focus: '' } })
+    if (result.kind === 'Customer' && result.customerId) {
+      void navigate({ to: '/ledger', search: { customerId: result.customerId, focus: '' } })
+    }
   }
 
   function runGlobalCommand() {
@@ -432,7 +435,7 @@ export function AppShell() {
               <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Quick search party, bill, payment..."
+                placeholder="Quick search party, bill, payment, rate..."
                 value={quickSearch}
                 onChange={(event) => {
                   setQuickSearch(event.target.value)
@@ -466,7 +469,7 @@ export function AppShell() {
                   {quickSearchQuery.isLoading && <div className="px-3 py-2 text-sm text-slate-500">Searching...</div>}
                   {quickSearchQuery.isError && <div className="px-3 py-2 text-sm text-red-600">Unable to search right now.</div>}
                   {!quickSearchQuery.isLoading && !quickSearchQuery.isError && quickSearchResults.length === 0 && (
-                    <div className="px-3 py-2 text-sm text-slate-500">No matching party, bill, or payment.</div>
+                    <div className="px-3 py-2 text-sm text-slate-500">No matching party, bill, payment, or rate.</div>
                   )}
                   {!quickSearchQuery.isLoading &&
                     !quickSearchQuery.isError &&
