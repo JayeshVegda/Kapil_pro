@@ -28,6 +28,7 @@ import { Route as BuyingRouteImport } from './routes/buying'
 import { Route as BackupRouteImport } from './routes/backup'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CastingIndexRouteImport } from './routes/casting/index'
+import { Route as BuyingIndexRouteImport } from './routes/buying/index'
 import { Route as CastingNewSessionRouteImport } from './routes/casting/new-session'
 import { Route as CastingMaterialsRouteImport } from './routes/casting/materials'
 import { Route as CastingLogRouteImport } from './routes/casting/log'
@@ -132,6 +133,11 @@ const CastingIndexRoute = CastingIndexRouteImport.update({
   path: '/',
   getParentRoute: () => CastingRoute,
 } as any)
+const BuyingIndexRoute = BuyingIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => BuyingRoute,
+} as any)
 const CastingNewSessionRoute = CastingNewSessionRouteImport.update({
   id: '/new-session',
   path: '/new-session',
@@ -200,12 +206,12 @@ export interface FileRoutesByFullPath {
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/buying/': typeof BuyingIndexRoute
   '/casting/': typeof CastingIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
-  '/buying': typeof BuyingRouteWithChildren
   '/calendar': typeof CalendarRoute
   '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
@@ -228,6 +234,7 @@ export interface FileRoutesByTo {
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/buying': typeof BuyingIndexRoute
   '/casting': typeof CastingIndexRoute
 }
 export interface FileRoutesById {
@@ -258,6 +265,7 @@ export interface FileRoutesById {
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/buying/': typeof BuyingIndexRoute
   '/casting/': typeof CastingIndexRoute
 }
 export interface FileRouteTypes {
@@ -289,12 +297,12 @@ export interface FileRouteTypes {
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
+    | '/buying/'
     | '/casting/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/backup'
-    | '/buying'
     | '/calendar'
     | '/control-room'
     | '/customers'
@@ -317,6 +325,7 @@ export interface FileRouteTypes {
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
+    | '/buying'
     | '/casting'
   id:
     | '__root__'
@@ -346,6 +355,7 @@ export interface FileRouteTypes {
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
+    | '/buying/'
     | '/casting/'
   fileRoutesById: FileRoutesById
 }
@@ -505,6 +515,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CastingIndexRouteImport
       parentRoute: typeof CastingRoute
     }
+    '/buying/': {
+      id: '/buying/'
+      path: '/'
+      fullPath: '/buying/'
+      preLoaderRoute: typeof BuyingIndexRouteImport
+      parentRoute: typeof BuyingRoute
+    }
     '/casting/new-session': {
       id: '/casting/new-session'
       path: '/new-session'
@@ -570,6 +587,7 @@ interface BuyingRouteChildren {
   BuyingSupplierLedgerRoute: typeof BuyingSupplierLedgerRoute
   BuyingSupplierPaymentsRoute: typeof BuyingSupplierPaymentsRoute
   BuyingSuppliersRoute: typeof BuyingSuppliersRoute
+  BuyingIndexRoute: typeof BuyingIndexRoute
 }
 
 const BuyingRouteChildren: BuyingRouteChildren = {
@@ -578,6 +596,7 @@ const BuyingRouteChildren: BuyingRouteChildren = {
   BuyingSupplierLedgerRoute: BuyingSupplierLedgerRoute,
   BuyingSupplierPaymentsRoute: BuyingSupplierPaymentsRoute,
   BuyingSuppliersRoute: BuyingSuppliersRoute,
+  BuyingIndexRoute: BuyingIndexRoute,
 }
 
 const BuyingRouteWithChildren =

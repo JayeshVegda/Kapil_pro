@@ -134,6 +134,7 @@ function NavGroupsList({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?
                 to={item.to}
                 onClick={onNavigate}
                 className="mb-0.5 flex items-center gap-2 rounded-md border-l-2 border-transparent px-3 py-2 text-[13px] text-slate-300 transition hover:bg-white/5 hover:text-slate-100"
+                activeOptions={{ exact: true }}
                 activeProps={{ className: 'border-l-blue-400 bg-blue-500/20 font-semibold text-white' }}
               >
                 <Icon size={15} />
@@ -217,17 +218,38 @@ const mobilePrimaryItems = [
   { to: '/ledger', title: 'Ledger', icon: BookOpen },
 ]
 
+const mobilePrimaryItemsByModule: Record<AppModuleId, typeof mobilePrimaryItems> = {
+  selling: mobilePrimaryItems,
+  buying: [
+    { to: '/buying', title: 'Buy', icon: LayoutDashboard },
+    { to: '/buying/new-purchase', title: 'New', icon: FilePlus2 },
+    { to: '/buying/supplier-payments', title: 'Pay', icon: CreditCard },
+    { to: '/buying/supplier-ledger', title: 'Ledger', icon: BookOpen },
+  ],
+  casting: [
+    { to: '/casting', title: 'Cast', icon: LayoutDashboard },
+    { to: '/casting/new-session', title: 'New', icon: Flame },
+    { to: '/casting/log', title: 'Log', icon: ClipboardList },
+    { to: '/casting/materials', title: 'Items', icon: Boxes },
+  ],
+}
+
 export function MobileBottomNav({ onMore }: { onMore: () => void }) {
+  const pathname = useRouterState({ select: (state) => state.location.pathname })
+  const activeModule = useMemo(() => appModuleFromPathname(pathname), [pathname])
+  const items = mobilePrimaryItemsByModule[activeModule]
+
   return (
     <nav className="fixed inset-x-0 bottom-0 z-[60] border-t border-slate-200 bg-white/95 px-2 pb-[max(env(safe-area-inset-bottom),0.35rem)] pt-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden" aria-label="Primary navigation">
       <div className="grid grid-cols-5 gap-1">
-        {mobilePrimaryItems.map((item) => {
+        {items.map((item) => {
           const Icon = item.icon
           return (
             <Link
               key={item.to}
               to={item.to}
               className="flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-[11px] font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+              activeOptions={{ exact: true }}
               activeProps={{ className: 'bg-blue-50 text-blue-700' }}
             >
               <Icon size={18} />
