@@ -10,6 +10,7 @@ import {
 } from '@/domain/records'
 import { formatMonthYear, getLocalIsoDate, toMonthKey } from '@/lib/date'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
+import { buildMonthlyItemComparisons, type MonthlyItemComparisons } from '@/domain/monthly-item-rollup'
 
 export const DASHBOARD_QUERY_KEY = ['dashboard-data'] as const
 
@@ -37,6 +38,7 @@ export type ThisMonthItemBagsRow = {
 export type DashboardData = {
   /** Bill lines in the current calendar month: bags primary, kg for context. */
   thisMonthItemBags: ThisMonthItemBagsRow[]
+  itemComparisons: MonthlyItemComparisons
   kpis: {
     outstanding: number
     allTimeSales: number
@@ -88,6 +90,11 @@ export type DashboardData = {
     pendingAmount: number
     pendingParties: number
     highRiskParties: number
+    highestPending: {
+      customerId: string
+      customerName: string
+      amount: number
+    } | null
   }
   monthlyTrend: Array<{ month: string; sales: number; collection: number }>
 }
@@ -101,6 +108,11 @@ const normalizeBillStatus = (value: unknown): DashboardBill['status'] => {
   return 'Pending'
 }
 const monthKey = (d: string) => toMonthKey(d)
+const shiftMonthKey = (key: string, delta: number) => {
+  const [yearRaw, monthRaw] = key.split('-').map(Number)
+  const date = new Date(yearRaw, monthRaw - 1 + delta, 1)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
 const monthLabel = (m: string) => {
   return formatMonthYear(m)
 }
@@ -160,6 +172,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
   )
 
   const nowMonth = monthKey(getLocalIsoDate())
+  const prevMonth = shiftMonthKey(nowMonth, -1)
   const billDateById = new Map<string, string>()
   for (const row of billsRaw) {
     const d = datePart(row.date)
@@ -196,9 +209,15 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     .sort((a, b) => b.bags - a.bags || b.kg - a.kg)
     .slice(0, 12)
 
-  const prev = new Date()
-  prev.setMonth(prev.getMonth() - 1)
-  const prevMonth = monthKey(getLocalIsoDate(prev))
+  const itemComparisons = buildMonthlyItemComparisons({
+    currentBills: billsRaw,
+    currentItems: billItemsRaw,
+    previousBills: billsRaw,
+    previousItems: billItemsRaw,
+    currentMonthKey: nowMonth,
+    previousMonthKey: prevMonth,
+    maxCurrentDate: asOfDate,
+  })
   const thisMonthBills = bills.filter((b) => monthKey(b.businessDate) === nowMonth)
   const thisMonthPayments = payments.filter((p) => monthKey(p.businessDate) === nowMonth)
   const thisMonthSales = thisMonthBills.reduce((s, b) => s + b.total, 0)
@@ -281,10 +300,18 @@ export async function fetchDashboardData(): Promise<DashboardData> {
   const salesVsLastMonth = thisMonthSales - previousMonthSales
   const collectionVsLastMonth = thisMonthCollection - previousMonthCollection
 
-  const pendingParties = [...outstandingByParty.values()].filter((v) => v > 0).length
-  const pendingAmount = [...outstandingByParty.values()].filter((v) => v > 0).reduce((s, v) => s + v, 0)
+  const pendingRows = [...outstandingByParty.entries()]
+    .filter(([, value]) => value > 0)
+    .map(([customerId, amount]) => ({
+      customerId,
+      customerName: customerDisplayById.get(customerId) ?? customerId,
+      amount,
+    }))
+    .sort((a, b) => b.amount - a.amount)
+  const pendingParties = pendingRows.length
+  const pendingAmount = pendingRows.reduce((s, row) => s + row.amount, 0)
   const avgPartyPending = pendingParties > 0 ? pendingAmount / pendingParties : 0
-  const highRiskParties = [...outstandingByParty.values()].filter((v) => v > avgPartyPending * 1.5).length
+  const highRiskParties = pendingRows.filter((row) => row.amount > avgPartyPending * 1.5).length
 
   const allMonths = new Set<string>()
   bills.forEach((b) => allMonths.add(monthKey(b.businessDate)))
@@ -297,6 +324,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
 
   return {
     thisMonthItemBags,
+    itemComparisons,
     kpis: {
       outstanding,
       allTimeSales: totalSales,
@@ -333,7 +361,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     },
     recentBills: bills.sort(compareBusinessDateThenCreatedDesc).slice(0, 8),
     recentPayments: payments.sort(compareBusinessDateThenCreatedDesc).slice(0, 8),
-    actionRequired: { pendingAmount, pendingParties, highRiskParties },
+    actionRequired: { pendingAmount, pendingParties, highRiskParties, highestPending: pendingRows[0] ?? null },
     monthlyTrend,
   }
 }

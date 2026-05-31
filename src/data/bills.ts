@@ -1,6 +1,7 @@
 import { recalculateAndPersistBillStatusesForCustomer } from '@/data/bill-statuses'
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
+import { invalidateStockDataCache } from '@/data/stock'
 import { calculateBillTotals, type BillItemInput } from '@/domain/billing-calculations'
 import { BAGS_PER_KG } from '@/shared/constants'
 
@@ -29,6 +30,18 @@ export async function suggestNextBillNo(bookNo: number, billNo: number) {
   let next = Math.max(1, billNo)
   while (used.has(next)) next += 1
   return next
+}
+
+export async function getNextBillNoForBook(bookNo: number) {
+  const records = await pb.collection('bills').getFullList({
+    filter: `book_no = ${bookNo}`,
+    sort: '-bill_no',
+  })
+  const latest = records
+    .map((record) => Number(record.bill_no ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => b - a)[0]
+  return latest ? latest + 1 : 1
 }
 
 type SaveBillInput = {
@@ -93,6 +106,7 @@ export async function saveBillWithItems(input: SaveBillInput) {
         cause: error,
       })
     }
+    invalidateStockDataCache()
     await recalculateAndPersistBillStatusesForCustomer(input.customerId)
   })
 }

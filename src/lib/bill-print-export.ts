@@ -1,7 +1,8 @@
 import { BILL_PRINT_PAGE_WIDTH_CM } from '@/components/billing/bill-print-layout'
 import { getBillPrintPopupStyles } from '@/components/billing/bill-print-styles'
-import { BILL_JPEG_OUTPUT_WIDTH_PX, exportNodeAsJpg, exportNodeAsJpgBlob } from '@/lib/image-export'
 import { openAndPrintHtml, printHtmlInHiddenIframe } from '@/lib/print-html'
+
+const BILL_JPEG_OUTPUT_WIDTH_PX = 2160
 
 /** Single source of truth — Print bill and New bill must match. */
 export const BILL_PRINT_JPEG_QUALITY_DOWNLOAD = 0.97
@@ -41,6 +42,7 @@ export function printBillLayoutFromElement(
 }
 
 export async function downloadBillLayoutAsJpg(element: HTMLElement, filename: string) {
+  const { exportNodeAsJpg } = await import('@/lib/image-export')
   await exportNodeAsJpg(element, {
     filename,
     quality: BILL_PRINT_JPEG_QUALITY_DOWNLOAD,
@@ -49,6 +51,7 @@ export async function downloadBillLayoutAsJpg(element: HTMLElement, filename: st
 }
 
 export async function createBillLayoutShareJpegBlob(element: HTMLElement) {
+  const { exportNodeAsJpgBlob } = await import('@/lib/image-export')
   return exportNodeAsJpgBlob(element, {
     quality: BILL_PRINT_JPEG_QUALITY_SHARE,
     preferredWidthPx: BILL_JPEG_OUTPUT_WIDTH_PX,

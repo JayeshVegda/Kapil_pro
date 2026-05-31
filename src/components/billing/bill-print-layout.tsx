@@ -59,12 +59,22 @@ export function BillPrintLayout({
   totalBags,
   lrList,
 }: BillPrintLayoutProps) {
+  const hasGst = gstAmount > 0 || gstRate > 0
+
   return (
     <div className="bill-print-root">
       <div className="bill-print-header">
-        <div>
+        <div className="bill-print-header-brand">
           <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Kapil Products</p>
-          <p style={{ margin: '4px 0 0', fontSize: 11, color: '#475569' }}>MKT: {mkt}</p>
+          <p className="bill-print-market-line">
+            MKT: {mkt}
+            {hasGst ? (
+              <>
+                <span className="bill-print-market-separator">|</span>
+                <span className="bill-print-gst-label">BILL</span>
+              </>
+            ) : null}
+          </p>
         </div>
         <div className="bill-print-header-meta">
           <p style={{ margin: 0 }}>
@@ -133,9 +143,12 @@ export function BillPrintLayout({
         {previousBalance !== 0 && (
           <div className="bill-print-summary-line">
             <span className="bill-print-summary-label">
-              Previous Balance [dt. {previousBillDate === 'Opening' ? 'Opening' : formatFullDate(previousBillDate)}]
+              {previousBalance >= 0 ? 'Previous Balance' : 'Previous Advance'} [dt. {previousBillDate === 'Opening' ? 'Opening' : formatFullDate(previousBillDate)}]
             </span>
-            <span className="bill-print-summary-value">+ {formatInrInteger(previousBalance)}</span>
+            <span className="bill-print-summary-value">
+              {previousBalance >= 0 ? '+ ' : '− '}
+              {formatInrInteger(Math.abs(previousBalance))}
+            </span>
           </div>
         )}
         <div className="bill-print-summary-line">
@@ -155,8 +168,8 @@ export function BillPrintLayout({
           </div>
         )}
         <div className="bill-print-total">
-          <span>Total</span>
-          <span className="bill-print-summary-value">{formatInrInteger(finalTotal)}</span>
+          <span>{finalTotal >= 0 ? 'Amount Due' : 'Advance Balance'}</span>
+          <span className="bill-print-summary-value">{formatInrInteger(Math.abs(finalTotal))}</span>
         </div>
       </div>
 

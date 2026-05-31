@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Edit3, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
-import { toUserMessage } from '@/app/errors'
 import {
   deleteBillWithItems,
   deletePayment,
@@ -92,7 +91,6 @@ function TransactionsPage() {
   const [kindFilter, setKindFilter] = useState<'all' | 'bill' | 'payment'>('all')
   const [viewMode, setViewMode] = useState<'active' | 'deleted'>('active')
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>(() => readTrashEntries())
-  const [statusText, setStatusText] = useState('')
   const [editing, setEditing] = useState<TransactionRow | null>(null)
   const [billDraft, setBillDraft] = useState<Omit<BillSnapshot, 'id'> | null>(null)
   const [paymentDraft, setPaymentDraft] = useState<Omit<PaymentSnapshot, 'id'> | null>(null)
@@ -153,13 +151,11 @@ function TransactionsPage() {
       const next = cleanupExpiredTrash([...trashEntries, { key: row.key, deletedAt: Date.now(), snapshot: row }])
       setTrashEntries(next)
       writeTrashEntries(next)
-      setStatusText(`${row.kind === 'bill' ? 'Bill' : 'Payment'} moved to temporary trash.`)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
       ])
     },
-    onError: (error) => setStatusText(toUserMessage(error)),
   })
 
   const restoreMutation = useMutation({
@@ -172,13 +168,11 @@ function TransactionsPage() {
       const next = trashEntries.filter((item) => item.key !== entry.key)
       setTrashEntries(next)
       writeTrashEntries(next)
-      setStatusText(`${entry.snapshot.kind === 'bill' ? 'Bill' : 'Payment'} restored.`)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
       ])
     },
-    onError: (error) => setStatusText(toUserMessage(error)),
   })
 
   const editMutation = useMutation({
@@ -196,7 +190,6 @@ function TransactionsPage() {
       }
     },
     onSuccess: async () => {
-      setStatusText('Transaction updated.')
       setEditing(null)
       setBillDraft(null)
       setPaymentDraft(null)
@@ -205,7 +198,6 @@ function TransactionsPage() {
         queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
       ])
     },
-    onError: (error) => setStatusText(toUserMessage(error)),
   })
 
   function startEdit(row: TransactionRow) {
@@ -263,18 +255,18 @@ function TransactionsPage() {
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[240px] flex-1">
+      <section className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+          <div className="relative min-w-[260px] flex-1">
             <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input className="h-10 w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30" placeholder="Search party, type, reference..." value={search} onChange={(event) => setSearch(event.target.value)} />
           </div>
-          <select className={inputClass} value={kindFilter} onChange={(event) => setKindFilter(event.target.value as 'all' | 'bill' | 'payment')}>
+          <select className={`${inputClass} lg:w-40 lg:flex-none`} value={kindFilter} onChange={(event) => setKindFilter(event.target.value as 'all' | 'bill' | 'payment')}>
             <option value="all">All types</option>
             <option value="bill">Bills</option>
             <option value="payment">Payments</option>
           </select>
-          <div className="inline-flex rounded-md border border-slate-300 bg-slate-50 p-0.5 text-xs">
+          <div className="inline-flex flex-none rounded-md border border-slate-300 bg-slate-50 p-0.5 text-xs">
             <button type="button" className={`rounded px-3 py-1.5 ${viewMode === 'active' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`} onClick={() => setViewMode('active')}>
               Active
             </button>
@@ -283,7 +275,6 @@ function TransactionsPage() {
             </button>
           </div>
         </div>
-        <p className="text-xs text-slate-500">{statusText || 'Manage recent bills and payments with edit/delete/restore actions.'}</p>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

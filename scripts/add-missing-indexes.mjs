@@ -23,9 +23,10 @@ async function main() {
   console.log(`Authenticated as ${PB_SUPERUSER_EMAIL}`)
 
   await ensureCustomersIndex()
+  await ensurePerformanceIndexes()
   await dropMiscExpensesCollection()
 
-  console.log('Done: customers index ensured, misc_expenses dropped.')
+  console.log('Done: performance indexes ensured, misc_expenses dropped.')
 }
 
 async function ensureCustomersIndex() {
@@ -44,6 +45,43 @@ async function ensureCustomersIndex() {
     indexes: [...existingIndexes, desiredIndex],
   })
   console.log('Added index on customers(company_name, name)')
+}
+
+async function ensurePerformanceIndexes() {
+  await ensureCollectionIndexes('bills', [
+    'CREATE INDEX IF NOT EXISTS idx_bills_customer ON bills (customer)',
+    'CREATE INDEX IF NOT EXISTS idx_bills_date ON bills (date)',
+    'CREATE INDEX IF NOT EXISTS idx_bills_customer_date ON bills (customer, date)',
+  ])
+  await ensureCollectionIndexes('payments', [
+    'CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments (customer)',
+    'CREATE INDEX IF NOT EXISTS idx_payments_date ON payments (date)',
+    'CREATE INDEX IF NOT EXISTS idx_payments_customer_date ON payments (customer, date)',
+  ])
+  await ensureCollectionIndexes('bill_items', [
+    'CREATE INDEX IF NOT EXISTS idx_bill_items_bill ON bill_items (bill)',
+    'CREATE INDEX IF NOT EXISTS idx_bill_items_item ON bill_items (item)',
+  ])
+}
+
+async function ensureCollectionIndexes(collectionName, desiredIndexes) {
+  const collection = await pb.collections.getOne(collectionName)
+  const existingIndexes = Array.isArray(collection.indexes) ? collection.indexes : []
+  const missingIndexes = desiredIndexes.filter((desiredIndex) => {
+    const normalizedDesired = normalizeSql(desiredIndex).replace(' if not exists ', ' ')
+    return !existingIndexes.some((idx) => normalizeSql(idx).replace(' if not exists ', ' ').includes(normalizedDesired))
+  })
+
+  if (missingIndexes.length === 0) {
+    console.log(`${collectionName} indexes already exist`)
+    return
+  }
+
+  await pb.collections.update(collection.id, {
+    ...collection,
+    indexes: [...existingIndexes, ...missingIndexes],
+  })
+  console.log(`Added ${missingIndexes.length} index(es) on ${collectionName}`)
 }
 
 async function dropMiscExpensesCollection() {

@@ -15,7 +15,7 @@ export async function recalculateAndPersistBillStatusesForCustomer(customerId: s
   const [customerRaw, billsRaw, billItemsRaw, paymentsRaw] = await Promise.all([
     pb.collection('customers').getOne(customerId),
     pb.collection('bills').getFullList({ filter: `customer = "${customerId}"`, sort: 'date,bill_no' }),
-    pb.collection('bill_items').getFullList(),
+    pb.collection('bill_items').getFullList({ filter: `bill.customer = "${customerId}"` }),
     pb.collection('payments').getFullList({ filter: `customer = "${customerId}"`, sort: 'date' }),
   ])
 

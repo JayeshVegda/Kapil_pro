@@ -70,20 +70,6 @@ function CustomersPage() {
   })
 
   const filteredRows = useMemo(() => customersQuery.data ?? [], [customersQuery.data])
-  const summary = useMemo(() => {
-    return filteredRows.reduce(
-      (acc, row) => {
-        acc.opening += row.openingBalance
-        acc.billed += row.billedTotal
-        acc.paid += row.paidTotal
-        acc.net += row.netBalance
-        if (row.lastBillDate > acc.lastBillDate) acc.lastBillDate = row.lastBillDate
-        if (row.lastPaymentDate > acc.lastPaymentDate) acc.lastPaymentDate = row.lastPaymentDate
-        return acc
-      },
-      { opening: 0, billed: 0, paid: 0, net: 0, lastBillDate: '', lastPaymentDate: '' },
-    )
-  }, [filteredRows])
 
   const createOrUpdateMutation = useMutation({
     mutationFn: async () => {
@@ -191,9 +177,6 @@ function CustomersPage() {
             <Field label="Customer Name *">
               <input className={inputClass} type="text" value={formState.name} onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))} />
             </Field>
-            <Field label="Phone">
-              <input className={inputClass} type="text" value={formState.phone} onChange={(event) => setFormState((prev) => ({ ...prev, phone: event.target.value }))} />
-            </Field>
             <Field label="Opening Balance">
               <input className={inputClass} type="number" value={formState.openingBalance || ''} onChange={(event) => setFormState((prev) => ({ ...prev, openingBalance: Number(event.target.value || 0) }))} />
             </Field>
@@ -223,6 +206,9 @@ function CustomersPage() {
           </div>
           {showMoreDetails && (
             <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+              <Field label="Phone">
+                <input className={inputClass} type="text" value={formState.phone} onChange={(event) => setFormState((prev) => ({ ...prev, phone: event.target.value }))} />
+              </Field>
               <Field label="GSTIN (optional)">
                 <input className={inputClass} type="text" value={formState.gstin} onChange={(event) => setFormState((prev) => ({ ...prev, gstin: event.target.value }))} />
               </Field>
@@ -239,16 +225,6 @@ function CustomersPage() {
           )}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-          <Metric label="Opening" value={formatInrInteger(summary.opening)} />
-          <Metric label="Billed" value={formatInrInteger(summary.billed)} />
-          <Metric label="Paid" value={formatInrInteger(summary.paid)} />
-          <Metric label={summary.net >= 0 ? 'Due' : 'Advance'} value={formatInrInteger(Math.abs(summary.net))} emphasized />
-          <Metric label="Last" value={formatFullDate(latestDate(summary.lastBillDate, summary.lastPaymentDate) || '')} />
-        </div>
-      </section>
-
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="mb-3 text-sm font-semibold text-slate-900">Customer List</h3>
         {customersQuery.isLoading && <p className="text-sm text-slate-500">Loading customers...</p>}
@@ -260,18 +236,16 @@ function CustomersPage() {
                 <tr className="bg-slate-50">
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Company Name</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Customer Name</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Phone</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">GSTIN</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Opening Balance</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Opening Dt.</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Active</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Opening Balance</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Closing Balance</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredRows.length === 0 && (
                   <tr>
-                    <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={8}>
+                    <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={6}>
                       <p className="font-medium text-slate-700">No customers yet.</p>
                       <p className="mt-1">Create your first customer to start billing and ledger tracking.</p>
                       <button
@@ -296,15 +270,9 @@ function CustomersPage() {
                       </Link>
                     </td>
                     <td className="px-3 py-3 text-sm text-slate-700">{row.customer.name || '-'}</td>
-                    <td className="px-3 py-3 text-sm text-slate-700">{row.customer.phone || '-'}</td>
-                    <td className="px-3 py-3 text-sm text-slate-700">{row.customer.gstin || '-'}</td>
-                    <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{formatInrInteger(row.openingBalance)}</td>
                     <td className="px-3 py-3 text-sm text-slate-600">{row.customer.openingBalanceDate ? formatFullDate(row.customer.openingBalanceDate) : '-'}</td>
-                    <td className="px-3 py-3">
-                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${row.customer.active ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
-                        {row.customer.active ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
+                    <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{formatInrInteger(row.openingBalance)}</td>
+                    <td className="px-3 py-3 text-right font-mono text-sm font-semibold text-slate-900">{formatInrInteger(row.netBalance)}</td>
                     <td className="px-3 py-3 text-right">
                       <div className="inline-flex gap-2">
                         <button
@@ -343,21 +311,6 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       {children}
     </label>
   )
-}
-
-function Metric({ label, value, emphasized = false }: { label: string; value: string; emphasized?: boolean }) {
-  return (
-    <div className={`rounded-md border p-2.5 ${emphasized ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
-      <p className="text-[11px] uppercase tracking-[0.08em] text-slate-500">{label}</p>
-      <p className={`mt-0.5 font-mono tabular-nums ${emphasized ? 'text-lg font-bold text-amber-800' : 'text-base font-semibold text-slate-900'}`}>{value}</p>
-    </div>
-  )
-}
-
-function latestDate(a: string, b: string) {
-  if (!a) return b
-  if (!b) return a
-  return a >= b ? a : b
 }
 
 const inputClass =

@@ -1,7 +1,7 @@
-import { useIsFetching, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useIsFetching, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query'
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
-import { AlertTriangle, CheckCircle2, Clock3, Command, HelpCircle, Loader2, Menu, RefreshCw, Search, TerminalSquare } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, CheckCircle2, Clock3, Command, FileText, HelpCircle, IndianRupee, Loader2, Menu, Package, RefreshCw, Search, TerminalSquare, TrendingUp, UserRound } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { pb } from '@/data/pocketbase'
 import { loadQuickSearchResults, type QuickSearchResult } from '@/data/quick-search'
 import { useMarketRate } from '@/domain/market-rate'
@@ -9,8 +9,10 @@ import { getAdminControlSettings, subscribeAdminControlSettings } from '@/lib/ad
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger, formatInQty } from '@/lib/inr-format'
 import { PENDING_COMMAND_STORAGE_KEY, splitCommandPrefix, inferCommandKind, getCommandRegistry, parseContextCommand, parseAmountToken } from '@/lib/commands'
+import { rememberQuickSearchResult } from '@/lib/recent-items'
 import { filterRankedNameMatches, findBestNameMatch } from '@/lib/search'
-import { SidebarNavPanel } from './sidebar-nav'
+import { QuickSearchPreview } from './quick-search-preview'
+import { MobileBottomNav, SidebarNavPanel } from './sidebar-nav'
 
 const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Dashboard', subtitle: 'Live business overview and pending actions' },
@@ -34,6 +36,20 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
 const DOC_TITLE_SUFFIX = 'Kapil Billing'
 const COMMAND_HISTORY_STORAGE_KEY = 'kapil-command-history-v1'
 const COMMAND_HISTORY_LIMIT = 20
+const BACKGROUND_SYNC_QUERY_PREFIXES = new Set([
+  'quick-search',
+  'command-bar-deps',
+  'print-bill-balance',
+  'backup-snapshot',
+  'export-reports-snapshot',
+  'export-reports-monthly-stock',
+  'customer-auto-balance',
+  'stock-ledger',
+])
+
+function isBackgroundSyncQuery(queryKey: QueryKey) {
+  return BACKGROUND_SYNC_QUERY_PREFIXES.has(String(queryKey[0] ?? ''))
+}
 
 const commandRoutes = [
   { label: 'Dashboard', path: '/' },
@@ -57,6 +73,7 @@ type CommandDraft = {
 }
 
 type CommandMode = 'command' | 'search' | 'help' | 'action'
+type QuickSearchSectionKey = QuickSearchResult['kind']
 
 type CommandSuggestion = {
   id: string
@@ -76,8 +93,10 @@ type BillSession = {
 export function AppShell() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [quickSearch, setQuickSearch] = useState('')
+  const [debouncedQuickSearch, setDebouncedQuickSearch] = useState('')
   const [quickSearchOpen, setQuickSearchOpen] = useState(false)
   const [activeQuickSearchIndex, setActiveQuickSearchIndex] = useState(0)
+  const [expandedQuickSearchSections, setExpandedQuickSearchSections] = useState<Partial<Record<QuickSearchSectionKey, boolean>>>({})
   const [commandOpen, setCommandOpen] = useState(false)
   const [commandInput, setCommandInput] = useState('')
   const [commandError, setCommandError] = useState('')
@@ -86,17 +105,22 @@ export function AppShell() {
   const [commandHistory, setCommandHistory] = useState<string[]>(() => loadCommandHistory())
   const [adminSettings, setAdminSettings] = useState(getAdminControlSettings)
   const quickSearchRef = useRef<HTMLLabelElement | null>(null)
+  const quickSearchPaletteRef = useRef<HTMLDivElement | null>(null)
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const meta = pageMeta[pathname] ?? { title: 'Kapil Billing', subtitle: 'Business billing workspace' }
   const normalizedQuickSearch = quickSearch.trim()
+  const normalizedDebouncedQuickSearch = debouncedQuickSearch.trim()
   const quickSearchQuery = useQuery({
-    queryKey: ['quick-search', normalizedQuickSearch],
-    queryFn: () => loadQuickSearchResults(normalizedQuickSearch),
-    enabled: normalizedQuickSearch.length >= 2,
+    queryKey: ['quick-search', normalizedDebouncedQuickSearch],
+    queryFn: () => loadQuickSearchResults(normalizedDebouncedQuickSearch),
+    enabled: quickSearchOpen,
     staleTime: 30_000,
   })
   const quickSearchResults = useMemo(() => quickSearchQuery.data ?? [], [quickSearchQuery.data])
+  const quickSearchSections = useMemo(() => groupQuickSearchResults(quickSearchResults, expandedQuickSearchSections), [expandedQuickSearchSections, quickSearchResults])
+  const visibleQuickSearchResults = useMemo(() => quickSearchSections.flatMap((section) => section.visibleResults), [quickSearchSections])
+  const activeQuickSearchResult = visibleQuickSearchResults[activeQuickSearchIndex] ?? visibleQuickSearchResults[0]
   const commandRegistry = useMemo(() => getCommandRegistry(), [adminSettings])
   const today = useMemo(() => getLocalIsoDate(), [])
   const { marketRate } = useMarketRate(today)
@@ -161,11 +185,17 @@ export function AppShell() {
     document.title = `${meta.title} – ${DOC_TITLE_SUFFIX}`
   }, [meta.title])
 
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedQuickSearch(quickSearch), 150)
+    return () => window.clearTimeout(timeout)
+  }, [quickSearch])
+
   useEffect(() => subscribeAdminControlSettings(setAdminSettings), [])
 
   useEffect(() => {
     function onPointerDown(event: MouseEvent) {
-      if (!quickSearchRef.current?.contains(event.target as Node)) setQuickSearchOpen(false)
+      const target = event.target as Node
+      if (!quickSearchRef.current?.contains(target) && !quickSearchPaletteRef.current?.contains(target)) setQuickSearchOpen(false)
     }
     window.addEventListener('mousedown', onPointerDown)
     return () => window.removeEventListener('mousedown', onPointerDown)
@@ -173,7 +203,12 @@ export function AppShell() {
 
   useEffect(() => {
     setActiveQuickSearchIndex(0)
-  }, [normalizedQuickSearch, quickSearchResults.length])
+    setExpandedQuickSearchSections({})
+  }, [normalizedQuickSearch])
+
+  useEffect(() => {
+    setActiveQuickSearchIndex((index) => Math.min(index, Math.max(visibleQuickSearchResults.length - 1, 0)))
+  }, [visibleQuickSearchResults.length])
 
   useEffect(() => {
     setActiveCommandSuggestionIndex(0)
@@ -181,6 +216,11 @@ export function AppShell() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.ctrlKey && event.key === '/') {
+        event.preventDefault()
+        setQuickSearchOpen(true)
+        return
+      }
       if (!adminSettings.controlKEnabled) return
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
@@ -205,6 +245,7 @@ export function AppShell() {
 
   function openQuickSearchResult(result: QuickSearchResult | undefined) {
     if (!result) return
+    rememberQuickSearchResult(result)
     setQuickSearch('')
     setQuickSearchOpen(false)
     if (result.kind === 'Rate') return
@@ -216,9 +257,87 @@ export function AppShell() {
       void navigate({ to: '/transactions', search: { focusKind: 'payment', focusId: result.paymentId } })
       return
     }
+    if (result.kind === 'Stock') {
+      void navigate({ to: '/stock' })
+      return
+    }
     if (result.kind === 'Customer' && result.customerId) {
       void navigate({ to: '/ledger', search: { customerId: result.customerId, focus: '' } })
     }
+  }
+
+  function runQuickSearchAction(action: 'primary' | 'secondary' | 'tertiary', result: QuickSearchResult | undefined) {
+    if (!result) return
+    if (action === 'primary') {
+      openQuickSearchResult(result)
+      return
+    }
+    rememberQuickSearchResult(result)
+    setQuickSearch('')
+    setQuickSearchOpen(false)
+    if (result.kind === 'Bill') {
+      if (action === 'secondary' && result.billId) void navigate({ to: '/transactions', search: { focusKind: 'bill', focusId: result.billId } })
+      if (action === 'tertiary' && result.customerId) void navigate({ to: '/new-payment' })
+      return
+    }
+    if (result.kind === 'Customer') {
+      if (action === 'secondary') void navigate({ to: '/new-bill' })
+      if (action === 'tertiary') void navigate({ to: '/new-payment' })
+      return
+    }
+    if (result.kind === 'Stock') {
+      void navigate({ to: action === 'secondary' ? '/stock' : '/stock-in' })
+      return
+    }
+    openQuickSearchResult(result)
+  }
+
+  function moveQuickSearchSelection(delta: number) {
+    setQuickSearchOpen(true)
+    setActiveQuickSearchIndex((index) => (visibleQuickSearchResults.length === 0 ? 0 : (index + delta + visibleQuickSearchResults.length) % visibleQuickSearchResults.length))
+  }
+
+  function focusNextQuickSearchSection() {
+    if (quickSearchSections.length === 0) return
+    const activeResult = visibleQuickSearchResults[activeQuickSearchIndex]
+    const activeSectionIndex = Math.max(0, quickSearchSections.findIndex((section) => section.visibleResults.some((result) => result.id === activeResult?.id)))
+    const nextSection = quickSearchSections[(activeSectionIndex + 1) % quickSearchSections.length]
+    const nextIndex = visibleQuickSearchResults.findIndex((result) => result.id === nextSection?.visibleResults[0]?.id)
+    if (nextIndex >= 0) setActiveQuickSearchIndex(nextIndex)
+  }
+
+  function handleQuickSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveQuickSearchSelection(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveQuickSearchSelection(-1)
+      return
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      focusNextQuickSearchSection()
+      return
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === '1') {
+      event.preventDefault()
+      runQuickSearchAction('primary', activeQuickSearchResult)
+      return
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === '2') {
+      event.preventDefault()
+      runQuickSearchAction('secondary', activeQuickSearchResult)
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      openQuickSearchResult(activeQuickSearchResult)
+      return
+    }
+    if (event.key === 'Escape') setQuickSearchOpen(false)
   }
 
   function runGlobalCommand() {
@@ -398,11 +517,12 @@ export function AppShell() {
   }
 
   const queryClient = useQueryClient()
-  const fetchCount = useIsFetching()
+  const fetchCount = useIsFetching({ predicate: (query) => !isBackgroundSyncQuery(query.queryKey) })
   const isSyncing = fetchCount > 0
   const queryStates = queryClient
     .getQueryCache()
     .getAll()
+    .filter((q) => !isBackgroundSyncQuery(q.queryKey))
     .map((q) => q.state)
   const lastUpdatedAt = queryStates.reduce((max, s) => Math.max(max, s.dataUpdatedAt ?? 0), 0)
   const hasError = queryStates.some((s) => s.status === 'error')
@@ -415,90 +535,51 @@ export function AppShell() {
     <div className="flex min-h-dvh bg-slate-100">
       <SidebarNavPanel mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-50 flex items-center justify-between gap-3 border-b border-slate-200/90 bg-white/95 px-3 py-2.5 backdrop-blur sm:px-4 lg:px-5">
+        <header className="sticky top-0 z-50 flex min-h-14 items-center justify-between gap-2 border-b border-slate-200/90 bg-white/95 px-2.5 py-2 backdrop-blur sm:px-4 lg:min-h-0 lg:gap-3 lg:px-5 lg:py-2.5">
           <div className="flex min-w-0 items-center gap-2.5">
             <button
               type="button"
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-slate-200 text-slate-700 lg:hidden"
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-md border border-slate-200 bg-white text-slate-700 shadow-sm lg:hidden"
               onClick={() => setMobileNavOpen(true)}
               aria-label="Open navigation menu"
             >
-              <Menu size={16} />
+              <Menu size={18} />
             </button>
             <div className="min-w-0">
               <h1 className="truncate text-base font-semibold tracking-tight text-slate-900 sm:text-lg">{meta.title}</h1>
               <p className="hidden truncate text-xs text-slate-500 sm:block">{meta.subtitle}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 md:gap-3">
+          <div className="flex shrink-0 items-center gap-1.5 md:gap-3">
             <label ref={quickSearchRef} className="relative hidden lg:block">
               <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Quick search party, bill, payment, rate..."
+                placeholder="Search site..."
                 value={quickSearch}
                 onChange={(event) => {
                   setQuickSearch(event.target.value)
                   setQuickSearchOpen(true)
                 }}
                 onFocus={() => setQuickSearchOpen(true)}
-                onKeyDown={(event) => {
-                  if (event.key === 'ArrowDown') {
-                    event.preventDefault()
-                    setQuickSearchOpen(true)
-                    setActiveQuickSearchIndex((index) => (quickSearchResults.length === 0 ? 0 : (index + 1) % quickSearchResults.length))
-                    return
-                  }
-                  if (event.key === 'ArrowUp') {
-                    event.preventDefault()
-                    setQuickSearchOpen(true)
-                    setActiveQuickSearchIndex((index) => (quickSearchResults.length === 0 ? 0 : index <= 0 ? quickSearchResults.length - 1 : index - 1))
-                    return
-                  }
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    openQuickSearchResult(quickSearchResults[activeQuickSearchIndex] ?? quickSearchResults[0])
-                    return
-                  }
-                  if (event.key === 'Escape') setQuickSearchOpen(false)
-                }}
-                className="h-9 w-[300px] rounded-full border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-700 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-300"
+                onKeyDown={handleQuickSearchKeyDown}
+                className="h-9 w-[250px] rounded-full border border-slate-200 bg-white pl-9 pr-20 text-sm text-slate-700 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-300 xl:w-[300px]"
               />
-              {quickSearchOpen && normalizedQuickSearch.length >= 2 && (
-                <div className="absolute right-0 z-[80] mt-2 w-[420px] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
-                  {quickSearchQuery.isLoading && <div className="px-3 py-2 text-sm text-slate-500">Searching...</div>}
-                  {quickSearchQuery.isError && <div className="px-3 py-2 text-sm text-red-600">Unable to search right now.</div>}
-                  {!quickSearchQuery.isLoading && !quickSearchQuery.isError && quickSearchResults.length === 0 && (
-                    <div className="px-3 py-2 text-sm text-slate-500">No matching party, bill, payment, or rate.</div>
-                  )}
-                  {!quickSearchQuery.isLoading &&
-                    !quickSearchQuery.isError &&
-                    quickSearchResults.map((result, index) => (
-                      <button
-                        key={result.id}
-                        type="button"
-                        className={`block w-full px-3 py-2.5 text-left transition ${
-                          index === activeQuickSearchIndex ? 'bg-blue-50 text-slate-950' : 'text-slate-700 hover:bg-slate-50'
-                        }`}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onMouseEnter={() => setActiveQuickSearchIndex(index)}
-                        onClick={() => openQuickSearchResult(result)}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="min-w-0 truncate text-sm font-medium">{result.title}</span>
-                          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                            {result.kind}
-                          </span>
-                        </div>
-                        <p className="mt-0.5 truncate text-xs text-slate-500">{result.subtitle}</p>
-                      </button>
-                    ))}
-                </div>
-              )}
+              <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 xl:block">Ctrl /</span>
             </label>
             <button
               type="button"
-              className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="grid h-10 w-10 place-items-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50 lg:hidden"
+              onClick={() => {
+                setQuickSearchOpen(true)
+              }}
+              aria-label="Search customers, bills, payments, stock, and market rates"
+            >
+              <Search size={17} />
+            </button>
+            <button
+              type="button"
+              className="grid h-10 w-10 place-items-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 lg:h-9 lg:w-9"
               onClick={() => {
                 if (adminSettings.controlKEnabled) setCommandOpen(true)
               }}
@@ -510,9 +591,12 @@ export function AppShell() {
             </button>
             <button
               type="button"
-              className="inline-flex min-h-9 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex min-h-10 items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-9 lg:px-3"
               onClick={() => {
-                void queryClient.invalidateQueries()
+                void queryClient.invalidateQueries({
+                  predicate: (query) => query.getObserversCount() > 0 && !isBackgroundSyncQuery(query.queryKey),
+                  refetchType: 'active',
+                })
               }}
               title={syncState === 'syncing' ? 'Sync in progress' : 'Refresh now'}
               aria-label="Refresh app data"
@@ -546,13 +630,14 @@ export function AppShell() {
             </button>
           </div>
         </header>
-        <div className="w-full 2xl:mx-auto 2xl:max-w-[1680px]">
+        <div className="w-full pb-20 lg:pb-0 2xl:mx-auto 2xl:max-w-[1680px]">
           <Outlet />
         </div>
       </main>
+      {!mobileNavOpen && !quickSearchOpen && !commandOpen && <MobileBottomNav onMore={() => setMobileNavOpen(true)} />}
       {commandOpen && (
-        <div className="fixed inset-0 z-[90] flex items-start justify-center bg-slate-900/50 px-4 pt-24" onMouseDown={() => setCommandOpen(false)}>
-          <div className="w-full max-w-2xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="fixed inset-0 z-[90] flex items-start justify-center bg-slate-900/50 px-0 pt-0 sm:px-4 sm:pt-24" onMouseDown={() => setCommandOpen(false)}>
+          <div className="flex h-dvh w-full max-w-2xl flex-col overflow-hidden rounded-none border border-slate-200 bg-white shadow-2xl sm:h-auto sm:max-h-[calc(100dvh-7rem)] sm:rounded-xl" onMouseDown={(event) => event.stopPropagation()}>
             <div className="border-b border-slate-100 p-3">
               <div className="relative">
                 <Command size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -632,6 +717,177 @@ export function AppShell() {
           </div>
         </div>
       )}
+      {quickSearchOpen && (
+        <div className="fixed inset-0 z-[85] flex items-start justify-center bg-slate-950/45 px-0 pt-0 backdrop-blur-[2px] sm:px-3 sm:pt-20" onMouseDown={() => setQuickSearchOpen(false)}>
+          <div ref={quickSearchPaletteRef} className="flex h-dvh w-full max-w-6xl flex-col overflow-hidden rounded-none border border-slate-200 bg-white shadow-2xl sm:h-auto sm:max-h-[calc(100dvh-6rem)] sm:rounded-xl" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="border-b border-slate-100 p-3">
+              <div className="relative">
+                <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  autoFocus
+                  className="h-12 w-full rounded-lg border border-slate-200 bg-white pl-11 pr-3 text-base text-slate-950 outline-none focus:border-blue-300 sm:pr-24"
+                  value={quickSearch}
+                  onChange={(event) => setQuickSearch(event.target.value)}
+                  onKeyDown={handleQuickSearchKeyDown}
+                  placeholder="Search customers, bills like 1/21, payments, stock, market rate..."
+                />
+                <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500 sm:block">Ctrl /</span>
+              </div>
+            </div>
+            <div className="grid min-h-0 flex-1 md:grid-cols-[minmax(0,3fr)_minmax(380px,2fr)]">
+              <div className="overflow-auto border-r border-slate-100 p-2 md:max-h-[64dvh]">
+                {!normalizedQuickSearch && !quickSearchQuery.isLoading && quickSearchResults.length > 0 && (
+                  <div className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">Recent</div>
+                )}
+                {quickSearchQuery.isLoading && <QuickSearchSkeleton />}
+                {quickSearchQuery.isError && <div className="px-3 py-10 text-center text-sm text-red-600">Unable to search right now.</div>}
+                {!quickSearchQuery.isLoading && !quickSearchQuery.isError && quickSearchResults.length === 0 && (
+                  <div className="px-3 py-10 text-center">
+                    <p className="text-sm font-semibold text-slate-700">No matches</p>
+                    <p className="mt-1 text-sm text-slate-500">Try: bill 51, rate 23-may, stock spindle, or a party name.</p>
+                  </div>
+                )}
+                {quickSearchSections.map((section) => (
+                  <QuickSearchSection
+                    key={section.key}
+                    section={section}
+                    activeResultId={activeQuickSearchResult?.id ?? ''}
+                    visibleResults={visibleQuickSearchResults}
+                    onHover={setActiveQuickSearchIndex}
+                    onOpen={openQuickSearchResult}
+                    onExpand={(key) => setExpandedQuickSearchSections((prev) => ({ ...prev, [key]: true }))}
+                  />
+                ))}
+              </div>
+              <QuickSearchPreview result={activeQuickSearchResult} query={normalizedQuickSearch} onAction={runQuickSearchAction} />
+            </div>
+            <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
+              <span className="rounded bg-slate-100 px-2 py-1">Arrows select</span>
+              <span className="rounded bg-slate-100 px-2 py-1">Enter open</span>
+              <span className="rounded bg-slate-100 px-2 py-1">Tab sections</span>
+              <span className="rounded bg-slate-100 px-2 py-1">Ctrl/Cmd 1 primary</span>
+              <span className="rounded bg-slate-100 px-2 py-1">Ctrl/Cmd 2 secondary</span>
+              <span className="rounded bg-slate-100 px-2 py-1">Esc close</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const QUICK_SEARCH_SECTION_META: Record<QuickSearchSectionKey, { label: string; limit: number; icon: typeof FileText }> = {
+  Bill: { label: 'Bills', limit: 5, icon: FileText },
+  Customer: { label: 'Customers', limit: 4, icon: UserRound },
+  Payment: { label: 'Payments', limit: 3, icon: IndianRupee },
+  Rate: { label: 'Brass Rates', limit: 2, icon: TrendingUp },
+  Stock: { label: 'Stock', limit: 3, icon: Package },
+}
+
+const QUICK_SEARCH_SECTION_ORDER: QuickSearchSectionKey[] = ['Bill', 'Customer', 'Payment', 'Rate', 'Stock']
+
+type QuickSearchSectionModel = {
+  key: QuickSearchSectionKey
+  label: string
+  icon: typeof FileText
+  total: number
+  visibleResults: QuickSearchResult[]
+}
+
+function groupQuickSearchResults(results: QuickSearchResult[], expanded: Partial<Record<QuickSearchSectionKey, boolean>>): QuickSearchSectionModel[] {
+  return QUICK_SEARCH_SECTION_ORDER.map((key) => {
+    const meta = QUICK_SEARCH_SECTION_META[key]
+    const sectionResults = results.filter((result) => result.kind === key)
+    return {
+      key,
+      label: meta.label,
+      icon: meta.icon,
+      total: sectionResults.length,
+      visibleResults: expanded[key] ? sectionResults : sectionResults.slice(0, meta.limit),
+    }
+  }).filter((section) => section.total > 0)
+}
+
+function QuickSearchSection({
+  section,
+  activeResultId,
+  visibleResults,
+  onHover,
+  onOpen,
+  onExpand,
+}: {
+  section: QuickSearchSectionModel
+  activeResultId: string
+  visibleResults: QuickSearchResult[]
+  onHover: (index: number) => void
+  onOpen: (result: QuickSearchResult) => void
+  onExpand: (key: QuickSearchSectionKey) => void
+}) {
+  const Icon = section.icon
+  const hiddenCount = section.total - section.visibleResults.length
+  return (
+    <section className="mb-3 overflow-hidden rounded-lg border border-slate-100 bg-white">
+      <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
+        <Icon size={14} className="text-slate-500" />
+        <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{section.label}</span>
+        <span className="ml-auto text-xs font-medium text-slate-400">{section.total}</span>
+      </div>
+      <div className="divide-y divide-slate-100">
+        {section.visibleResults.map((result, sectionIndex) => {
+          const globalIndex = visibleResults.findIndex((entry) => entry.id === result.id)
+          const selected = result.id === activeResultId
+          return (
+            <button
+              key={result.id}
+              type="button"
+              className={`flex w-full items-start gap-3 border-l-4 px-3 py-2.5 text-left transition duration-150 ${
+                selected ? 'border-blue-600 bg-blue-50 text-slate-950' : 'border-transparent text-slate-700 hover:bg-slate-50'
+              }`}
+              style={{ animation: `quick-search-fade 160ms ease-out ${sectionIndex * 100}ms both` }}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => onHover(globalIndex)}
+              onClick={() => onOpen(result)}
+            >
+              <span className={`mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg text-xs font-bold ${selected ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                {result.kind.slice(0, 1)}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2">
+                  <span className="truncate text-base font-medium">{result.title}</span>
+                  {result.isRecent ? <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-blue-700">Recent</span> : null}
+                </span>
+                <span className="mt-0.5 block truncate text-sm text-slate-500">{result.subtitle}</span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+      {hiddenCount > 0 ? (
+        <button type="button" className="w-full bg-slate-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50" onClick={() => onExpand(section.key)}>
+          Show {hiddenCount} more
+        </button>
+      ) : null}
+    </section>
+  )
+}
+
+function QuickSearchSkeleton() {
+  return (
+    <div className="space-y-3">
+      {[0, 1, 2].map((section) => (
+        <div key={section} className="rounded-lg border border-slate-100 bg-white">
+          <div className="h-8 animate-pulse border-b border-slate-100 bg-slate-50" />
+          {[0, 1, 2].map((row) => (
+            <div key={row} className="flex items-center gap-3 px-3 py-3">
+              <div className="h-9 w-9 animate-pulse rounded-lg bg-slate-100" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="h-4 w-2/3 animate-pulse rounded bg-slate-100" />
+                <div className="h-3 w-1/2 animate-pulse rounded bg-slate-100" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   )
 }
@@ -747,6 +1003,7 @@ function CommandLivePreview({
           <>
             <PreviewLine label="Mode" value="Bill" />
             <PreviewLine label="Party" value={command.customer.name} />
+            <PreviewLine label="Book/Bill" value={command.bookNo ? `${command.bookNo}/${command.billNo ?? 'next'}` : command.billNo ? `Current book/${command.billNo}` : 'Auto'} />
             <PreviewLine label="Date" value={formatFullDate(command.date)} />
             <PreviewLine label="Transport" value={formatInrInteger(command.transport)} />
             <PreviewLine label="GST" value={command.gstMode === 'manual' ? `Manual ${formatInrInteger(command.gstAmount)}` : command.gstRate ? `${command.gstRate}%` : 'No GST'} />
@@ -1077,7 +1334,7 @@ function buildSearchSuggestions(query: string, customers: Array<{ id: string; na
 function buildHelpSuggestions(input: string): CommandSuggestion[] {
   const query = input.replace(/^\?+\s*/, '').replace(/^help\s*/i, '').trim()
   const topics = [
-    { id: 'bill', label: 'Bill command', detail: 'b <customer> <item> <qty> [rate] [gst] [+t amount]', value: '? b' },
+    { id: 'bill', label: 'Bill command', detail: 'b <customer> <item> <qty> [book n|1/04] [date]', value: '? b' },
     { id: 'session', label: 'Bill session memory', detail: 'b mukesh, then 2 spindle, 3 motor, Enter', value: '? session' },
     { id: 'payment', label: 'Payment command', detail: 'p <customer> <amount> [cash|bank] [date]', value: '? payment' },
     { id: 'stock', label: 'Stock command', detail: 's <item> <qty> [date]', value: '? stock' },
@@ -1141,9 +1398,9 @@ function getCommandHelp(topic: string) {
   return {
     title: 'Bill Command',
     description: 'Creates sale bill drafts through ultra-fast workflow execution.',
-    format: 'b <customer> <item> <qty> [rate|dr default] [gst] [+t amount]',
-    example: 'b mukesh spindle 2 gst +t 500',
-    meaning: 'Mukesh bill, 2 bags spindle, GST enabled, ₹500 transport',
+    format: 'b <customer> <item> <qty> [rate|dr default] [gst] [+t amount] [book n|n/m] [date]',
+    example: 'b mukesh spindle 2 book 52 1-04-2026',
+    meaning: 'Mukesh bill, 2 bags spindle, book 52 next bill number, dated 1 Apr 2026',
   }
 }
 
@@ -1250,7 +1507,7 @@ function buildBillDraft(
   }
 
   if (detectedItems === 0) suggestions.push('Add item, e.g. spindle')
-  suggestions.push('Optional: dr 80', 'Optional: rate 620', 'Optional: gst or cgst 1200', 'Optional: +t 500', 'Optional: yday or 15-may')
+  suggestions.push('Optional: book 52', 'Optional: 1/04 bill ref', 'Optional: dr 80', 'Optional: rate 620', 'Optional: gst or cgst 1200', 'Optional: +t 500', 'Optional: yday or 15-may')
   return { mode: 'Bill', lines, suggestions: Array.from(new Set(suggestions)) }
 }
 

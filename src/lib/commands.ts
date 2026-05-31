@@ -90,6 +90,8 @@ export type ParsedBillCommand = {
   gstMode: 'none' | 'percent18' | 'manual'
   transport: number
   date: string
+  bookNo: number | null
+  billNo: number | null
 }
 
 export type ParsedPaymentCommand = {
@@ -166,7 +168,7 @@ export function parseBillCommand(
   mktRate: number,
 ): CommandParseResult<ParsedBillCommand> {
   const tokens = input.trim().split(/\s+/).filter(Boolean)
-  if (tokens.length < 2) return { ok: false, error: 'Use: party [item qty [rate]]... [gst|cgst amount] [+t amount] [date]' }
+  if (tokens.length < 2) return { ok: false, error: 'Use: party [item qty [rate]]... [gst|cgst amount] [+t amount] [book n] [bill n] [date]' }
   const { record: customer, usedWords } = resolveBestPrefix(customers, input, customerSearchText)
   if (!customer) return { ok: false, error: `Party not found in: ${input}` }
 
@@ -175,6 +177,8 @@ export function parseBillCommand(
   let gstMode: ParsedBillCommand['gstMode'] = 'none'
   let transport = 0
   let date = today
+  let bookNo: number | null = null
+  let billNo: number | null = null
   const lineTokens: string[] = []
   for (let i = usedWords; i < tokens.length; i += 1) {
     const token = tokens[i].toLowerCase()
@@ -200,6 +204,41 @@ export function parseBillCommand(
       gstMode = 'manual'
       i += 1
       continue
+    }
+    if ((token === 'book' || token === 'bookno' || token === 'book_no') && i + 1 < tokens.length) {
+      const next = parsePositiveInteger(tokens[i + 1])
+      if (next > 0) bookNo = next
+      i += 1
+      continue
+    }
+    if ((token === 'bill' || token === 'billno' || token === 'bill_no' || token === 'no') && i + 1 < tokens.length) {
+      const next = parsePositiveInteger(tokens[i + 1])
+      if (next > 0) billNo = next
+      i += 1
+      continue
+    }
+    if ((token === 'ref' || token === 'number') && i + 1 < tokens.length) {
+      const ref = parseBillRefToken(tokens[i + 1])
+      if (ref) {
+        bookNo = ref.bookNo
+        billNo = ref.billNo
+      }
+      i += 1
+      continue
+    }
+    const ref = parseBillRefToken(token)
+    if (ref) {
+      bookNo = ref.bookNo
+      billNo = ref.billNo
+      continue
+    }
+    if ((token === 'date' || token === 'on') && i + 1 < tokens.length) {
+      const maybeDate = parseDateToken(tokens[i + 1].toLowerCase(), today)
+      if (isParsedDateToken(tokens[i + 1].toLowerCase(), maybeDate)) {
+        date = maybeDate
+        i += 1
+        continue
+      }
     }
     const maybeDate = parseDateToken(token, today)
     if (maybeDate !== token || /^\d{4}-\d{2}-\d{2}$/.test(maybeDate)) {
@@ -229,8 +268,24 @@ export function parseBillCommand(
       gstMode,
       transport,
       date,
+      bookNo,
+      billNo,
     },
   }
+}
+
+function parsePositiveInteger(token: string) {
+  const value = Number(String(token ?? '').replace(/\D/g, ''))
+  return Number.isInteger(value) && value > 0 ? value : 0
+}
+
+function parseBillRefToken(token: string) {
+  const match = String(token ?? '').trim().match(/^#?(\d{1,4})\/(\d{1,5})$/)
+  if (!match) return null
+  const bookNo = Number(match[1])
+  const billNo = Number(match[2])
+  if (!Number.isInteger(bookNo) || !Number.isInteger(billNo) || bookNo <= 0 || billNo <= 0) return null
+  return { bookNo, billNo }
 }
 
 export function parsePaymentCommand(input: string, customers: CommandCustomer[], today: string): CommandParseResult<ParsedPaymentCommand> {
@@ -310,7 +365,7 @@ export function parseDateToken(token: string, today: string) {
     return getLocalIsoDate(d)
   }
   const m = normalized.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/)
-  if (m) return `${m[3]}-${m[2]}-${m[1]}`
+  if (m) return `${m[3]}-${String(Number(m[2])).padStart(2, '0')}-${String(Number(m[1])).padStart(2, '0')}`
   const shortMonth = normalized.match(/^(\d{1,2})[-/ ]([a-z]{3,9})(?:[-/ ](\d{2,4}))?$/)
   if (shortMonth) {
     const month = monthNumber(shortMonth[2])

@@ -81,6 +81,11 @@ export type StockLedgerRow = {
   note: string
 }
 
+export type RecentStockLogRecord = StockLedgerRow & {
+  rawId: string
+  editableType: 'received' | 'adjusted' | 'sold'
+}
+
 export type MonthlyStockReportRow = {
   id: string
   itemId: string
@@ -96,6 +101,21 @@ export type MonthlyStockReportRow = {
   sold: number
   adjustment: number
   closing: number
+}
+
+export type CalendarStockMovementRow = {
+  id: string
+  date: string
+  itemId: string
+  itemName: string
+  customerId: string
+  customerName: string
+  type: 'Stock In' | 'Adjustment' | 'Sold'
+  qty: number
+  note: string
+  itemType: string
+  unit: string
+  bagWeight: number
 }
 
 const GENERAL_CUSTOMER_NAME = 'General'
@@ -296,12 +316,14 @@ export async function saveStockOpening(payload: { itemId: string; itemName: stri
     }
     if (existing) await pb.collection('stock_openings').update(existing.id, writePayload)
     else await pb.collection('stock_openings').create(writePayload)
+    invalidateStockDataCache()
   })
 }
 
 export async function deleteStockOpening(id: string) {
   await runDataOperation('delete-stock-opening', async () => {
     await pb.collection('stock_openings').delete(id)
+    invalidateStockDataCache()
   })
 }
 
@@ -322,12 +344,14 @@ export async function saveStockIn(payload: { itemId: string; itemName: string; c
       qty: payload.qty,
       note: payload.note.trim(),
     })
+    invalidateStockDataCache()
   })
 }
 
 export async function deleteStockIn(id: string) {
   await runDataOperation('delete-stock-in', async () => {
     await pb.collection('stock_in').delete(id)
+    invalidateStockDataCache()
   })
 }
 
@@ -343,6 +367,7 @@ export async function updateStockIn(id: string, payload: { itemId: string; itemN
       qty: payload.qty,
       note: payload.note.trim(),
     })
+    invalidateStockDataCache()
   })
 }
 
@@ -363,6 +388,7 @@ export async function saveStockAdjustment(payload: { itemId: string; itemName: s
       qty: payload.qty,
       note: payload.note.trim(),
     })
+    invalidateStockDataCache()
   })
 }
 
@@ -378,12 +404,14 @@ export async function updateStockAdjustment(id: string, payload: { itemId: strin
       qty: payload.qty,
       note: payload.note.trim(),
     })
+    invalidateStockDataCache()
   })
 }
 
 export async function deleteStockAdjustment(id: string) {
   await runDataOperation('delete-stock-adjustment', async () => {
     await pb.collection('stock_adjustments').delete(id)
+    invalidateStockDataCache()
   })
 }
 
@@ -397,8 +425,20 @@ type StockData = {
   billById: Map<string, PBRecord>
 }
 
+let stockDataPromise: Promise<StockData> | null = null
+let stockDataCache: StockData | null = null
+let stockDataCacheAt = 0
+
+export function invalidateStockDataCache() {
+  stockDataPromise = null
+  stockDataCache = null
+  stockDataCacheAt = 0
+}
+
 async function loadStockData(): Promise<StockData> {
-  const [items, customers, openingsRaw, stockInRaw, adjustmentsRaw, billItemsRaw, billsRaw] = await Promise.all([
+  if (stockDataCache && Date.now() - stockDataCacheAt < 30_000) return stockDataCache
+  if (stockDataPromise) return stockDataPromise
+  stockDataPromise = Promise.all([
     loadItems(),
     loadStockCustomers(),
     pb.collection('stock_openings').getFullList(),
@@ -406,8 +446,7 @@ async function loadStockData(): Promise<StockData> {
     pb.collection('stock_adjustments').getFullList(),
     pb.collection('bill_items').getFullList(),
     pb.collection('bills').getFullList(),
-  ])
-  return {
+  ]).then(([items, customers, openingsRaw, stockInRaw, adjustmentsRaw, billItemsRaw, billsRaw]) => ({
     items: items.filter(isGasStockItem),
     customers,
     openings: openingsRaw as PBRecord[],
@@ -415,6 +454,14 @@ async function loadStockData(): Promise<StockData> {
     adjustmentRows: adjustmentsRaw as PBRecord[],
     billItemRows: billItemsRaw as PBRecord[],
     billById: new Map((billsRaw as PBRecord[]).map((bill) => [bill.id, bill])),
+  }))
+
+  try {
+    stockDataCache = await stockDataPromise
+    stockDataCacheAt = Date.now()
+    return stockDataCache
+  } finally {
+    stockDataPromise = null
   }
 }
 
@@ -599,6 +646,124 @@ export async function loadStockLedger(itemId: string, customerId: string): Promi
     .reverse()
 }
 
+export async function loadRecentStockLogs(limit = 150): Promise<RecentStockLogRecord[]> {
+  const data = await loadStockData()
+  const keys = collectBucketKeys(data)
+  const rows = Array.from(keys).flatMap((key) => {
+    const [itemId, customerId] = key.split('::')
+    return buildLedgerRows(data, itemId, customerId)
+      .filter((row) => row.type !== 'Opening')
+      .map((row): RecentStockLogRecord => {
+        const [prefix, ...rest] = row.id.split('-')
+        return {
+          ...row,
+          rawId: rest.join('-'),
+          editableType: prefix === 'in' ? 'received' : prefix === 'adj' ? 'adjusted' : 'sold',
+        }
+      })
+  })
+
+  return rows
+    .sort((a, b) => {
+      const dateCompare = (b.date || '0000-00-00').localeCompare(a.date || '0000-00-00')
+      if (dateCompare !== 0) return dateCompare
+      return a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName)
+    })
+    .slice(0, limit)
+}
+
+function buildLedgerRows(data: StockData, itemId: string, customerId: string): StockLedgerRow[] {
+  const context = bucketContext(data, bucketKey(itemId, customerId))
+  if (!context) return []
+  const { item, customer, opening, openingDate, openingStock } = context
+
+  const movements: Array<Omit<StockLedgerRow, 'balance'>> = [
+    {
+      id: `opening-${item.id}-${customer.id}`,
+      date: openingDate,
+      itemId: item.id,
+      itemName: item.name,
+      customerId: customer.id,
+      customerName: customer.name,
+      type: 'Opening',
+      inQty: openingStock,
+      outQty: 0,
+      note: String(opening?.note ?? '') || (openingDate ? `Opening stock as on ${openingDate}` : 'Opening stock'),
+    },
+  ]
+
+  for (const row of data.stockInRows) {
+    if (!rowMatchesItem(row, item.id, item.name) || !rowMatchesCustomer(row, customer.id, customer.customerName)) continue
+    if (!isOnOrAfterOpening(datePart(row.date), openingDate)) continue
+    movements.push({
+      id: `in-${row.id}`,
+      date: datePart(row.date),
+      itemId: item.id,
+      itemName: item.name,
+      customerId: customer.id,
+      customerName: customer.name,
+      type: 'Stock In',
+      inQty: num(row.qty),
+      outQty: 0,
+      note: String(row.note ?? ''),
+    })
+  }
+
+  for (const row of data.adjustmentRows) {
+    if (!rowMatchesItem(row, item.id, item.name) || !rowMatchesCustomer(row, customer.id, customer.customerName)) continue
+    if (!isOnOrAfterOpening(datePart(row.date), openingDate)) continue
+    const qty = num(row.qty)
+    movements.push({
+      id: `adj-${row.id}`,
+      date: datePart(row.date),
+      itemId: item.id,
+      itemName: item.name,
+      customerId: customer.id,
+      customerName: customer.name,
+      type: 'Adjustment',
+      inQty: qty > 0 ? qty : 0,
+      outQty: qty < 0 ? Math.abs(qty) : 0,
+      note: String(row.note ?? ''),
+    })
+  }
+
+  for (const row of data.billItemRows) {
+    if (!rowMatchesItem(row, item.id, item.name)) continue
+    const bill = data.billById.get(String(row.bill ?? ''))
+    if (!bill || billItemStockCustomer(data, row, bill)?.id !== customer.id) continue
+    const billDate = datePart(bill.date)
+    if (!isOnOrAfterOpening(billDate, openingDate)) continue
+    const billCustomer = data.customers.find((entry) => entry.id === String(bill.customer ?? ''))
+    const buyerName = billCustomer?.name || String(bill.customer_name ?? '').trim()
+    const noteSuffix = buyerName && buyerName !== customer.name ? ` - ${buyerName}` : ''
+    movements.push({
+      id: `sold-${row.id}`,
+      date: billDate,
+      itemId: item.id,
+      itemName: item.name,
+      customerId: customer.id,
+      customerName: customer.name,
+      type: 'Sold',
+      inQty: 0,
+      outQty: billItemOutQty(row, item.type, item.bagWeight),
+      note: `Bill ${num(bill.book_no)}/${num(bill.bill_no)}${noteSuffix}`,
+    })
+  }
+
+  let balance = 0
+  return movements
+    .sort((a, b) => {
+      const dateCompare = (a.date || '0000-00-00').localeCompare(b.date || '0000-00-00')
+      if (dateCompare !== 0) return dateCompare
+      return a.type.localeCompare(b.type)
+    })
+    .map((row) => {
+      balance += row.inQty - row.outQty
+      return { ...row, balance }
+    })
+    .reverse()
+}
+
 export async function loadMonthlyStockReport(monthKey: string): Promise<MonthlyStockReportRow[]> {
   const { start, end } = monthBounds(monthKey)
   const data = await loadStockData()
@@ -664,6 +829,37 @@ export async function loadMonthlyStockReport(monthKey: string): Promise<MonthlyS
     })
     .filter((row): row is MonthlyStockReportRow => row !== null && (row.opening !== 0 || row.stockIn !== 0 || row.sold !== 0 || row.adjustment !== 0 || row.closing !== 0))
     .sort((a, b) => a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName))
+}
+
+export async function loadMonthlyStockMovements(monthKey: string): Promise<CalendarStockMovementRow[]> {
+  const { start, end } = monthBounds(monthKey)
+  const data = await loadStockData()
+  const keys = collectBucketKeys(data)
+
+  return Array.from(keys)
+    .flatMap((key) => {
+      const context = bucketContext(data, key)
+      if (!context) return []
+      const { item } = context
+      const [itemId, customerId] = key.split('::')
+      return buildLedgerRows(data, itemId, customerId)
+        .filter((row): row is StockLedgerRow & { type: 'Stock In' | 'Adjustment' | 'Sold' } => (row.type === 'Stock In' || row.type === 'Adjustment' || row.type === 'Sold') && isInRange(row.date, start, end))
+        .map((row): CalendarStockMovementRow => ({
+          id: row.id,
+          date: row.date,
+          itemId: row.itemId,
+          itemName: row.itemName,
+          customerId: row.customerId,
+          customerName: row.customerName,
+          type: row.type,
+          qty: row.inQty - row.outQty,
+          note: row.note,
+          itemType: item.type,
+          unit: item.unit,
+          bagWeight: item.bagWeight,
+        }))
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName))
 }
 
 async function assertGasStockItem(itemId: string) {

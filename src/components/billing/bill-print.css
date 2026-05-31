@@ -1,4 +1,4 @@
-/* On-screen preview + print popup (embedded). Narrow phone/receipt width — stacked header avoids clipped date. */
+/* On-screen preview + print popup (embedded). Narrow phone/receipt width. */
 .bill-print-root {
   font-size: 11px;
   line-height: 1.35;
@@ -7,17 +7,38 @@
 
 .bill-print-header {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: stretch;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
   margin-bottom: 8px;
 }
 
+.bill-print-header-brand {
+  min-width: 0;
+}
+
+.bill-print-market-line {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #475569;
+}
+
+.bill-print-market-separator {
+  margin: 0 5px;
+  color: #94a3b8;
+}
+
+.bill-print-gst-label {
+  color: #dc2626;
+  font-weight: 700;
+}
+
 .bill-print-header-meta {
+  flex: 0 0 auto;
   text-align: right;
   font-size: 10px;
   color: #475569;
-  width: 100%;
+  white-space: nowrap;
 }
 
 .bill-print-header-meta strong {
@@ -133,8 +154,9 @@
 
 .bill-print-footer {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(3, max-content);
+  column-gap: 44px;
+  justify-content: start;
   margin-top: 10px;
   font-size: 10px;
   line-height: 1.3;

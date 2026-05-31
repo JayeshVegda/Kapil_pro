@@ -125,6 +125,10 @@ async function loadMarketRateDayRecord(dateIso: string) {
   }
 }
 
+export async function loadSavedMarketRateForDate(dateIso: string) {
+  return (await loadMarketRateDayRecord(dateIso)) ?? (await loadNearestMarketRateRecord(dateIso))
+}
+
 async function loadPreviousMarketRateRecord(dateIso: string) {
   try {
     const range = dayRange(dateIso)

@@ -44,10 +44,14 @@ export async function loadCalendarMonthData(monthKey: string) {
     }
   }
 
-  const [billsRaw, paymentsRaw, customersRaw, ratesRaw, prevRatesRaw] = await Promise.all([
+  const [billsRaw, prevBillsRaw, paymentsRaw, customersRaw, ratesRaw, prevRatesRaw, stockInRaw, stockAdjustmentsRaw] = await Promise.all([
     pb.collection('bills').getFullList({
       sort: 'date,bill_no',
       filter: `date >= "${start}" && date <= "${end}"`,
+    }) as Promise<PBRecord[]>,
+    pb.collection('bills').getFullList({
+      sort: 'date,bill_no',
+      filter: `date >= "${prevStartEnd.start}" && date <= "${prevStartEnd.end}"`,
     }) as Promise<PBRecord[]>,
     pb.collection('payments').getFullList({
       sort: 'date',
@@ -56,24 +60,45 @@ export async function loadCalendarMonthData(monthKey: string) {
     pb.collection('customers').getFullList({ sort: 'company_name,name' }) as Promise<PBRecord[]>,
     listRatesBetween(start, end),
     listRatesBetween(prevStartEnd.start, prevStartEnd.end),
+    pb.collection('stock_in').getFullList({
+      sort: 'date',
+      filter: `date >= "${start}" && date <= "${end}"`,
+    }).catch(() => []) as Promise<PBRecord[]>,
+    pb.collection('stock_adjustments').getFullList({
+      sort: 'date',
+      filter: `date >= "${start}" && date <= "${end}"`,
+    }).catch(() => []) as Promise<PBRecord[]>,
   ])
 
-  const billItemsRaw: PBRecord[] = []
-  const chunkSize = 12
-  for (let i = 0; i < billsRaw.length; i += chunkSize) {
-    const chunk = billsRaw.slice(i, i + chunkSize)
-    const filter = chunk.map((b) => `bill = "${b.id}"`).join(' || ')
-    const rows = await pb.collection('bill_items').getFullList({ filter })
-    billItemsRaw.push(...(rows as PBRecord[]))
+  const loadBillItems = async (bills: PBRecord[]) => {
+    const chunkSize = 12
+    const chunks: PBRecord[][] = []
+    for (let i = 0; i < bills.length; i += chunkSize) chunks.push(bills.slice(i, i + chunkSize))
+    const results = await Promise.all(
+      chunks.map((chunk) => {
+        const filter = chunk.map((b) => `bill = "${b.id}"`).join(' || ')
+        return filter ? pb.collection('bill_items').getFullList({ filter }) : Promise.resolve([])
+      }),
+    )
+    return results.flat() as PBRecord[]
   }
+
+  const [billItemsRaw, prevBillItemsRaw] = await Promise.all([
+    loadBillItems(billsRaw),
+    loadBillItems(prevBillsRaw),
+  ])
 
   return {
     billsRaw,
     billItemsRaw,
+    prevBillsRaw,
+    prevBillItemsRaw,
     paymentsRaw,
     customersRaw,
     ratesRaw,
     prevRatesRaw,
+    stockInRaw,
+    stockAdjustmentsRaw,
     rangeStart: start,
     rangeEnd: end,
   }

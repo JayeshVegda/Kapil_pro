@@ -57,7 +57,7 @@ export async function loadCustomerPaymentLedger(customerId: string, asOfDate: st
       sort: 'date,bill_no',
       filter: `customer = "${customerId}"`,
     }),
-    pb.collection('bill_items').getFullList(),
+    pb.collection('bill_items').getFullList({ filter: `bill.customer = "${customerId}"` }),
     pb.collection('payments').getFullList({
       sort: 'date',
       filter: `customer = "${customerId}"`,

@@ -7,12 +7,12 @@ import { toUserMessage } from '@/app/errors'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
 import { DateInput } from '@/components/ui/date-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
-import { assertBillNumberAvailable, saveBillWithItems } from '@/data/bills'
+import { assertBillNumberAvailable, getNextBillNoForBook, saveBillWithItems } from '@/data/bills'
 import { pb } from '@/data/pocketbase'
 import { loadCurrentStock } from '@/data/stock'
 import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billing-calculations'
 import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
-import { useMarketRate } from '@/domain/market-rate'
+import { loadSavedMarketRateForDate, useMarketRate } from '@/domain/market-rate'
 import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
@@ -84,6 +84,7 @@ function NewBillPage() {
   const [pendingCommandPreview, setPendingCommandPreview] = useState(false)
   const { marketRate, refreshMarketRate } = useMarketRate(date)
   const billNoInitializedRef = useRef(false)
+  const manualBillNoRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
 
   const customersQuery = useQuery({
@@ -120,13 +121,10 @@ function NewBillPage() {
   })
   const currentStockQuery = useQuery({ queryKey: ['current-stock'], queryFn: loadCurrentStock, refetchOnMount: 'always' })
 
-  const latestBillNoQuery = useQuery({
-    queryKey: ['latest-bill-no'],
-    queryFn: async (): Promise<number> => {
-      const page = await pb.collection('bills').getList(1, 1, { sort: '-bill_no' })
-      const record = page.items[0]
-      return Number(record?.bill_no ?? 0)
-    },
+  const nextBillNoQuery = useQuery({
+    queryKey: ['next-bill-no', bookNo],
+    queryFn: () => getNextBillNoForBook(bookNo),
+    enabled: bookNo > 0,
   })
   const autoBalanceQuery = useQuery({
     queryKey: ['customer-auto-balance', customerId, date],
@@ -137,7 +135,7 @@ function NewBillPage() {
           sort: 'date,bill_no',
           filter: `customer = "${customerId}"`,
         }),
-        pb.collection('bill_items').getFullList(),
+        pb.collection('bill_items').getFullList({ filter: `bill.customer = "${customerId}"` }),
         pb.collection('payments').getFullList({
           sort: 'date',
           filter: `customer = "${customerId}"`,
@@ -250,7 +248,7 @@ function NewBillPage() {
         queryClient.invalidateQueries({ queryKey: ['transactions-page'] }),
         queryClient.invalidateQueries({ queryKey: ['customers-ledger'] }),
         queryClient.invalidateQueries({ queryKey: ['payment-ledger-context'] }),
-        queryClient.invalidateQueries({ queryKey: ['latest-bill-no'] }),
+        queryClient.invalidateQueries({ queryKey: ['next-bill-no'] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard-data'] }),
         queryClient.invalidateQueries({ queryKey: ['current-stock'] }),
         queryClient.invalidateQueries({ queryKey: ['stock-ledger'] }),
@@ -354,7 +352,8 @@ function NewBillPage() {
     setRows([{ itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
     setLrInput('')
     setLrList([])
-    setBillNo((prev) => prev + 1)
+    manualBillNoRef.current = false
+    void getNextBillNoForBook(bookNo).then(setBillNo).catch(() => setBillNo((prev) => prev + 1))
     setIsQuickEntryOpen(false)
     setQuickCommandInput('')
     setPendingCommandPreview(false)
@@ -440,11 +439,20 @@ function NewBillPage() {
   }
 
   async function applyBillCommand(input: string) {
+    const firstPass = parseContextCommand(input, 'bill', {
+      customers: customersQuery.data ?? [],
+      items: itemsQuery.data ?? [],
+      today,
+      mktRate: 0,
+    })
+    const commandDate = firstPass.ok && firstPass.command.kind === 'bill' ? firstPass.command.date : date
+    const savedRate = await loadSavedMarketRateForDate(commandDate)
+    const commandMktRate = savedRate?.rate ?? 0
     const parsed = parseContextCommand(input, 'bill', {
       customers: customersQuery.data ?? [],
       items: itemsQuery.data ?? [],
       today,
-      mktRate,
+      mktRate: commandMktRate,
     })
     if (!parsed.ok) {
       setStatusText(parsed.error)
@@ -456,8 +464,23 @@ function NewBillPage() {
     }
     const command = parsed.command
     const nextGstMode = command.gstMode === 'manual' ? 'manual' : command.gstRate === 18 ? 'percent18' : 'none'
+    if (command.bookNo) {
+      setBookNo(command.bookNo)
+      if (command.billNo) {
+        manualBillNoRef.current = true
+        setBillNo(command.billNo)
+      } else {
+        manualBillNoRef.current = false
+        const nextNo = await getNextBillNoForBook(command.bookNo).catch(() => 1)
+        setBillNo(nextNo)
+      }
+    } else if (command.billNo) {
+      manualBillNoRef.current = true
+      setBillNo(command.billNo)
+    }
     setCustomerId(command.customer.id)
     setDate(command.date)
+    setMktRate(commandMktRate)
     setTransport(command.transport)
     setGstMode(nextGstMode)
     setManualGstAmount(command.gstMode === 'manual' ? command.gstAmount : 0)
@@ -466,13 +489,15 @@ function NewBillPage() {
         itemName: line.item.name,
         itemId: line.item.id,
         qty: line.qty,
-        defaultRate: line.defaultRate || getDefaultRateFromFinal(line.rate, mktRate, nextGstMode),
+        defaultRate: line.defaultRate || getDefaultRateFromFinal(line.rate, commandMktRate, nextGstMode),
         rate: line.rate,
         manualRateEdited: line.manualRateEdited,
       })),
     )
     setIsQuickEntryOpen(false)
-    setStatusText(`Command ready: ${command.customer.name} | ${command.items.length} item${command.items.length === 1 ? '' : 's'} | ${command.date}`)
+    setStatusText(
+      `Command ready: ${command.customer.name} | ${command.bookNo ? `Bill ${command.bookNo}/${command.billNo ?? 'next'} | ` : ''}${command.items.length} item${command.items.length === 1 ? '' : 's'} | ${command.date} | MKT ${commandMktRate || 'not found'}`,
+    )
     setPendingCommandPreview(true)
   }
 
@@ -569,11 +594,15 @@ function NewBillPage() {
 
   useEffect(() => {
     if (billNoInitializedRef.current) return
-    if (latestBillNoQuery.isLoading) return
-    const latest = Number(latestBillNoQuery.data ?? 0)
-    setBillNo(latest > 0 ? latest + 1 : 1)
+    if (nextBillNoQuery.isLoading) return
+    setBillNo(Number(nextBillNoQuery.data ?? 1) || 1)
     billNoInitializedRef.current = true
-  }, [latestBillNoQuery.data, latestBillNoQuery.isLoading])
+  }, [nextBillNoQuery.data, nextBillNoQuery.isLoading])
+
+  useEffect(() => {
+    if (!billNoInitializedRef.current || manualBillNoRef.current || nextBillNoQuery.isLoading) return
+    setBillNo(Number(nextBillNoQuery.data ?? 1) || 1)
+  }, [bookNo, nextBillNoQuery.data, nextBillNoQuery.isLoading])
 
   useEffect(() => {
     const items = itemsQuery.data ?? []
@@ -647,10 +676,26 @@ function NewBillPage() {
         <h3 className="mb-4 text-sm font-semibold text-slate-900">Bill Details</h3>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Book No">
-            <input className={inputClass} type="number" value={bookNo} onChange={(e) => setBookNo(parseNonNegativeNumber(e.target.value))} />
+            <input
+              className={inputClass}
+              type="number"
+              value={bookNo}
+              onChange={(e) => {
+                manualBillNoRef.current = false
+                setBookNo(parseNonNegativeNumber(e.target.value))
+              }}
+            />
           </Field>
           <Field label="Bill No">
-            <input className={inputClass} type="number" value={billNo} onChange={(e) => setBillNo(parseNonNegativeNumber(e.target.value))} />
+            <input
+              className={inputClass}
+              type="number"
+              value={billNo}
+              onChange={(e) => {
+                manualBillNoRef.current = true
+                setBillNo(parseNonNegativeNumber(e.target.value))
+              }}
+            />
           </Field>
           <Field label="Date">
             <DateInput className={inputClass} value={date} onChange={setDate} />
@@ -930,7 +975,7 @@ function NewBillPage() {
           </div>
         </div>
 
-        <div className="sticky bottom-0 z-20 -mx-5 mt-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur lg:static lg:mx-0 lg:border-t-0 lg:bg-transparent lg:p-0">
+        <div className="sticky bottom-[calc(3.85rem+env(safe-area-inset-bottom))] z-20 -mx-5 mt-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur lg:static lg:mx-0 lg:border-t-0 lg:bg-transparent lg:p-0">
           <span className="text-xs text-slate-500">{helperStatusText}</span>
           <div className="flex-1" />
           <button type="button" className="px-1 py-1 text-sm font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline" onClick={resetForm}>

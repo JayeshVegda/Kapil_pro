@@ -14,27 +14,27 @@ const MARKET_RATE_CANDIDATES = [
 ]
 
 async function fetchMarketRateRss() {
-  for (const source of MARKET_RATE_CANDIDATES) {
+  const fetchCandidate = async (source: string) => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 3_000)
     try {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 10_000)
       const response = await fetch(source, {
         headers: { Accept: 'application/rss+xml,application/xml,text/xml,*/*' },
         signal: controller.signal,
       })
-      clearTimeout(timer)
       const body = await response.text()
-      if (!response.ok) continue
+      if (!response.ok) throw new Error(`Market rate upstream returned ${response.status}`)
       const lower = body.toLowerCase()
       if (lower.includes('<rss') || lower.includes('<feed')) {
         return { ok: true as const, body, source }
       }
-    } catch {
-      // Try the next upstream candidate.
+      throw new Error('Market rate upstream did not return RSS/XML feed data')
+    } finally {
+      clearTimeout(timer)
     }
   }
 
-  return { ok: false as const }
+  return Promise.any(MARKET_RATE_CANDIDATES.map(fetchCandidate)).catch(() => ({ ok: false as const }))
 }
 
 function marketRateProxyMiddleware(): Connect.NextHandleFunction {

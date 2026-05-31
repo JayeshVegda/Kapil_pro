@@ -1,21 +1,27 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Archive, BookOpen, Download, FileArchive, FileText, PackageCheck, ReceiptText, Users } from 'lucide-react'
+import { BookOpen, Download, FileArchive, FileText, PackageCheck, ReceiptText } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
-import { createRoot } from 'react-dom/client'
-import { jsPDF } from 'jspdf'
-import autoTable from 'jspdf-autotable'
-import JSZip from 'jszip'
+import type { Root } from 'react-dom/client'
+import type { jsPDF } from 'jspdf'
+import { MoreExportsPanel, CompactExportCard } from '@/components/exports/more-exports-panel'
+import { PartyStatementHero } from '@/components/exports/party-statement-hero'
+import { PartyStatementPreview } from '@/components/exports/party-statement-preview'
+import { ExportSurface } from '@/components/exports/export-surface'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
-import { buildBackupSnapshot, snapshotToCsvFiles, type BackupSnapshot } from '@/data/backup'
-import { loadCurrentStock, loadMonthlyStockReport } from '@/data/stock'
+import { buildBackupSnapshot, type BackupSnapshot } from '@/data/backup'
+import { pb } from '@/data/pocketbase'
+import { loadMonthlyStockReport } from '@/data/stock'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { BILL_PREVIEW_CARD_CLASS, BILL_PRINT_JPEG_QUALITY_DOWNLOAD } from '@/lib/bill-print-export'
 import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
-import { BILL_JPEG_OUTPUT_WIDTH_PX, exportNodeAsJpgBlob } from '@/lib/image-export'
+import { buildPartyStatementLedger } from '@/lib/exports/party-statement-ledger'
+import { buildPartyStatementViewModel, type PartyStatementViewModel } from '@/lib/exports/party-statement-presenter'
 import { formatInQty, formatInrInteger } from '@/lib/inr-format'
+
+const BILL_JPEG_OUTPUT_WIDTH_PX = 2160
 
 export const Route = createFileRoute('/export-reports')({
   component: ExportReportsPage,
@@ -23,17 +29,59 @@ export const Route = createFileRoute('/export-reports')({
 
 type CsvFile = { filename: string; content: string }
 type PBRecord = Record<string, unknown> & { id: string }
-type ReportKind = 'party' | 'sales' | 'stock' | 'outstanding' | 'book' | 'backup'
+type ReportKind = 'party' | 'sales' | 'stock' | 'book'
 type DatePreset = 'thisMonth' | 'lastMonth' | 'thisFy' | 'custom'
+type ReportPreview = {
+  title: string
+  subtitle: string
+  slug: string
+  columns: string[]
+  rows: string[][]
+  summary: Array<{ label: string; value: string }>
+  csvRows?: string[][]
+  statementViewModel?: PartyStatementViewModel
+}
 
-const REPORTS: Array<{ id: ReportKind; title: string; subtitle: string; icon: ReactNode }> = [
-  { id: 'party', title: 'Party Statement', subtitle: 'Customer ledger with opening, bills, payments, and closing.', icon: <Users size={16} /> },
-  { id: 'sales', title: 'Sales Register', subtitle: 'Bill-wise sales for a month, financial year, or date range.', icon: <ReceiptText size={16} /> },
-  { id: 'stock', title: 'Gas Stock Report', subtitle: 'Gas-part stock movement and closing for selected month.', icon: <PackageCheck size={16} /> },
-  { id: 'outstanding', title: 'Outstanding', subtitle: 'Receivable and advance summary as of a selected date.', icon: <FileText size={16} /> },
+const SECONDARY_EXPORTS: Array<{ id: Exclude<ReportKind, 'party'>; title: string; subtitle: string; icon: ReactNode }> = [
   { id: 'book', title: 'Book Download', subtitle: 'Download one whole bill book as a ZIP of PDFs.', icon: <BookOpen size={16} /> },
-  { id: 'backup', title: 'Technical Backup', subtitle: 'Raw JSON and CSV bundle for safety and migration.', icon: <Archive size={16} /> },
+  { id: 'sales', title: 'Sales Register', subtitle: 'Bill-wise sales for a month or date range.', icon: <ReceiptText size={16} /> },
+  { id: 'stock', title: 'Gas Stock Report', subtitle: 'Gas-part stock movement and closing for selected month.', icon: <PackageCheck size={16} /> },
 ]
+
+const EXPORTS_PAGE_SECTIONS = ['party-statement-generator', 'statement-preview', 'more-exports'] as const
+const PRIMARY_STATEMENT_ACTIONS = ['download-pdf', 'download-csv', 'download-package'] as const
+
+async function loadPdfTools() {
+  const [{ jsPDF }, autoTableModule] = await Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ])
+  return { jsPDF, autoTable: autoTableModule.default }
+}
+
+async function loadZip() {
+  return (await import('jszip')).default
+}
+
+async function loadCreateRoot(): Promise<(container: Element | DocumentFragment) => Root> {
+  return (await import('react-dom/client')).createRoot
+}
+
+async function loadExportNodeAsJpgBlob() {
+  return (await import('@/lib/image-export')).exportNodeAsJpgBlob
+}
+
+export function getExportsPageSectionsForTest() {
+  return [...EXPORTS_PAGE_SECTIONS]
+}
+
+export function getPrimaryPartyStatementActionsForTest() {
+  return [...PRIMARY_STATEMENT_ACTIONS]
+}
+
+export function getSecondaryExportIdsForTest() {
+  return SECONDARY_EXPORTS.map((item) => item.id)
+}
 
 function ExportReportsPage() {
   const today = useMemo(() => getLocalIsoDate(), [])
@@ -42,47 +90,67 @@ function ExportReportsPage() {
   const [month, setMonth] = useState(today.slice(0, 7))
   const [fromDate, setFromDate] = useState(monthBounds(today.slice(0, 7)).start)
   const [toDate, setToDate] = useState(today)
-  const [asOfDate, setAsOfDate] = useState(today)
   const [partyId, setPartyId] = useState('')
   const [bookNoInput, setBookNoInput] = useState('')
-  const [includeBillItems, setIncludeBillItems] = useState(true)
+  const [includeBillItems] = useState(true)
   const [statusText, setStatusText] = useState('')
 
-  const reportsQuery = useQuery({
-    queryKey: ['export-reports-data', month],
+  const optionsQuery = useQuery({
+    queryKey: ['export-reports-options'],
     queryFn: async () => {
-      const [snapshot, stock, monthlyStock] = await Promise.all([buildBackupSnapshot(), loadCurrentStock(), loadMonthlyStockReport(month)])
-      return { snapshot, stock, monthlyStock }
+      const [customersRaw, billsRaw] = await Promise.all([
+        pb.collection('customers').getFullList({ sort: 'company_name,name' }),
+        pb.collection('bills').getFullList({ sort: '-date,-bill_no' }),
+      ])
+      return { customers: customersRaw as PBRecord[], bills: billsRaw as PBRecord[] }
     },
   })
+  const needsSnapshot = Boolean(partyId) || reportKind === 'sales' || reportKind === 'book'
+  const snapshotQuery = useQuery({
+    queryKey: ['export-reports-snapshot'],
+    queryFn: buildBackupSnapshot,
+    enabled: needsSnapshot,
+  })
+  const monthlyStockQuery = useQuery({
+    queryKey: ['export-reports-monthly-stock', month],
+    queryFn: () => loadMonthlyStockReport(month),
+    enabled: reportKind === 'stock',
+  })
 
-  const snapshot = reportsQuery.data?.snapshot
-  const stock = reportsQuery.data?.stock ?? []
-  const monthlyStock = reportsQuery.data?.monthlyStock ?? []
-  const customers = useMemo(() => (snapshot?.data.customers ?? []).filter((row) => row.active !== false).sort((a, b) => displayCustomer(a).localeCompare(displayCustomer(b))), [snapshot])
-  const bookOptions = useMemo(() => buildBookOptions(snapshot), [snapshot])
+  const snapshot = snapshotQuery.data
+  const monthlyStock = monthlyStockQuery.data ?? []
+  const customers = useMemo(() => (optionsQuery.data?.customers ?? []).filter((row) => row.active !== false).sort((a, b) => displayCustomer(a).localeCompare(displayCustomer(b))), [optionsQuery.data?.customers])
+  const bookOptions = useMemo(() => buildBookOptions(optionsQuery.data?.bills), [optionsQuery.data?.bills])
   const selectedParty = customers.find((row) => row.id === partyId)
   const dateRange = useMemo(() => resolveDateRange(datePreset, month, fromDate, toDate, today), [datePreset, month, fromDate, toDate, today])
-  const preview = useMemo(() => (snapshot ? buildPreview(snapshot, reportKind, { partyId, bookNo: bookNoInput, dateRange, asOfDate, includeBillItems }, monthlyStock, stock) : null), [snapshot, reportKind, partyId, bookNoInput, dateRange, asOfDate, includeBillItems, monthlyStock, stock])
+  const partyPreview = useMemo<ReportPreview | null>(() => (snapshot && partyId ? buildPreview(snapshot, 'party', { partyId, bookNo: bookNoInput, dateRange, includeBillItems }, monthlyStock) : null), [snapshot, partyId, bookNoInput, dateRange, includeBillItems, monthlyStock])
+  const activePreview = useMemo<ReportPreview | null>(() => {
+    if (reportKind === 'stock') return buildStockReport(monthlyStock, dateRange.label)
+    return snapshot ? buildPreview(snapshot, reportKind, { partyId, bookNo: bookNoInput, dateRange, includeBillItems }, monthlyStock) : null
+  }, [snapshot, reportKind, partyId, bookNoInput, dateRange, includeBillItems, monthlyStock])
+  const isInitialLoading = optionsQuery.isLoading
+  const isReportLoading = (needsSnapshot && snapshotQuery.isLoading) || (reportKind === 'stock' && monthlyStockQuery.isLoading)
+  const isReportError = optionsQuery.isError || snapshotQuery.isError || monthlyStockQuery.isError
 
-  function downloadBackupJson() {
-    if (!snapshot) return
-    downloadFile(`kapil-full-backup-${dateStamp()}.json`, JSON.stringify(snapshot, null, 2), 'application/json')
-  }
-
-  function downloadRawCsvBundle() {
-    if (!snapshot) return
-    for (const file of snapshotToCsvFiles(snapshot)) downloadCsv(file)
-  }
-
-  function downloadCsvReport() {
+  function downloadCsvReport(targetPreview = activePreview) {
+    const preview = targetPreview
     if (!preview) return
-    downloadCsv({ filename: `${preview.slug}.csv`, content: toCsv([preview.columns, ...preview.rows]) })
+    downloadCsv({ filename: `${preview.slug}.csv`, content: toCsv(preview.csvRows ?? [preview.columns, ...preview.rows]) })
   }
 
-  function downloadPdfReport() {
+  function downloadPdfReport(targetPreview = activePreview, targetKind = reportKind) {
+    void downloadPdfReportAsync(targetPreview, targetKind)
+  }
+
+  async function downloadPdfReportAsync(targetPreview = activePreview, targetKind = reportKind) {
+    const preview = targetPreview
     if (!snapshot || !preview) return
-    const doc = createReportPdf(preview.title, preview.subtitle, preview.columns, preview.rows, preview.summary)
+    if (targetKind === 'party' && preview.statementViewModel) {
+      const { createPartyStatementPdf } = await import('@/lib/exports/report-pdf')
+      createPartyStatementPdf(preview.statementViewModel).save(`${preview.slug}.pdf`)
+      return
+    }
+    const doc = await createReportPdf(preview.title, preview.subtitle, preview.columns, preview.rows, preview.summary)
     doc.save(`${preview.slug}.pdf`)
   }
 
@@ -95,6 +163,7 @@ function ExportReportsPage() {
     }
 
     setStatusText(`Preparing ZIP package: summaries, CSV, Excel, and ${packageData.bills.length} bill files...`)
+    const JSZip = await loadZip()
     const zip = new JSZip()
     const billsFolder = zip.folder('Bills') ?? zip
     const billImagesFolder = billsFolder.folder('Images') ?? billsFolder
@@ -102,11 +171,11 @@ function ExportReportsPage() {
     const paymentsFolder = zip.folder('Payments') ?? zip
     zip.folder('Documents')
 
-    billsFolder.file('Bills_Summary.pdf', createReportPdf('Bills Summary', packageData.subtitle, packageData.billSummaryColumns, packageData.billSummaryRows, packageData.billSummary).output('arraybuffer'))
+    billsFolder.file('Bills_Summary.pdf', (await createReportPdf('Bills Summary', packageData.subtitle, packageData.billSummaryColumns, packageData.billSummaryRows, packageData.billSummary)).output('arraybuffer'))
     billsFolder.file('Bills_Data.csv', toCsv(packageData.billCsvRows))
-    paymentsFolder.file('Payments_Summary.pdf', createReportPdf('Payments Received', packageData.subtitle, packageData.paymentSummaryColumns, packageData.paymentSummaryRows, packageData.paymentSummary).output('arraybuffer'))
+    paymentsFolder.file('Payments_Summary.pdf', (await createReportPdf('Payments Received', packageData.subtitle, packageData.paymentSummaryColumns, packageData.paymentSummaryRows, packageData.paymentSummary)).output('arraybuffer'))
     paymentsFolder.file('Payments_Data.csv', toCsv(packageData.paymentCsvRows))
-    zip.file('Party_Statement.pdf', createReportPdf(packageData.statementTitle, packageData.subtitle, packageData.statementColumns, packageData.statementRows, packageData.statementSummary).output('arraybuffer'))
+    zip.file('Party_Statement.pdf', (await createReportPdf(packageData.statementTitle, packageData.subtitle, packageData.statementColumns, packageData.statementRows, packageData.statementSummary)).output('arraybuffer'))
     zip.file('Complete_Report.xlsx', await createPartyWorkbook(packageData))
     zip.file('README.txt', buildPartyReadme(packageData))
 
@@ -138,6 +207,7 @@ function ExportReportsPage() {
     }
 
     setStatusText(`Preparing ${bills.length} print-layout bills and book CSV for book ${bookNo}...`)
+    const JSZip = await loadZip()
     const zip = new JSZip()
     const billsFolder = zip.folder('Bills') ?? zip
     const imageFolder = billsFolder.folder('Images') ?? billsFolder
@@ -147,7 +217,7 @@ function ExportReportsPage() {
       { name: 'Bill Details', rows: buildBookCsvRows(snapshot, bills) },
       { name: 'Party-wise', rows: buildBookPartyRows(snapshot, bills) },
     ]))
-    zip.file(`Book_${bookNo}_Register.pdf`, createReportPdf(`Book ${bookNo} Register`, `${bills.length} bills`, ['Date', 'Bill', 'Party', 'Amount', 'Details'], buildBookRegisterRows(snapshot, bills), [{ label: 'Bills', value: String(bills.length) }]).output('arraybuffer'))
+    zip.file(`Book_${bookNo}_Register.pdf`, (await createReportPdf(`Book ${bookNo} Register`, `${bills.length} bills`, ['Date', 'Bill', 'Party', 'Amount', 'Details'], buildBookRegisterRows(snapshot, bills), [{ label: 'Bills', value: String(bills.length) }])).output('arraybuffer'))
     billsFolder.file(`Book_${bookNo}_Details.csv`, buildBookDetailsCsv(snapshot, bills))
     for (const bill of bills) {
       const jpg = await createBillJpgBlob(snapshot, bill)
@@ -163,174 +233,142 @@ function ExportReportsPage() {
   }
 
   return (
-    <div className="w-full space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
-      <section className="border-b border-slate-200 bg-white px-1 py-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Business reports</p>
-            <h2 className="mt-1 text-lg font-semibold text-slate-950">Exports</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-500">Choose a report, narrow it to a party, month, date range, or book, then export a clean PDF or data file.</p>
-          </div>
-          {snapshot && (
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <Metric label="Bills" value={snapshot.counts.bills} />
-              <Metric label="Parties" value={snapshot.counts.customers} />
-              <Metric label="Gas Items" value={stock.length} />
-            </div>
-          )}
-        </div>
-      </section>
+    <div className="w-full space-y-5 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+      {isInitialLoading && <ExportSurface><p className="text-sm text-slate-500">Preparing report options...</p></ExportSurface>}
+      {isReportError && <ExportSurface><p className="text-sm text-red-700">Unable to prepare report exports.</p></ExportSurface>}
 
-      {reportsQuery.isLoading && <section className="border border-slate-200 bg-white p-5 text-sm text-slate-500">Preparing reports...</section>}
-      {reportsQuery.isError && <section className="border border-red-200 bg-red-50 p-5 text-sm text-red-700">Unable to prepare report exports.</section>}
-
-      {!reportsQuery.isLoading && !reportsQuery.isError && (
+      {!isInitialLoading && !isReportError && (
         <>
-          <section className="grid grid-cols-1 gap-3 lg:grid-cols-[18rem_minmax(0,1fr)]">
-            <div className="border border-slate-200 bg-white p-2">
-              {REPORTS.map((report) => (
-                <button
-                  key={report.id}
-                  type="button"
-                  className={`flex w-full items-start gap-3 rounded-md px-3 py-3 text-left transition ${reportKind === report.id ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
-                  onClick={() => {
-                    setReportKind(report.id)
-                    setStatusText('')
-                  }}
-                >
-                  <span className={`mt-0.5 ${reportKind === report.id ? 'text-white' : 'text-slate-500'}`}>{report.icon}</span>
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold">{report.title}</span>
-                    <span className={`mt-0.5 block text-xs leading-relaxed ${reportKind === report.id ? 'text-slate-200' : 'text-slate-500'}`}>{report.subtitle}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            <div className="border border-slate-200 bg-white p-4">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                {reportKind === 'party' && (
-                  <Field label="Party">
-                    <select className={inputClass} value={partyId} onChange={(event) => setPartyId(event.target.value)}>
-                      <option value="">Select party</option>
-                      {customers.map((customer) => (
-                        <option key={customer.id} value={customer.id}>{displayCustomer(customer)}</option>
-                      ))}
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(320px,0.82fr)_minmax(0,1.18fr)]">
+            <PartyStatementHero
+              partySelect={
+                <Field label="Party">
+                  <select className={inputClass} value={partyId} onChange={(event) => {
+                    setPartyId(event.target.value)
+                    setReportKind('party')
+                  }}>
+                    <option value="">Select party</option>
+                    {customers.map((customer) => (
+                      <option key={customer.id} value={customer.id}>{displayCustomer(customer)}</option>
+                    ))}
+                  </select>
+                </Field>
+              }
+              periodControls={
+                <>
+                  <Field label="Period">
+                    <select className={inputClass} value={datePreset} onChange={(event) => {
+                      setDatePreset(event.target.value as DatePreset)
+                      setReportKind('party')
+                    }}>
+                      <option value="thisMonth">This month</option>
+                      <option value="lastMonth">Last month</option>
+                      <option value="thisFy">This financial year</option>
+                      <option value="custom">Custom range</option>
                     </select>
                   </Field>
-                )}
-
-                {(reportKind === 'party' || reportKind === 'sales') && (
-                  <>
-                    <Field label="Period">
-                      <select className={inputClass} value={datePreset} onChange={(event) => setDatePreset(event.target.value as DatePreset)}>
-                        <option value="thisMonth">This month</option>
-                        <option value="lastMonth">Last month</option>
-                        <option value="thisFy">This financial year</option>
-                        <option value="custom">Custom range</option>
-                      </select>
+                  {datePreset !== 'custom' && datePreset !== 'thisFy' && (
+                    <Field label="Month">
+                      <input className={inputClass} type="month" value={month} onChange={(event) => {
+                        setMonth(event.target.value)
+                        setReportKind('party')
+                      }} />
                     </Field>
-                    {datePreset !== 'custom' && datePreset !== 'thisFy' && (
-                      <Field label="Month">
-                        <input className={inputClass} type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+                  )}
+                  {datePreset === 'custom' && (
+                    <>
+                      <Field label="From">
+                        <input className={inputClass} type="date" value={fromDate} onChange={(event) => {
+                          setFromDate(event.target.value)
+                          setReportKind('party')
+                        }} />
                       </Field>
-                    )}
-                    {datePreset === 'custom' && (
-                      <>
-                        <Field label="From">
-                          <input className={inputClass} type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
-                        </Field>
-                        <Field label="To">
-                          <input className={inputClass} type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
-                        </Field>
-                      </>
-                    )}
-                    <label className="flex min-h-10 items-center gap-2 pt-5 text-sm text-slate-700">
-                      <input type="checkbox" checked={includeBillItems} onChange={(event) => setIncludeBillItems(event.target.checked)} />
-                      Include bill item details
-                    </label>
-                  </>
-                )}
+                      <Field label="To">
+                        <input className={inputClass} type="date" value={toDate} onChange={(event) => {
+                          setToDate(event.target.value)
+                          setReportKind('party')
+                        }} />
+                      </Field>
+                    </>
+                  )}
+                </>
+              }
+              summary={partyPreview?.summary ?? []}
+              primaryAction={<button type="button" className={primaryButtonClass} onClick={() => downloadPdfReport(partyPreview, 'party')} disabled={isReportLoading || !partyPreview || partyPreview.rows.length === 0 || !selectedParty}><FileText size={14} /> Statement PDF</button>}
+              secondaryAction={<button type="button" className={secondaryButtonClass} onClick={() => downloadCsvReport(partyPreview)} disabled={isReportLoading || !partyPreview || partyPreview.rows.length === 0 || !selectedParty}><Download size={14} /> CSV</button>}
+              tertiaryAction={<button type="button" className={secondaryButtonClass} onClick={() => void downloadPartyZip()} disabled={isReportLoading || !partyPreview || !selectedParty}><FileArchive size={14} /> Full Package</button>}
+            />
 
-                {reportKind === 'stock' && (
-                  <Field label="Stock Month">
-                    <input className={inputClass} type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
-                  </Field>
-                )}
+            <PartyStatementPreview
+              title={partyPreview?.title ?? 'Party Statement Preview'}
+              subtitle={partyPreview?.subtitle ?? 'Select a party and period to preview the statement.'}
+              summary={partyPreview?.summary ?? []}
+              contextLine={selectedParty && partyPreview ? `Showing statement for ${displayCustomer(selectedParty)} · Period: ${dateRange.label}` : undefined}
+              columns={partyPreview?.columns ?? []}
+              rows={partyPreview?.rows ?? []}
+              emptyMessage="Select a party to preview a statement."
+            />
+          </div>
 
-                {reportKind === 'outstanding' && (
-                  <Field label="As of Date">
-                    <input className={inputClass} type="date" value={asOfDate} onChange={(event) => setAsOfDate(event.target.value)} />
-                  </Field>
-                )}
+          {isReportLoading && <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 shadow-sm" role="status">Preparing selected export data...</p>}
+          {statusText && <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 shadow-sm" role="status">{statusText}</p>}
 
-                {reportKind === 'book' && (
-                  <Field label="Book No">
-                    <select className={inputClass} value={bookNoInput} onChange={(event) => setBookNoInput(event.target.value)}>
-                      <option value="">Select book</option>
-                      {bookOptions.map((book) => (
-                        <option key={book.bookNo} value={book.bookNo}>
-                          Book {book.bookNo} - {book.count} bills ({book.fromDate} to {book.toDate})
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
+          <MoreExportsPanel
+            bookBlock={
+              <CompactExportCard title="Book Download" subtitle="Download one whole bill book as a ZIP of PDFs.">
+                <Field label="Book No">
+                  <select className={inputClass} value={bookNoInput} onChange={(event) => {
+                    setBookNoInput(event.target.value)
+                    setReportKind('book')
+                  }}>
+                    <option value="">Select book</option>
+                    {bookOptions.map((book) => (
+                      <option key={book.bookNo} value={book.bookNo}>Book {book.bookNo} - {book.count} bills ({book.fromDate} to {book.toDate})</option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="mt-3">{reportKind === 'book' && <BookPreview snapshot={snapshot} bookNo={bookNoInput} />}</div>
+                <button type="button" className={`${primaryButtonClass} mt-3`} onClick={() => void downloadBookZip()} disabled={isReportLoading || !snapshot || !bookNoInput.trim()}>
+                  <FileArchive size={14} /> Download Book ZIP
+                </button>
+              </CompactExportCard>
+            }
+            salesBlock={
+              <CompactExportCard title="Sales Register" subtitle="Month or date-range sales export.">
+                <button type="button" className={secondaryButtonClass} onClick={() => setReportKind('sales')}>
+                  <ReceiptText size={14} /> Use current period filters
+                </button>
+                {reportKind === 'sales' && activePreview && (
+                  <div className="mt-3 space-y-3">
+                    <PreviewTable columns={activePreview.columns} rows={activePreview.rows} />
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" className={primaryButtonClass} onClick={() => downloadPdfReport()} disabled={isReportLoading || activePreview.rows.length === 0}><FileText size={14} /> Download PDF</button>
+                      <button type="button" className={secondaryButtonClass} onClick={() => downloadCsvReport()} disabled={isReportLoading || activePreview.rows.length === 0}><Download size={14} /> Download CSV</button>
+                    </div>
+                  </div>
                 )}
-              </div>
-
-              <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-4">
-                {reportKind !== 'backup' && reportKind !== 'book' && (
-                  <>
-                    {reportKind === 'party' && (
-                      <button type="button" className={primaryButtonClass} onClick={() => void downloadPartyZip()} disabled={!preview || (reportKind === 'party' && !selectedParty)}>
-                        <FileArchive size={14} /> Download ZIP Package
-                      </button>
-                    )}
-                    <button type="button" className={primaryButtonClass} onClick={downloadPdfReport} disabled={!preview || preview.rows.length === 0 || (reportKind === 'party' && !selectedParty)}>
-                      <FileText size={14} /> Download PDF
-                    </button>
-                    <button type="button" className={secondaryButtonClass} onClick={downloadCsvReport} disabled={!preview || preview.rows.length === 0 || (reportKind === 'party' && !selectedParty)}>
-                      <Download size={14} /> Download CSV
-                    </button>
-                  </>
+              </CompactExportCard>
+            }
+            stockBlock={
+              <CompactExportCard title="Stock Report" subtitle="Selected month stock movement export.">
+                <Field label="Stock Month">
+                  <input className={inputClass} type="month" value={month} onChange={(event) => {
+                    setMonth(event.target.value)
+                    setReportKind('stock')
+                  }} />
+                </Field>
+                {reportKind === 'stock' && activePreview && (
+                  <div className="mt-3 space-y-3">
+                    <PreviewTable columns={activePreview.columns} rows={activePreview.rows} />
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" className={primaryButtonClass} onClick={() => downloadPdfReport()} disabled={isReportLoading || activePreview.rows.length === 0}><FileText size={14} /> Download PDF</button>
+                      <button type="button" className={secondaryButtonClass} onClick={() => downloadCsvReport()} disabled={isReportLoading || activePreview.rows.length === 0}><Download size={14} /> Download CSV</button>
+                    </div>
+                  </div>
                 )}
-                {reportKind === 'book' && (
-                  <button type="button" className={primaryButtonClass} onClick={() => void downloadBookZip()} disabled={!bookNoInput.trim()}>
-                    <FileArchive size={14} /> Download Book ZIP
-                  </button>
-                )}
-                {reportKind === 'backup' && (
-                  <>
-                    <button type="button" className={primaryButtonClass} onClick={downloadBackupJson}>
-                      <Download size={14} /> Full Backup JSON
-                    </button>
-                    <button type="button" className={secondaryButtonClass} onClick={downloadRawCsvBundle}>
-                      <FileArchive size={14} /> Raw CSV Bundle
-                    </button>
-                  </>
-                )}
-                {statusText && <p className="text-xs text-slate-500" role="status">{statusText}</p>}
-              </div>
-            </div>
-          </section>
-
-          <section className="border border-slate-200 bg-white p-4">
-            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-950">{preview?.title ?? 'Report Preview'}</h3>
-                <p className="mt-1 text-xs text-slate-500">{preview?.subtitle ?? 'Select report options to preview export data.'}</p>
-              </div>
-              {preview && preview.summary.length > 0 && (
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {preview.summary.slice(0, 4).map((row) => <SummaryPill key={row.label} label={row.label} value={row.value} />)}
-                </div>
-              )}
-            </div>
-            {reportKind === 'party' && !selectedParty && <p className="py-8 text-center text-sm text-slate-500">Select a party to preview a statement.</p>}
-            {reportKind === 'book' && <BookPreview snapshot={snapshot} bookNo={bookNoInput} />}
-            {reportKind === 'backup' && snapshot && <BackupPreview snapshot={snapshot} />}
-            {preview && reportKind !== 'book' && reportKind !== 'backup' && !(reportKind === 'party' && !selectedParty) && <PreviewTable columns={preview.columns} rows={preview.rows} />}
-          </section>
+              </CompactExportCard>
+            }
+          />
         </>
       )}
     </div>
@@ -340,14 +378,12 @@ function ExportReportsPage() {
 function buildPreview(
   snapshot: BackupSnapshot,
   kind: ReportKind,
-  options: { partyId: string; bookNo: string; dateRange: { start: string; end: string; label: string }; asOfDate: string; includeBillItems: boolean },
+  options: { partyId: string; bookNo: string; dateRange: { start: string; end: string; label: string }; includeBillItems: boolean },
   monthlyStock: Awaited<ReturnType<typeof loadMonthlyStockReport>>,
-  currentStock: Awaited<ReturnType<typeof loadCurrentStock>>,
-) {
+): ReportPreview {
   if (kind === 'party') return buildPartyStatement(snapshot, options.partyId, options.dateRange, options.includeBillItems)
   if (kind === 'sales') return buildSalesRegister(snapshot, options.dateRange, options.includeBillItems)
   if (kind === 'stock') return buildStockReport(monthlyStock, options.dateRange.label)
-  if (kind === 'outstanding') return buildOutstandingReport(snapshot, options.asOfDate)
   if (kind === 'book') return buildBookSummary(snapshot, options.bookNo)
   if (kind === 'backup') return {
     title: 'Technical Backup',
@@ -360,52 +396,42 @@ function buildPreview(
       ['Bills', String(snapshot.counts.bills)],
       ['Bill Items', String(snapshot.counts.billItems)],
       ['Payments', String(snapshot.counts.payments)],
-      ['Gas Stock Items', String(currentStock.length)],
+      ['Gas Stock Items', String(monthlyStock.length)],
     ],
     summary: [],
   }
+
+  return buildBookSummary(snapshot, options.bookNo)
 }
 
-function buildPartyStatement(snapshot: BackupSnapshot, partyId: string, range: { start: string; end: string; label: string }, includeBillItems: boolean) {
+function buildPartyStatement(snapshot: BackupSnapshot, partyId: string, range: { start: string; end: string; label: string }, _includeBillItems: boolean): ReportPreview {
   const customer = snapshot.data.customers.find((row) => row.id === partyId)
   const customerName = customer ? displayCustomer(customer) : 'Party Statement'
-  const itemBaseByBill = billItemBaseMap(snapshot.data.billItems)
-  const billItemsByBill = groupBy(snapshot.data.billItems, (row) => String(row.bill ?? ''))
-  let opening = num(customer?.opening_balance)
 
-  const events = [
-    ...snapshot.data.bills
-      .filter((bill) => String(bill.customer ?? '') === partyId)
-      .map((bill) => {
-        const billId = bill.id
-        const total = calculateBillTotalFromBase(itemBaseByBill.get(billId) ?? 0, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount))
-        return { date: datePart(bill.date), type: 'Bill', ref: billRef(bill), debit: total, credit: 0, details: includeBillItems ? itemDetails(billItemsByBill.get(billId) ?? []) : String(bill.lr_no ?? '') }
-      }),
-    ...snapshot.data.payments
-      .filter((payment) => String(payment.customer ?? '') === partyId)
-      .map((payment) => ({ date: datePart(payment.date), type: 'Payment', ref: String(payment.mode ?? ''), debit: 0, credit: num(payment.amount), details: String(payment.note ?? '') })),
-  ].sort(compareEvent)
+  const ledger = buildPartyStatementLedger({
+    customer: customer ?? { id: partyId, opening_balance: 0 },
+    range,
+    bills: snapshot.data.bills,
+    billItems: snapshot.data.billItems,
+    payments: snapshot.data.payments,
+  })
 
-  for (const event of events.filter((event) => event.date && event.date < range.start)) opening += event.debit - event.credit
-
-  let balance = opening
-  const rows = [['', 'Opening', 'Opening Balance', '', '', formatInrInteger(balance), 'Balance carried forward']]
-  for (const event of events.filter((event) => event.date >= range.start && event.date <= range.end)) {
-    balance += event.debit - event.credit
-    rows.push([formatFullDate(event.date), event.type, event.ref, event.debit ? formatInrInteger(event.debit) : '', event.credit ? formatInrInteger(event.credit) : '', formatInrInteger(balance), event.details])
-  }
+  const statementViewModel = buildPartyStatementViewModel({
+    customerDisplayName: customerName,
+    rangeLabel: range.label,
+    generatedOn: getLocalIsoDate(),
+    ledger,
+  })
 
   return {
-    title: `${customerName} Statement`,
-    subtitle: `${range.label} | Generated ${formatFullDate(getLocalIsoDate())}`,
+    title: statementViewModel.title,
+    subtitle: statementViewModel.subtitle,
     slug: `party-statement-${safeFilename(customerName)}-${range.start}-to-${range.end}`,
-    columns: ['Date', 'Type', 'Ref', 'Debit', 'Credit', 'Balance', 'Details'],
-    rows,
-    summary: [
-      { label: 'Opening', value: formatInrInteger(opening) },
-      { label: 'Closing', value: formatInrInteger(balance) },
-      { label: 'Rows', value: String(rows.length - 1) },
-    ],
+    columns: statementViewModel.columns,
+    rows: statementViewModel.rows,
+    summary: statementViewModel.summary,
+    csvRows: statementViewModel.csvRows,
+    statementViewModel,
   }
 }
 
@@ -454,34 +480,6 @@ function buildStockReport(rows: Awaited<ReturnType<typeof loadMonthlyStockReport
   }
 }
 
-function buildOutstandingReport(snapshot: BackupSnapshot, asOfDate: string) {
-  const itemBaseByBill = billItemBaseMap(snapshot.data.billItems)
-  const rows = snapshot.data.customers
-    .map((customer) => {
-      let balance = num(customer.opening_balance)
-      for (const bill of snapshot.data.bills.filter((row) => String(row.customer ?? '') === customer.id && datePart(row.date) <= asOfDate)) {
-        balance += calculateBillTotalFromBase(itemBaseByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount))
-      }
-      for (const payment of snapshot.data.payments.filter((row) => String(row.customer ?? '') === customer.id && datePart(row.date) <= asOfDate)) balance -= num(payment.amount)
-      return { customer: displayCustomer(customer), balance }
-    })
-    .filter((row) => row.balance !== 0)
-    .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance))
-
-  return {
-    title: 'Outstanding Report',
-    subtitle: `As of ${formatFullDate(asOfDate)}`,
-    slug: `outstanding-as-of-${asOfDate}`,
-    columns: ['Party', 'Receivable', 'Advance', 'Net'],
-    rows: rows.map((row) => [row.customer, row.balance > 0 ? formatInrInteger(row.balance) : '', row.balance < 0 ? formatInrInteger(Math.abs(row.balance)) : '', formatInrInteger(row.balance)]),
-    summary: [
-      { label: 'Receivable', value: formatInrInteger(rows.filter((row) => row.balance > 0).reduce((sum, row) => sum + row.balance, 0)) },
-      { label: 'Advance', value: formatInrInteger(rows.filter((row) => row.balance < 0).reduce((sum, row) => sum + Math.abs(row.balance), 0)) },
-      { label: 'Parties', value: String(rows.length) },
-    ],
-  }
-}
-
 function buildBookSummary(snapshot: BackupSnapshot, bookNoInput: string) {
   const bookNo = Number(bookNoInput)
   const bills = Number.isFinite(bookNo) ? snapshot.data.bills.filter((bill) => num(bill.book_no) === bookNo) : []
@@ -495,10 +493,10 @@ function buildBookSummary(snapshot: BackupSnapshot, bookNoInput: string) {
   }
 }
 
-function buildBookOptions(snapshot?: BackupSnapshot) {
-  if (!snapshot) return []
+function buildBookOptions(bills?: PBRecord[]) {
+  if (!bills) return []
   const byBook = new Map<number, { bookNo: number; count: number; fromDate: string; toDate: string }>()
-  for (const bill of snapshot.data.bills) {
+  for (const bill of bills) {
     const bookNo = num(bill.book_no)
     if (!bookNo) continue
     const date = datePart(bill.date)
@@ -581,7 +579,7 @@ function buildPartyPackage(snapshot: BackupSnapshot, partyId: string, range: { s
         credit: num(payment.amount),
         details: String(payment.note ?? ''),
       })),
-  ].sort(compareEvent)
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.type.localeCompare(b.type))
 
   for (const event of allEvents.filter((event) => event.date && event.date < range.start)) opening += event.debit - event.credit
 
@@ -736,7 +734,8 @@ function buildPartyPackage(snapshot: BackupSnapshot, partyId: string, range: { s
   }
 }
 
-function createReportPdf(title: string, subtitle: string, columns: string[], rows: string[][], summary: Array<{ label: string; value: string }>) {
+async function createReportPdf(title: string, subtitle: string, columns: string[], rows: string[][], summary: Array<{ label: string; value: string }>) {
+  const { jsPDF, autoTable } = await loadPdfTools()
   const doc = new jsPDF({ orientation: columns.length > 6 ? 'landscape' : 'portrait', unit: 'pt', format: 'a4' })
   const pageWidth = doc.internal.pageSize.getWidth()
   addPdfHeader(doc, title, subtitle)
@@ -911,6 +910,10 @@ function buildBookPartyRows(snapshot: BackupSnapshot, bills: PBRecord[]): Array<
 
 async function createBillJpgBlob(snapshot: BackupSnapshot, bill: PBRecord) {
   const props = buildBillPrintProps(snapshot, bill)
+  const [createRoot, exportNodeAsJpgBlob] = await Promise.all([
+    loadCreateRoot(),
+    loadExportNodeAsJpgBlob(),
+  ])
   const host = document.createElement('div')
   host.style.position = 'fixed'
   host.style.left = '-10000px'
@@ -1019,6 +1022,7 @@ function waitForRenderFrame() {
 }
 
 async function createBillPdfBlob(jpg: Blob) {
+  const { jsPDF } = await loadPdfTools()
   const dataUrl = await blobToDataUrl(jpg)
   const dimensions = await imageDimensions(dataUrl)
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
@@ -1055,6 +1059,7 @@ async function createPartyWorkbook(packageData: PartyPackage) {
 }
 
 async function createSimpleWorkbook(workbookSheets: Array<{ name: string; rows: Array<Array<string | number>> }>) {
+  const JSZip = await loadZip()
   const zip = new JSZip()
   zip.file('[Content_Types].xml', workbookContentTypes(workbookSheets.length))
   zip.folder('_rels')?.file('.rels', workbookRootRels())
@@ -1185,42 +1190,12 @@ function BookPreview({ snapshot, bookNo }: { snapshot?: BackupSnapshot; bookNo: 
   return <PreviewTable columns={preview.columns} rows={preview.rows} />
 }
 
-function BackupPreview({ snapshot }: { snapshot: BackupSnapshot }) {
-  return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-      <Metric label="Customers" value={snapshot.counts.customers} />
-      <Metric label="Items" value={snapshot.counts.items} />
-      <Metric label="Bills" value={snapshot.counts.bills} />
-      <Metric label="Bill Items" value={snapshot.counts.billItems} />
-      <Metric label="Payments" value={snapshot.counts.payments} />
-    </div>
-  )
-}
-
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
       <span className="text-xs font-medium text-slate-600">{label}</span>
       {children}
     </label>
-  )
-}
-
-function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="border border-slate-200 bg-slate-50 px-3 py-2">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
-      <p className="font-mono text-lg font-bold text-slate-900">{value}</p>
-    </div>
-  )
-}
-
-function SummaryPill({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="border border-slate-200 bg-slate-50 px-3 py-2">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
-      <p className="font-mono text-sm font-semibold text-slate-900">{value}</p>
-    </div>
   )
 }
 
@@ -1332,10 +1307,6 @@ function compareBillNo(a: PBRecord, b: PBRecord) {
   return num(a.bill_no) - num(b.bill_no)
 }
 
-function compareEvent(a: { date: string; type: string }, b: { date: string; type: string }) {
-  return a.date.localeCompare(b.date) || a.type.localeCompare(b.type)
-}
-
 function groupBy<T>(rows: T[], getKey: (row: T) => string) {
   const map = new Map<string, T[]>()
   for (const row of rows) {
@@ -1396,7 +1367,7 @@ const inputClass =
   'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
 
 const primaryButtonClass =
-  'inline-flex h-10 items-center gap-1.5 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60'
+  'inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60'
 
 const secondaryButtonClass =
-  'inline-flex h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60'
+  'inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60'

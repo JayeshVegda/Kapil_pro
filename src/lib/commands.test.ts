@@ -52,6 +52,20 @@ describe('command parsing', () => {
     })
   })
 
+  it('parses bill book number, explicit bill ref, and padded numeric dates', () => {
+    const bookOnly = parseBillCommand('ashish spindle 1 book 52 1-04-2026', customers, items, '2026-05-20', 500)
+    expect(bookOnly).toMatchObject({
+      ok: true,
+      command: { kind: 'bill', bookNo: 52, billNo: null, date: '2026-04-01' },
+    })
+
+    const ref = parseBillCommand('ashish spindle 1 1/04', customers, items, '2026-05-20', 500)
+    expect(ref).toMatchObject({
+      ok: true,
+      command: { kind: 'bill', bookNo: 1, billNo: 4, date: '2026-05-20' },
+    })
+  })
+
   it('uses configurable-style prefixes through context parsing defaults', () => {
     const parsed = parseContextCommand('b sambhu 2', 'neutral', { customers, items, today: '2026-05-20', mktRate: 500 })
     expect(parsed).toMatchObject({

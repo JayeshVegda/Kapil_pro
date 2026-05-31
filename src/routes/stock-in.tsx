@@ -23,7 +23,7 @@ import {
   ensureGeneralCustomer,
   loadCurrentStock,
   loadMonthlyStockReport,
-  loadStockAdjustments,
+  loadRecentStockLogs,
   loadStockCustomers,
   loadStockIn,
   loadStockLedger,
@@ -35,6 +35,7 @@ import {
   updateStockIn,
   type CurrentStockRecord,
   type MonthlyStockReportRow,
+  type RecentStockLogRecord,
   type StockCustomerOption,
   type StockInRecord,
   type StockLedgerRow,
@@ -65,17 +66,21 @@ const adjustmentSchema = stockEntrySchema.extend({
 type ReceiveMode = 'receive' | 'opening'
 type AdjustmentMode = 'add' | 'subtract' | 'set'
 type WorkspaceTab = 'receive' | 'opening' | 'adjust' | 'report'
-type EditingLog = { type: 'received' | 'adjusted'; id: string } | null
+type EditableStockLogType = 'received' | 'adjusted'
+type StockLogType = EditableStockLogType | 'sold'
+type EditingLog = { type: EditableStockLogType; id: string } | null
 type StockLogRow = {
   id: string
   rawId: string
   itemId: string
   customerId: string
-  type: 'received' | 'adjusted'
+  type: StockLogType
   date: string
   itemName: string
   customerName: string
-  qty: number
+  inQty: number
+  outQty: number
+  balance: number
   note: string
 }
 
@@ -100,7 +105,7 @@ export function StockPage() {
   const [editingLog, setEditingLog] = useState<EditingLog>(null)
   const [reportMonth, setReportMonth] = useState(currentMonth)
   const [logSearch, setLogSearch] = useState('')
-  const [logType, setLogType] = useState<'all' | 'received' | 'adjusted'>('all')
+  const [logType, setLogType] = useState<'all' | StockLogType>('all')
 
   const itemsQuery = useQuery({ queryKey: ['items-options'], queryFn: loadItems })
   const customersQuery = useQuery({ queryKey: ['stock-customers'], queryFn: loadStockCustomers })
@@ -128,9 +133,9 @@ export function StockPage() {
     queryKey: ['stock-in-log'],
     queryFn: loadStockIn,
   })
-  const adjustmentsQuery = useQuery({
-    queryKey: ['stock-adjustments-log'],
-    queryFn: loadStockAdjustments,
+  const recentLogsQuery = useQuery({
+    queryKey: ['recent-stock-logs'],
+    queryFn: () => loadRecentStockLogs(),
   })
   const openingsQuery = useQuery({
     queryKey: ['stock-openings'],
@@ -161,17 +166,12 @@ export function StockPage() {
     })
   }, [currentMonthReportQuery.data, financialYearReportQueries, previousMonthReportQuery.data, stockItems])
   const logs = useMemo(() => {
-    const received = (stockInQuery.data ?? [])
+    return (recentLogsQuery.data ?? [])
       .filter((row) => gasItemKeys.has(row.itemId) || gasItemKeys.has(row.itemName.trim().toLowerCase()))
-      .map((row) => ({ id: `received-${row.id}`, rawId: row.id, itemId: row.itemId, customerId: row.customerId, type: 'received' as const, date: row.date, itemName: row.itemName, customerName: row.customerName, qty: row.qty, note: row.note }))
-    const adjusted = (adjustmentsQuery.data ?? [])
-      .filter((row) => gasItemKeys.has(row.itemId) || gasItemKeys.has(row.itemName.trim().toLowerCase()))
-      .map((row) => ({ id: `adjusted-${row.id}`, rawId: row.id, itemId: row.itemId, customerId: row.customerId, type: 'adjusted' as const, date: row.date, itemName: row.itemName, customerName: row.customerName, qty: row.qty, note: row.note }))
-    return [...received, ...adjusted]
+      .map(mapRecentStockLog)
       .filter((row) => logType === 'all' || row.type === logType)
       .filter((row) => matchesAnyRankedQuery([row.itemName, row.customerName, row.date, row.type, row.note], logSearch))
-      .sort((a, b) => b.date.localeCompare(a.date))
-  }, [adjustmentsQuery.data, gasItemKeys, logSearch, logType, stockInQuery.data])
+  }, [gasItemKeys, logSearch, logType, recentLogsQuery.data])
 
   useEffect(() => {
     if (customersQuery.isLoading || customers.length > 0) return
@@ -375,20 +375,22 @@ export function StockPage() {
 
   function exportLogsCsv() {
     downloadCsv('stock-logs.csv', [
-      ['Date', 'Type', 'Item', 'Party', 'Qty', 'Note'],
-      ...logs.map((row) => [row.date, row.type, row.itemName, row.customerName, row.qty, row.note]),
+      ['Date', 'Type', 'Item', 'Party', 'Received', 'Sold', 'Balance', 'Note'],
+      ...logs.map((row) => [row.date, row.type, row.itemName, row.customerName, row.inQty, row.outQty, row.balance, row.note]),
     ])
   }
 
   function editLog(row: StockLogRow) {
+    if (row.type === 'sold') return
     setEditingLog({ type: row.type, id: row.rawId })
     setDate(row.date)
     setItemId(row.itemId)
     setCustomerId(row.customerId)
-    setQtyInput(String(Math.abs(kgToBags(row.qty, stockItems.find((item) => item.itemId === row.itemId)))))
+    const qty = row.type === 'adjusted' && row.outQty > 0 ? row.outQty : row.inQty
+    setQtyInput(String(Math.abs(kgToBags(qty, stockItems.find((item) => item.itemId === row.itemId)))))
     setNote(row.note)
     setAdjustmentReason(row.type === 'adjusted' ? row.note : '')
-    setAdjustmentMode(row.type === 'adjusted' && row.qty < 0 ? 'subtract' : 'add')
+    setAdjustmentMode(row.type === 'adjusted' && row.outQty > 0 ? 'subtract' : 'add')
     setActiveTab(row.type === 'received' ? 'receive' : 'adjust')
     setStatusText('')
   }
@@ -407,6 +409,7 @@ export function StockPage() {
   }
 
   function deleteLog(row: StockLogRow) {
+    if (row.type === 'sold') return
     if (row.type === 'received') void deleteReceivedMutation.mutateAsync(row.rawId)
     else void deleteAdjustmentMutation.mutateAsync(row.rawId)
   }
@@ -553,14 +556,14 @@ export function StockPage() {
       <section id="stock-logs" className="overflow-hidden rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <WorkspaceHeader
           title="Recent Stock Logs"
-          subtitle="Review, edit, delete, and export stock receipts or adjustments."
+          subtitle="Review received, sold, adjusted, and closing stock movements."
           actions={<LogsControls search={logSearch} setSearch={setLogSearch} type={logType} setType={setLogType} onExport={exportLogsCsv} disabled={logs.length === 0} />}
         />
         <LogsPanel
           rows={logs}
           stockItems={stockItems}
-          loading={stockInQuery.isLoading || adjustmentsQuery.isLoading}
-          error={stockInQuery.error ?? adjustmentsQuery.error}
+          loading={recentLogsQuery.isLoading || currentStockQuery.isLoading}
+          error={recentLogsQuery.error ?? currentStockQuery.error}
           deleting={deleteReceivedMutation.isPending || deleteAdjustmentMutation.isPending}
           onEdit={editLog}
           onDelete={deleteLog}
@@ -598,6 +601,7 @@ async function invalidateStockQueries(queryClient: ReturnType<typeof useQueryCli
     queryClient.invalidateQueries({ queryKey: ['stock-openings'] }),
     queryClient.invalidateQueries({ queryKey: ['stock-in-log'] }),
     queryClient.invalidateQueries({ queryKey: ['stock-adjustments-log'] }),
+    queryClient.invalidateQueries({ queryKey: ['recent-stock-logs'] }),
     queryClient.invalidateQueries({ queryKey: ['current-stock'] }),
     queryClient.invalidateQueries({ queryKey: ['stock-ledger'] }),
     queryClient.invalidateQueries({ queryKey: ['monthly-stock-report'] }),
@@ -747,8 +751,8 @@ function LogsControls({
 }: {
   search: string
   setSearch: (value: string) => void
-  type: 'all' | 'received' | 'adjusted'
-  setType: (value: 'all' | 'received' | 'adjusted') => void
+  type: 'all' | StockLogType
+  setType: (value: 'all' | StockLogType) => void
   onExport: () => void
   disabled: boolean
 }) {
@@ -758,9 +762,10 @@ function LogsControls({
         <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
         <input className={`${inputClass} pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search logs..." />
       </label>
-      <select className={`${inputClass} w-36`} value={type} onChange={(event) => setType(event.target.value as 'all' | 'received' | 'adjusted')}>
+      <select className={`${inputClass} w-36`} value={type} onChange={(event) => setType(event.target.value as 'all' | StockLogType)}>
         <option value="all">All types</option>
         <option value="received">Received</option>
+        <option value="sold">Sold</option>
         <option value="adjusted">Adjusted</option>
       </select>
       <button type="button" className={secondaryButtonClass} onClick={onExport} disabled={disabled}>
@@ -1315,34 +1320,45 @@ function LogsTable({
 }) {
   return (
     <div className={tableShellClass}>
-      <table className="w-full min-w-[820px]">
+      <table className="w-full min-w-[920px]">
         <thead>
           <tr className="bg-slate-50">
             <Th>Date</Th>
             <Th>Type</Th>
             <Th>Item</Th>
             <Th>Party</Th>
-            <Th right>Qty</Th>
+            <Th right>Received</Th>
+            <Th right>Sold</Th>
+            <Th right>Balance</Th>
             <Th>Note</Th>
             <Th right>Action</Th>
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={7} text="No stock logs found." />}
+          {rows.length === 0 && <EmptyRow colSpan={9} text="No stock logs found." />}
           {rows.map((row, index) => {
-            const item = stockItems.find((stockItem) => stockItem.itemName === row.itemName)
+            const item = stockItems.find((stockItem) => stockItem.itemId === row.itemId && stockItem.customerId === row.customerId) ?? stockItems.find((stockItem) => stockItem.itemName === row.itemName)
+            const readOnly = row.type === 'sold'
             return (
               <tr key={row.id} className={tableRowClass(index)}>
                 <Td>{row.date ? formatFullDate(row.date) : '-'}</Td>
                 <Td><StockLogTypeBadge type={row.type} /></Td>
                 <Td>{row.itemName}</Td>
                 <Td>{row.customerName}</Td>
-                <Td right mono><StockQtyText qty={row.qty} item={item} /></Td>
+                <Td right mono>{row.inQty ? <StockQtyText qty={row.inQty} item={item} /> : '-'}</Td>
+                <Td right mono>{row.outQty ? <StockQtyText qty={row.outQty} item={item} /> : '-'}</Td>
+                <Td right mono strong><StockQtyText qty={row.balance} item={item} /></Td>
                 <Td>{row.note || '-'}</Td>
                 <Td right>
                   <div className="inline-flex gap-2">
-                    <button type="button" className={rowActionButtonClass} onClick={() => onEdit(row)}>Edit</button>
-                    <button type="button" className={rowDeleteButtonClass} onClick={() => onDelete(row)} disabled={deleting}>Delete</button>
+                    {readOnly ? (
+                      <span className="text-xs font-medium text-slate-400">From bill</span>
+                    ) : (
+                      <>
+                        <button type="button" className={rowActionButtonClass} onClick={() => onEdit(row)}>Edit</button>
+                        <button type="button" className={rowDeleteButtonClass} onClick={() => onDelete(row)} disabled={deleting}>Delete</button>
+                      </>
+                    )}
                   </div>
                 </Td>
               </tr>
@@ -1354,13 +1370,35 @@ function LogsTable({
   )
 }
 
+function mapRecentStockLog(row: RecentStockLogRecord): StockLogRow {
+  return {
+    id: row.id,
+    rawId: row.rawId,
+    itemId: row.itemId,
+    customerId: row.customerId,
+    type: row.editableType,
+    date: row.date,
+    itemName: row.itemName,
+    customerName: row.customerName,
+    inQty: row.inQty,
+    outQty: row.outQty,
+    balance: row.balance,
+    note: row.note,
+  }
+}
+
 function findGeneralCustomer(customers: StockCustomerOption[]) {
   return customers.find((customer) => customer.customerName.toLowerCase() === 'general' || customer.companyName.toLowerCase() === 'general')
 }
 
 function StockLogTypeBadge({ type }: { type: StockLogRow['type'] }) {
-  const typeClass = type === 'received' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-800'
-  return <span className={`inline-flex rounded border px-2 py-0.5 text-xs font-medium ${typeClass}`}>{type === 'received' ? 'Received' : 'Adjusted'}</span>
+  const typeClass =
+    type === 'received'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      : type === 'sold'
+        ? 'border-red-200 bg-red-50 text-red-700'
+        : 'border-amber-200 bg-amber-50 text-amber-800'
+  return <span className={`inline-flex rounded border px-2 py-0.5 text-xs font-medium ${typeClass}`}>{type === 'received' ? 'Received' : type === 'sold' ? 'Sold' : 'Adjusted'}</span>
 }
 
 function adjustmentQty(inputQty: number, mode: AdjustmentMode, currentStock: number) {

@@ -128,6 +128,9 @@ EOF
   rotate_remote_file "kapil_db_backup_new.zip" "kapil_db_backup_old.zip"
   upload_remote_file "${db_zip}" "kapil_db_backup_new.zip"
 
+  log "Cleaning up old B2 versions and aborted uploads..."
+  rclone cleanup "${RCLONE_REMOTE}:" >> "${LOG_FILE}" 2>&1 || true
+
   log "Backup job finished successfully"
 }
 

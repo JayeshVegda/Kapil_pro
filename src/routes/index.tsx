@@ -166,14 +166,16 @@ function DashboardPage() {
           />
           <MiniMetric
             label="Spindle Bags"
-            value={String(Math.round(data.thisMonthSummary.spindleBags))}
-            trend={`${Math.round(data.thisMonthSummary.spindleKg)} kg`}
+            value={`${formatWhole(data.itemComparisons.spindle.bags)} bags`}
+            valueDetail={`${formatWhole(data.itemComparisons.spindle.kg)} kg`}
+            trend={formatBagVsLastMonth(data.itemComparisons.spindle.bags, data.itemComparisons.spindle.previousBags)}
             icon={<Receipt size={12} className="shrink-0" />}
           />
           <MiniMetric
             label="Tapper Plug Bags"
-            value={String(Math.round(data.thisMonthSummary.tapperPlugBags))}
-            trend={`${Math.round(data.thisMonthSummary.tapperPlugKg)} kg`}
+            value={`${formatWhole(data.itemComparisons.tapperPlug.bags)} bags`}
+            valueDetail={`${formatWhole(data.itemComparisons.tapperPlug.kg)} kg`}
+            trend={formatBagVsLastMonth(data.itemComparisons.tapperPlug.bags, data.itemComparisons.tapperPlug.previousBags)}
             icon={<Receipt size={12} className="shrink-0" />}
           />
           <MiniMetric
@@ -307,12 +309,14 @@ function DashboardPage() {
 function MiniMetric({
   label,
   value,
+  valueDetail,
   trend,
   icon,
   to,
 }: {
   label: string
   value: string
+  valueDetail?: string
   trend: string
   icon: ReactNode
   /** When set, the whole tile is clickable (e.g. Sales → Print bill). */
@@ -324,7 +328,10 @@ function MiniMetric({
         {icon}
         <span>{label}</span>
       </div>
-      <p className="mt-1 font-mono text-xl font-bold leading-tight tracking-tight text-slate-900">{value}</p>
+      <p className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 font-mono leading-tight tracking-tight text-slate-900">
+        <span className="text-xl font-bold">{value}</span>
+        {valueDetail ? <span className="text-[11px] font-semibold text-slate-500">{valueDetail}</span> : null}
+      </p>
       <p className="mt-1 line-clamp-2 text-xs leading-snug text-slate-500">{trend}</p>
     </>
   )
@@ -455,6 +462,13 @@ function StatusBadge({ status }: { status: string }) {
 
 const fmtMoney = (v: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v)
 const fmtMoneyCompact = (v: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', notation: 'compact', maximumFractionDigits: 1 }).format(v)
+const formatWhole = (v: number) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(v))
+
+function formatBagVsLastMonth(current: number, previous: number) {
+  const delta = Math.round(current - previous)
+  const sign = delta > 0 ? '+' : delta < 0 ? '-' : '±'
+  return `vs ${sign}${formatWhole(Math.abs(delta))} bags (${formatWhole(previous)} last month)`
+}
 
 function fiscalYearMonthKeys(today: string) {
   const [yearRaw, monthRaw] = today.slice(0, 7).split('-')

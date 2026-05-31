@@ -4,8 +4,8 @@ set -euo pipefail
 # Low-RAM deployment for the current Kapil compose + Caddy setup.
 # Strategy:
 # 1) Build static frontend with Node 24
-# 2) Keep nginx/PocketBase containers managed by docker compose
-# 3) Restart nginx so mounted config/header changes are loaded
+# 2) Create a local PocketBase data backup before replacing containers
+# 3) Remove old compose containers and recreate them
 # 4) Verify public app, PocketBase, and market-rate endpoints
 
 APP_DIR="${APP_DIR:-/opt/docker/apps/Kapil_Pro}"
@@ -25,11 +25,19 @@ npm ci --prefer-offline
 echo "==> Building static frontend"
 npm run build
 
-echo "==> Ensuring compose services are running"
-docker compose up -d
+if [[ -d "pb_data" ]]; then
+  BACKUP_DIR="${BACKUP_DIR:-${APP_DIR}/logs/deploy-backups}"
+  BACKUP_FILE="${BACKUP_DIR}/pb_data_$(date -u +%Y%m%dT%H%M%SZ).zip"
+  mkdir -p "${BACKUP_DIR}"
+  echo "==> Creating local PocketBase backup: ${BACKUP_FILE}"
+  zip -qr "${BACKUP_FILE}" pb_data
+fi
 
-echo "==> Reloading web container config"
-docker compose restart kapil >/dev/null
+echo "==> Removing old compose containers"
+docker compose down --remove-orphans
+
+echo "==> Starting compose services"
+docker compose up -d
 
 echo "==> Verifying app endpoint"
 curl -fsS --max-time 20 "${DOMAIN}" >/dev/null
