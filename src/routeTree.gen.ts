@@ -22,9 +22,20 @@ import { Route as ExportReportsRouteImport } from './routes/export-reports'
 import { Route as DataHealthRouteImport } from './routes/data-health'
 import { Route as CustomersRouteImport } from './routes/customers'
 import { Route as ControlRoomRouteImport } from './routes/control-room'
+import { Route as CastingRouteImport } from './routes/casting'
 import { Route as CalendarRouteImport } from './routes/calendar'
+import { Route as BuyingRouteImport } from './routes/buying'
 import { Route as BackupRouteImport } from './routes/backup'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CastingIndexRouteImport } from './routes/casting/index'
+import { Route as CastingNewSessionRouteImport } from './routes/casting/new-session'
+import { Route as CastingMaterialsRouteImport } from './routes/casting/materials'
+import { Route as CastingLogRouteImport } from './routes/casting/log'
+import { Route as BuyingSuppliersRouteImport } from './routes/buying/suppliers'
+import { Route as BuyingSupplierPaymentsRouteImport } from './routes/buying/supplier-payments'
+import { Route as BuyingSupplierLedgerRouteImport } from './routes/buying/supplier-ledger'
+import { Route as BuyingPurchaseLogsRouteImport } from './routes/buying/purchase-logs'
+import { Route as BuyingNewPurchaseRouteImport } from './routes/buying/new-purchase'
 
 const TransactionsRoute = TransactionsRouteImport.update({
   id: '/transactions',
@@ -91,9 +102,19 @@ const ControlRoomRoute = ControlRoomRouteImport.update({
   path: '/control-room',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CastingRoute = CastingRouteImport.update({
+  id: '/casting',
+  path: '/casting',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CalendarRoute = CalendarRouteImport.update({
   id: '/calendar',
   path: '/calendar',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BuyingRoute = BuyingRouteImport.update({
+  id: '/buying',
+  path: '/buying',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BackupRoute = BackupRouteImport.update({
@@ -106,11 +127,58 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CastingIndexRoute = CastingIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => CastingRoute,
+} as any)
+const CastingNewSessionRoute = CastingNewSessionRouteImport.update({
+  id: '/new-session',
+  path: '/new-session',
+  getParentRoute: () => CastingRoute,
+} as any)
+const CastingMaterialsRoute = CastingMaterialsRouteImport.update({
+  id: '/materials',
+  path: '/materials',
+  getParentRoute: () => CastingRoute,
+} as any)
+const CastingLogRoute = CastingLogRouteImport.update({
+  id: '/log',
+  path: '/log',
+  getParentRoute: () => CastingRoute,
+} as any)
+const BuyingSuppliersRoute = BuyingSuppliersRouteImport.update({
+  id: '/suppliers',
+  path: '/suppliers',
+  getParentRoute: () => BuyingRoute,
+} as any)
+const BuyingSupplierPaymentsRoute = BuyingSupplierPaymentsRouteImport.update({
+  id: '/supplier-payments',
+  path: '/supplier-payments',
+  getParentRoute: () => BuyingRoute,
+} as any)
+const BuyingSupplierLedgerRoute = BuyingSupplierLedgerRouteImport.update({
+  id: '/supplier-ledger',
+  path: '/supplier-ledger',
+  getParentRoute: () => BuyingRoute,
+} as any)
+const BuyingPurchaseLogsRoute = BuyingPurchaseLogsRouteImport.update({
+  id: '/purchase-logs',
+  path: '/purchase-logs',
+  getParentRoute: () => BuyingRoute,
+} as any)
+const BuyingNewPurchaseRoute = BuyingNewPurchaseRouteImport.update({
+  id: '/new-purchase',
+  path: '/new-purchase',
+  getParentRoute: () => BuyingRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/buying': typeof BuyingRouteWithChildren
   '/calendar': typeof CalendarRoute
+  '/casting': typeof CastingRouteWithChildren
   '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
   '/data-health': typeof DataHealthRoute
@@ -124,10 +192,20 @@ export interface FileRoutesByFullPath {
   '/stock': typeof StockRoute
   '/stock-in': typeof StockInRoute
   '/transactions': typeof TransactionsRoute
+  '/buying/new-purchase': typeof BuyingNewPurchaseRoute
+  '/buying/purchase-logs': typeof BuyingPurchaseLogsRoute
+  '/buying/supplier-ledger': typeof BuyingSupplierLedgerRoute
+  '/buying/supplier-payments': typeof BuyingSupplierPaymentsRoute
+  '/buying/suppliers': typeof BuyingSuppliersRoute
+  '/casting/log': typeof CastingLogRoute
+  '/casting/materials': typeof CastingMaterialsRoute
+  '/casting/new-session': typeof CastingNewSessionRoute
+  '/casting/': typeof CastingIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/buying': typeof BuyingRouteWithChildren
   '/calendar': typeof CalendarRoute
   '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
@@ -142,12 +220,23 @@ export interface FileRoutesByTo {
   '/stock': typeof StockRoute
   '/stock-in': typeof StockInRoute
   '/transactions': typeof TransactionsRoute
+  '/buying/new-purchase': typeof BuyingNewPurchaseRoute
+  '/buying/purchase-logs': typeof BuyingPurchaseLogsRoute
+  '/buying/supplier-ledger': typeof BuyingSupplierLedgerRoute
+  '/buying/supplier-payments': typeof BuyingSupplierPaymentsRoute
+  '/buying/suppliers': typeof BuyingSuppliersRoute
+  '/casting/log': typeof CastingLogRoute
+  '/casting/materials': typeof CastingMaterialsRoute
+  '/casting/new-session': typeof CastingNewSessionRoute
+  '/casting': typeof CastingIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/buying': typeof BuyingRouteWithChildren
   '/calendar': typeof CalendarRoute
+  '/casting': typeof CastingRouteWithChildren
   '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
   '/data-health': typeof DataHealthRoute
@@ -161,13 +250,24 @@ export interface FileRoutesById {
   '/stock': typeof StockRoute
   '/stock-in': typeof StockInRoute
   '/transactions': typeof TransactionsRoute
+  '/buying/new-purchase': typeof BuyingNewPurchaseRoute
+  '/buying/purchase-logs': typeof BuyingPurchaseLogsRoute
+  '/buying/supplier-ledger': typeof BuyingSupplierLedgerRoute
+  '/buying/supplier-payments': typeof BuyingSupplierPaymentsRoute
+  '/buying/suppliers': typeof BuyingSuppliersRoute
+  '/casting/log': typeof CastingLogRoute
+  '/casting/materials': typeof CastingMaterialsRoute
+  '/casting/new-session': typeof CastingNewSessionRoute
+  '/casting/': typeof CastingIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/backup'
+    | '/buying'
     | '/calendar'
+    | '/casting'
     | '/control-room'
     | '/customers'
     | '/data-health'
@@ -181,10 +281,20 @@ export interface FileRouteTypes {
     | '/stock'
     | '/stock-in'
     | '/transactions'
+    | '/buying/new-purchase'
+    | '/buying/purchase-logs'
+    | '/buying/supplier-ledger'
+    | '/buying/supplier-payments'
+    | '/buying/suppliers'
+    | '/casting/log'
+    | '/casting/materials'
+    | '/casting/new-session'
+    | '/casting/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/backup'
+    | '/buying'
     | '/calendar'
     | '/control-room'
     | '/customers'
@@ -199,11 +309,22 @@ export interface FileRouteTypes {
     | '/stock'
     | '/stock-in'
     | '/transactions'
+    | '/buying/new-purchase'
+    | '/buying/purchase-logs'
+    | '/buying/supplier-ledger'
+    | '/buying/supplier-payments'
+    | '/buying/suppliers'
+    | '/casting/log'
+    | '/casting/materials'
+    | '/casting/new-session'
+    | '/casting'
   id:
     | '__root__'
     | '/'
     | '/backup'
+    | '/buying'
     | '/calendar'
+    | '/casting'
     | '/control-room'
     | '/customers'
     | '/data-health'
@@ -217,12 +338,23 @@ export interface FileRouteTypes {
     | '/stock'
     | '/stock-in'
     | '/transactions'
+    | '/buying/new-purchase'
+    | '/buying/purchase-logs'
+    | '/buying/supplier-ledger'
+    | '/buying/supplier-payments'
+    | '/buying/suppliers'
+    | '/casting/log'
+    | '/casting/materials'
+    | '/casting/new-session'
+    | '/casting/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BackupRoute: typeof BackupRoute
+  BuyingRoute: typeof BuyingRouteWithChildren
   CalendarRoute: typeof CalendarRoute
+  CastingRoute: typeof CastingRouteWithChildren
   ControlRoomRoute: typeof ControlRoomRoute
   CustomersRoute: typeof CustomersRoute
   DataHealthRoute: typeof DataHealthRoute
@@ -331,11 +463,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ControlRoomRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/casting': {
+      id: '/casting'
+      path: '/casting'
+      fullPath: '/casting'
+      preLoaderRoute: typeof CastingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/calendar': {
       id: '/calendar'
       path: '/calendar'
       fullPath: '/calendar'
       preLoaderRoute: typeof CalendarRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/buying': {
+      id: '/buying'
+      path: '/buying'
+      fullPath: '/buying'
+      preLoaderRoute: typeof BuyingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/backup': {
@@ -352,13 +498,114 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/casting/': {
+      id: '/casting/'
+      path: '/'
+      fullPath: '/casting/'
+      preLoaderRoute: typeof CastingIndexRouteImport
+      parentRoute: typeof CastingRoute
+    }
+    '/casting/new-session': {
+      id: '/casting/new-session'
+      path: '/new-session'
+      fullPath: '/casting/new-session'
+      preLoaderRoute: typeof CastingNewSessionRouteImport
+      parentRoute: typeof CastingRoute
+    }
+    '/casting/materials': {
+      id: '/casting/materials'
+      path: '/materials'
+      fullPath: '/casting/materials'
+      preLoaderRoute: typeof CastingMaterialsRouteImport
+      parentRoute: typeof CastingRoute
+    }
+    '/casting/log': {
+      id: '/casting/log'
+      path: '/log'
+      fullPath: '/casting/log'
+      preLoaderRoute: typeof CastingLogRouteImport
+      parentRoute: typeof CastingRoute
+    }
+    '/buying/suppliers': {
+      id: '/buying/suppliers'
+      path: '/suppliers'
+      fullPath: '/buying/suppliers'
+      preLoaderRoute: typeof BuyingSuppliersRouteImport
+      parentRoute: typeof BuyingRoute
+    }
+    '/buying/supplier-payments': {
+      id: '/buying/supplier-payments'
+      path: '/supplier-payments'
+      fullPath: '/buying/supplier-payments'
+      preLoaderRoute: typeof BuyingSupplierPaymentsRouteImport
+      parentRoute: typeof BuyingRoute
+    }
+    '/buying/supplier-ledger': {
+      id: '/buying/supplier-ledger'
+      path: '/supplier-ledger'
+      fullPath: '/buying/supplier-ledger'
+      preLoaderRoute: typeof BuyingSupplierLedgerRouteImport
+      parentRoute: typeof BuyingRoute
+    }
+    '/buying/purchase-logs': {
+      id: '/buying/purchase-logs'
+      path: '/purchase-logs'
+      fullPath: '/buying/purchase-logs'
+      preLoaderRoute: typeof BuyingPurchaseLogsRouteImport
+      parentRoute: typeof BuyingRoute
+    }
+    '/buying/new-purchase': {
+      id: '/buying/new-purchase'
+      path: '/new-purchase'
+      fullPath: '/buying/new-purchase'
+      preLoaderRoute: typeof BuyingNewPurchaseRouteImport
+      parentRoute: typeof BuyingRoute
+    }
   }
 }
+
+interface BuyingRouteChildren {
+  BuyingNewPurchaseRoute: typeof BuyingNewPurchaseRoute
+  BuyingPurchaseLogsRoute: typeof BuyingPurchaseLogsRoute
+  BuyingSupplierLedgerRoute: typeof BuyingSupplierLedgerRoute
+  BuyingSupplierPaymentsRoute: typeof BuyingSupplierPaymentsRoute
+  BuyingSuppliersRoute: typeof BuyingSuppliersRoute
+}
+
+const BuyingRouteChildren: BuyingRouteChildren = {
+  BuyingNewPurchaseRoute: BuyingNewPurchaseRoute,
+  BuyingPurchaseLogsRoute: BuyingPurchaseLogsRoute,
+  BuyingSupplierLedgerRoute: BuyingSupplierLedgerRoute,
+  BuyingSupplierPaymentsRoute: BuyingSupplierPaymentsRoute,
+  BuyingSuppliersRoute: BuyingSuppliersRoute,
+}
+
+const BuyingRouteWithChildren =
+  BuyingRoute._addFileChildren(BuyingRouteChildren)
+
+interface CastingRouteChildren {
+  CastingLogRoute: typeof CastingLogRoute
+  CastingMaterialsRoute: typeof CastingMaterialsRoute
+  CastingNewSessionRoute: typeof CastingNewSessionRoute
+  CastingIndexRoute: typeof CastingIndexRoute
+}
+
+const CastingRouteChildren: CastingRouteChildren = {
+  CastingLogRoute: CastingLogRoute,
+  CastingMaterialsRoute: CastingMaterialsRoute,
+  CastingNewSessionRoute: CastingNewSessionRoute,
+  CastingIndexRoute: CastingIndexRoute,
+}
+
+const CastingRouteWithChildren =
+  CastingRoute._addFileChildren(CastingRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BackupRoute: BackupRoute,
+  BuyingRoute: BuyingRouteWithChildren,
   CalendarRoute: CalendarRoute,
+  CastingRoute: CastingRouteWithChildren,
   ControlRoomRoute: ControlRoomRoute,
   CustomersRoute: CustomersRoute,
   DataHealthRoute: DataHealthRoute,

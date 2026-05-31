@@ -31,6 +31,16 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/backup': { title: 'Backup', subtitle: 'Export and validate data snapshots' },
   '/print-bill': { title: 'Print Bill', subtitle: 'Filter, preview, and print bills' },
   '/control-room': { title: 'Control Room', subtitle: 'Admin operations, command workflows, and system controls' },
+  '/buying': { title: 'Buying Overview', subtitle: 'Scrap procurement workspace' },
+  '/buying/suppliers': { title: 'Suppliers', subtitle: 'Supplier master and payable setup' },
+  '/buying/new-purchase': { title: 'New Purchase', subtitle: 'Record incoming scrap purchases' },
+  '/buying/supplier-payments': { title: 'Supplier Payments', subtitle: 'Record supplier-side payments' },
+  '/buying/purchase-logs': { title: 'Purchase Logs', subtitle: 'Review buying activity' },
+  '/buying/supplier-ledger': { title: 'Supplier Ledger', subtitle: 'Supplier payable ledger' },
+  '/casting': { title: 'Casting Overview', subtitle: 'Furnace sessions, output, and cost signals' },
+  '/casting/new-session': { title: 'New Casting Session', subtitle: 'Record material inputs and furnace output' },
+  '/casting/log': { title: 'Casting Log', subtitle: 'Review and edit casting sessions' },
+  '/casting/materials': { title: 'Casting Materials', subtitle: 'Manage casting material master data' },
 }
 
 const DOC_TITLE_SUFFIX = 'Kapil Billing'
@@ -64,6 +74,16 @@ const commandRoutes = [
   { label: 'Data Health', path: '/data-health' },
   { label: 'Backup', path: '/backup' },
   { label: 'Control Room', path: '/control-room' },
+  { label: 'Buying Overview', path: '/buying' },
+  { label: 'Suppliers', path: '/buying/suppliers' },
+  { label: 'New Purchase', path: '/buying/new-purchase' },
+  { label: 'Supplier Payments', path: '/buying/supplier-payments' },
+  { label: 'Purchase Logs', path: '/buying/purchase-logs' },
+  { label: 'Supplier Ledger', path: '/buying/supplier-ledger' },
+  { label: 'Casting Overview', path: '/casting' },
+  { label: 'New Casting Session', path: '/casting/new-session' },
+  { label: 'Casting Log', path: '/casting/log' },
+  { label: 'Casting Materials', path: '/casting/materials' },
 ]
 
 type CommandDraft = {

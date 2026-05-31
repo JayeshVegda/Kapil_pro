@@ -8,8 +8,8 @@ set -euo pipefail
 # 3) Remove old compose containers and recreate them
 # 4) Verify public app, PocketBase, and market-rate endpoints
 
-APP_DIR="${APP_DIR:-/opt/docker/apps/Kapil_Pro}"
-DOMAIN="${DOMAIN:-https://kapil.zayu.dev}"
+APP_DIR="${APP_DIR:-/opt/docker/apps/Kapil_Test}"
+DOMAIN="${DOMAIN:-https://kapil-test.zayu.dev}"
 NODE_BIN_DIR="${NODE_BIN_DIR:-/home/ubuntu/.nvm/versions/node/v24.15.0/bin}"
 
 cd "${APP_DIR}"

@@ -1,7 +1,7 @@
 services:
-  kapil:
+  kapil-test:
     image: nginx:alpine
-    container_name: kapil
+    container_name: kapil-test
     restart: unless-stopped
     volumes:
       - ./dist:/usr/share/nginx/html:ro
@@ -9,9 +9,9 @@ services:
     networks:
       - caddy-net
 
-  kapil-pb:
+  kapil-test-pb:
     image: ghcr.io/muchobien/pocketbase:latest
-    container_name: kapil-pb
+    container_name: kapil-test-pb
     restart: unless-stopped
     volumes:
       - ./pb_data:/pb_data
