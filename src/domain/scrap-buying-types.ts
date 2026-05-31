@@ -1,86 +1,129 @@
-/**
- * Data shapes for Scrap Buying — mirrors billing/payments for supplier-side procurement.
- * Not wired to PocketBase yet; used for typings and placeholder UI only.
- */
+export type BillMode = 'kacha' | 'gst'
+export type SupplierPaymentMode = 'cash' | 'bank' | 'upi' | 'cheque' | 'other'
+export type PurchaseCalculationMode = 'deduct_before_amount' | 'deduct_after_amount'
+export type PurchaseDeductionKind = 'faulty_return' | 'rate_cut' | 'bardan' | 'other'
+export type PurchasePaidStatus = 'pending' | 'partial' | 'paid'
 
-export type SupplierId = string
-
-export interface SupplierMaster {
-  id: SupplierId
+export type SupplierMaster = {
+  id: string
   name: string
   active: boolean
-  phone?: string
-  gstin?: string
-  address?: string
-  note?: string
-  /** Opening payable (supplier is creditor) — positive means we owe. */
+  phone: string
+  gstin: string
+  address: string
+  defaultBillMode: BillMode
   openingPayable: number
-  openingPayableDate?: string
+  openingPayableDate: string
+  notes: string
   createdAt: string
   updatedAt: string
 }
 
-/** One purchase line — raw material weighed in. */
-export interface PurchaseMaterialLine {
-  id: string
+export type PurchaseMaterialLineInput = {
   materialName: string
-  qtyKg: number
-  ratePerKg: number
-  lineTotal: number
+  grossKg: number
+  bagCount: number
+  bagKg: number
+  rate: number
+  calculationMode: PurchaseCalculationMode
 }
 
-/** Deductions reduce net payable (returns, packaging / bardan credit, etc.). */
-export interface PurchaseDeductionLine {
+export type PurchaseMaterialLine = PurchaseMaterialLineInput & {
   id: string
-  kind: 'material_return' | 'bardan' | 'other'
+  purchaseBillId: string
+  netKg: number
+  grossAmount: number
+  bagDeductionAmount: number
+  lineAmount: number
+}
+
+export type PurchaseDeductionLineInput = {
+  kind: PurchaseDeductionKind
+  materialName: string
   description: string
+  qtyKg: number
+  rate: number
   amount: number
+  affectsStock: boolean
 }
 
-export interface PurchaseEntry {
+export type PurchaseDeductionLine = PurchaseDeductionLineInput & {
   id: string
-  businessDate: string
-  supplierId: SupplierId
+  purchaseBillId: string
+}
+
+export type PurchaseEntry = {
+  id: string
+  date: string
+  supplierId: string
   supplierName: string
-  bookRef?: string
-  note?: string
+  billMode: BillMode
+  supplierBillNo: string
+  internalRef: string
+  materialTotal: number
+  deductionTotal: number
+  taxableValue: number
+  gstRate: number
+  gstAmount: number
+  grandTotal: number
+  paidStatus: PurchasePaidStatus
+  supplierGstin: string
+  invoiceNo: string
+  invoiceDate: string
+  note: string
+  createdAt: string
+  updatedAt: string
   materialLines: PurchaseMaterialLine[]
   deductionLines: PurchaseDeductionLine[]
-  grossAmount: number
-  totalDeductions: number
-  netPayable: number
-  createdAt: string
-  updatedAt: string
 }
 
-export type SupplierPaymentMode = 'Cash' | 'Bank'
-
-export interface SupplierPayment {
+export type SupplierPayment = {
   id: string
-  businessDate: string
-  supplierId: SupplierId
+  date: string
+  supplierId: string
   supplierName: string
   amount: number
   mode: SupplierPaymentMode
-  note?: string
+  billModeScope: BillMode
+  note: string
   createdAt: string
   updatedAt: string
 }
 
-export type PurchaseLogRow =
-  | { kind: 'purchase'; record: PurchaseEntry }
-  | { kind: 'payment'; record: SupplierPayment }
-
-export interface SupplierLedgerOpening {
-  asOfDate: string
-  openingPayable: number
+export type SupplierPaymentAllocation = {
+  id: string
+  supplierPaymentId: string
+  purchaseBillId: string
+  amount: number
 }
 
-export interface SupplierLedgerMovement {
+export type SupplierLedgerMovement = {
   id: string
-  businessDate: string
-  direction: 'debit_payable' | 'credit_payable'
+  date: string
+  createdAt: string
+  kind: 'opening' | 'purchase' | 'payment'
+  billMode?: BillMode
   narration: string
-  amount: number
+  debit: number
+  credit: number
   balanceAfter: number
+}
+
+export type RawMaterialStockRow = {
+  materialName: string
+  purchasedKg: number
+  faultyReturnKg: number
+  currentKg: number
+  purchaseValue: number
+  returnValue: number
+}
+
+export type PurchaseTotals = {
+  materialTotal: number
+  deductionTotal: number
+  taxableValue: number
+  gstAmount: number
+  grandTotal: number
+  lines: Array<Omit<PurchaseMaterialLine, 'id' | 'purchaseBillId'>>
+  deductions: PurchaseDeductionLineInput[]
 }

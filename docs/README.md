@@ -11,6 +11,7 @@
 - `features/new-customers-page-notes.md`
 - `features/party-ledger-page-notes.md`
 - `features/company-report-page-notes.md`
+- `features/procurement-casting-sales-workflow.md`
 
 ## Operations
 

@@ -45,6 +45,18 @@ curl -fsS --max-time 20 "${DOMAIN}" >/dev/null
 echo "==> Verifying PocketBase health through domain proxy"
 curl -fsS --max-time 20 "${DOMAIN}/pb/api/health" >/dev/null
 
+if [[ -f ".env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source ".env"
+  set +a
+fi
+
+export PB_URL="${PB_URL:-${DOMAIN}/pb}"
+echo "==> Ensuring PocketBase collections"
+node scripts/ensure-casting-collections.mjs
+node scripts/ensure-buying-collections.mjs
+
 echo "==> Verifying market-rate proxy"
 curl -fsS --max-time 20 "${DOMAIN}/api/market-rate" >/dev/null
 
