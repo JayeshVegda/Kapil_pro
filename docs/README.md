@@ -15,7 +15,9 @@
 ## Operations
 
 - `operations/deploy/`
+- `operations/security-auth-setup.md`
 - `operations/incident-notes.md`
+- `operations/audits/`
 
 ## Data & Migrations
 

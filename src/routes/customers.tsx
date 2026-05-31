@@ -3,8 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Edit3, Plus } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
+import { toUserMessage } from '@/app/errors'
+import { DateInput } from '@/components/ui/date-input'
 import { createCustomer, loadCustomersWithLedgerContext, toggleCustomerActive, updateCustomer } from '@/data/customers'
 import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
+import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 
@@ -15,8 +18,10 @@ export const Route = createFileRoute('/customers')({
 const CUSTOMER_QUERY_KEY = ['customers-ledger'] as const
 
 const customerSchema = z.object({
+  companyName: z.string().trim().min(1, 'Company name is required'),
   name: z.string().trim().min(1, 'Customer name is required'),
   openingBalance: z.number(),
+  openingBalanceDate: z.string().optional(),
   active: z.boolean(),
   phone: z.string().optional(),
   gstin: z.string().optional(),
@@ -27,8 +32,10 @@ const customerSchema = z.object({
 
 type CustomerFormState = {
   id: string | null
+  companyName: string
   name: string
   openingBalance: number
+  openingBalanceDate: string
   active: boolean
   phone: string
   gstin: string
@@ -39,8 +46,10 @@ type CustomerFormState = {
 
 const defaultCustomerFormState = (): CustomerFormState => ({
   id: null,
+  companyName: '',
   name: '',
   openingBalance: 0,
+  openingBalanceDate: '',
   active: true,
   phone: '',
   gstin: '',
@@ -60,26 +69,13 @@ function CustomersPage() {
     queryFn: loadCustomersWithLedgerContext,
   })
 
-  const filteredRows = customersQuery.data ?? []
-  const summary = useMemo(() => {
-    return filteredRows.reduce(
-      (acc, row) => {
-        acc.opening += row.openingBalance
-        acc.billed += row.billedTotal
-        acc.paid += row.paidTotal
-        acc.net += row.netBalance
-        if (row.lastBillDate > acc.lastBillDate) acc.lastBillDate = row.lastBillDate
-        if (row.lastPaymentDate > acc.lastPaymentDate) acc.lastPaymentDate = row.lastPaymentDate
-        return acc
-      },
-      { opening: 0, billed: 0, paid: 0, net: 0, lastBillDate: '', lastPaymentDate: '' },
-    )
-  }, [filteredRows])
+  const filteredRows = useMemo(() => customersQuery.data ?? [], [customersQuery.data])
 
   const createOrUpdateMutation = useMutation({
     mutationFn: async () => {
       const parsed = customerSchema.safeParse({
         ...formState,
+        companyName: formState.companyName.trim(),
         name: formState.name.trim(),
       })
       if (!parsed.success) {
@@ -87,8 +83,10 @@ function CustomersPage() {
       }
 
       const payload = {
+        companyName: parsed.data.companyName,
         name: parsed.data.name,
         openingBalance: parsed.data.openingBalance,
+        openingBalanceDate: parsed.data.openingBalanceDate ?? '',
         active: parsed.data.active,
         phone: parsed.data.phone ?? '',
         gstin: parsed.data.gstin ?? '',
@@ -112,7 +110,7 @@ function CustomersPage() {
       ])
     },
     onError: (error) => {
-      setStatusText(error instanceof Error ? error.message : 'Failed to save customer')
+      setStatusText(toUserMessage(error))
     },
   })
 
@@ -127,7 +125,7 @@ function CustomersPage() {
       ])
     },
     onError: (error) => {
-      setStatusText(error instanceof Error ? error.message : 'Failed to update customer status')
+      setStatusText(toUserMessage(error))
     },
   })
 
@@ -139,8 +137,10 @@ function CustomersPage() {
   function openEditForm(row: (typeof filteredRows)[number]) {
     setFormState({
       id: row.customer.id,
+      companyName: row.customer.companyName || row.customer.name,
       name: row.customer.name,
       openingBalance: row.customer.openingBalance,
+      openingBalanceDate: row.customer.openingBalanceDate ?? '',
       active: row.customer.active,
       phone: row.customer.phone ?? '',
       gstin: row.customer.gstin ?? '',
@@ -150,7 +150,7 @@ function CustomersPage() {
     })
   }
 
-  const canSubmitForm = formState.name.trim().length > 0 && !createOrUpdateMutation.isPending
+  const canSubmitForm = formState.companyName.trim().length > 0 && formState.name.trim().length > 0 && !createOrUpdateMutation.isPending
 
   return (
     <div className="w-full space-y-8 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
@@ -171,14 +171,17 @@ function CustomersPage() {
             </div>
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
-            <Field label="Name *">
-              <input className={inputClass} type="text" value={formState.name} onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))} />
+            <Field label="Company Name *">
+              <input className={inputClass} type="text" value={formState.companyName} onChange={(event) => setFormState((prev) => ({ ...prev, companyName: event.target.value }))} />
             </Field>
-            <Field label="Phone">
-              <input className={inputClass} type="text" value={formState.phone} onChange={(event) => setFormState((prev) => ({ ...prev, phone: event.target.value }))} />
+            <Field label="Customer Name *">
+              <input className={inputClass} type="text" value={formState.name} onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))} />
             </Field>
             <Field label="Opening Balance">
               <input className={inputClass} type="number" value={formState.openingBalance || ''} onChange={(event) => setFormState((prev) => ({ ...prev, openingBalance: Number(event.target.value || 0) }))} />
+            </Field>
+            <Field label="Opening Balance Date">
+              <DateInput className={inputClass} value={formState.openingBalanceDate} onChange={(nextDate) => setFormState((prev) => ({ ...prev, openingBalanceDate: nextDate }))} />
             </Field>
             <Field label="Status">
               <select className={inputClass} value={formState.active ? 'yes' : 'no'} onChange={(event) => setFormState((prev) => ({ ...prev, active: event.target.value === 'yes' }))}>
@@ -203,6 +206,9 @@ function CustomersPage() {
           </div>
           {showMoreDetails && (
             <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+              <Field label="Phone">
+                <input className={inputClass} type="text" value={formState.phone} onChange={(event) => setFormState((prev) => ({ ...prev, phone: event.target.value }))} />
+              </Field>
               <Field label="GSTIN (optional)">
                 <input className={inputClass} type="text" value={formState.gstin} onChange={(event) => setFormState((prev) => ({ ...prev, gstin: event.target.value }))} />
               </Field>
@@ -219,30 +225,20 @@ function CustomersPage() {
           )}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-          <Metric label="Opening" value={formatInrInteger(summary.opening)} />
-          <Metric label="Billed" value={formatInrInteger(summary.billed)} />
-          <Metric label="Paid" value={formatInrInteger(summary.paid)} />
-          <Metric label={summary.net >= 0 ? 'Due' : 'Advance'} value={formatInrInteger(Math.abs(summary.net))} emphasized />
-          <Metric label="Last" value={formatFullDate(latestDate(summary.lastBillDate, summary.lastPaymentDate) || '')} />
-        </div>
-      </section>
-
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="mb-3 text-sm font-semibold text-slate-900">Customer List</h3>
         {customersQuery.isLoading && <p className="text-sm text-slate-500">Loading customers...</p>}
         {customersQuery.isError && <p className="text-sm text-red-600">Unable to load customers.</p>}
         {!customersQuery.isLoading && !customersQuery.isError && (
           <div className="overflow-x-auto no-scrollbar">
-            <table className="w-full min-w-[860px]">
+            <table className="w-full min-w-[980px]">
               <thead>
                 <tr className="bg-slate-50">
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Name</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Phone</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">GSTIN</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Company Name</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Customer Name</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Opening Dt.</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Opening Balance</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Active</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Closing Balance</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
                 </tr>
               </thead>
@@ -270,17 +266,13 @@ function CustomersPage() {
                   <tr key={row.customer.id} className={`border-t border-slate-100 transition hover:bg-slate-50 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                     <td className="px-3 py-3">
                       <Link to="/ledger" search={{ customerId: row.customer.id, focus: '' }} className="text-sm font-medium text-blue-700 hover:text-blue-800 hover:underline">
-                        {row.customer.name}
+                        {formatCustomerDisplayName(row.customer.companyName, row.customer.name)}
                       </Link>
                     </td>
-                    <td className="px-3 py-3 text-sm text-slate-700">{row.customer.phone || '-'}</td>
-                    <td className="px-3 py-3 text-sm text-slate-700">{row.customer.gstin || '-'}</td>
+                    <td className="px-3 py-3 text-sm text-slate-700">{row.customer.name || '-'}</td>
+                    <td className="px-3 py-3 text-sm text-slate-600">{row.customer.openingBalanceDate ? formatFullDate(row.customer.openingBalanceDate) : '-'}</td>
                     <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{formatInrInteger(row.openingBalance)}</td>
-                    <td className="px-3 py-3">
-                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${row.customer.active ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
-                        {row.customer.active ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
+                    <td className="px-3 py-3 text-right font-mono text-sm font-semibold text-slate-900">{formatInrInteger(row.netBalance)}</td>
                     <td className="px-3 py-3 text-right">
                       <div className="inline-flex gap-2">
                         <button
@@ -319,21 +311,6 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       {children}
     </label>
   )
-}
-
-function Metric({ label, value, emphasized = false }: { label: string; value: string; emphasized?: boolean }) {
-  return (
-    <div className={`rounded-md border p-2.5 ${emphasized ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
-      <p className="text-[11px] uppercase tracking-[0.08em] text-slate-500">{label}</p>
-      <p className={`mt-0.5 font-mono tabular-nums ${emphasized ? 'text-lg font-bold text-amber-800' : 'text-base font-semibold text-slate-900'}`}>{value}</p>
-    </div>
-  )
-}
-
-function latestDate(a: string, b: string) {
-  if (!a) return b
-  if (!b) return a
-  return a >= b ? a : b
 }
 
 const inputClass =

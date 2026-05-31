@@ -1,3 +1,8 @@
+.env
+.env.*
+.env*
+!.env.example
+
 # Logs
 logs
 *.log
@@ -7,15 +12,28 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
-pb_data/*.db
-pb_data/*.db-*
+node_modules/
+dist/
+dist-ssr/
+pb_data/
+import-backups/
+logs/
 archive/runtime-snapshots/**
 !archive/runtime-snapshots/.gitkeep
+
 *.zip
+*.tar
+*.tar.gz
+*.db
+*.db-shm
+*.db-wal
+
+db-export-*.json
+docs/data/
+docs/**/*.csv
+docs/**/*.xls
+docs/**/*.xlsx
+docs/**/*.xlsm
 
 # Editor directories and files
 .vscode/*

@@ -10,19 +10,35 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TransactionsRouteImport } from './routes/transactions'
+import { Route as StockInRouteImport } from './routes/stock-in'
+import { Route as StockRouteImport } from './routes/stock'
 import { Route as PrintBillRouteImport } from './routes/print-bill'
 import { Route as NewPaymentRouteImport } from './routes/new-payment'
 import { Route as NewBillRouteImport } from './routes/new-bill'
 import { Route as MonthlyReportRouteImport } from './routes/monthly-report'
 import { Route as LedgerRouteImport } from './routes/ledger'
 import { Route as ItemsRouteImport } from './routes/items'
+import { Route as ExportReportsRouteImport } from './routes/export-reports'
+import { Route as DataHealthRouteImport } from './routes/data-health'
 import { Route as CustomersRouteImport } from './routes/customers'
+import { Route as ControlRoomRouteImport } from './routes/control-room'
+import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as BackupRouteImport } from './routes/backup'
 import { Route as IndexRouteImport } from './routes/index'
 
 const TransactionsRoute = TransactionsRouteImport.update({
   id: '/transactions',
   path: '/transactions',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StockInRoute = StockInRouteImport.update({
+  id: '/stock-in',
+  path: '/stock-in',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StockRoute = StockRouteImport.update({
+  id: '/stock',
+  path: '/stock',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PrintBillRoute = PrintBillRouteImport.update({
@@ -55,9 +71,29 @@ const ItemsRoute = ItemsRouteImport.update({
   path: '/items',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ExportReportsRoute = ExportReportsRouteImport.update({
+  id: '/export-reports',
+  path: '/export-reports',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DataHealthRoute = DataHealthRouteImport.update({
+  id: '/data-health',
+  path: '/data-health',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CustomersRoute = CustomersRouteImport.update({
   id: '/customers',
   path: '/customers',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ControlRoomRoute = ControlRoomRouteImport.update({
+  id: '/control-room',
+  path: '/control-room',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CalendarRoute = CalendarRouteImport.update({
+  id: '/calendar',
+  path: '/calendar',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BackupRoute = BackupRouteImport.update({
@@ -74,38 +110,56 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/calendar': typeof CalendarRoute
+  '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
+  '/data-health': typeof DataHealthRoute
+  '/export-reports': typeof ExportReportsRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
   '/monthly-report': typeof MonthlyReportRoute
   '/new-bill': typeof NewBillRoute
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/stock': typeof StockRoute
+  '/stock-in': typeof StockInRoute
   '/transactions': typeof TransactionsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/calendar': typeof CalendarRoute
+  '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
+  '/data-health': typeof DataHealthRoute
+  '/export-reports': typeof ExportReportsRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
   '/monthly-report': typeof MonthlyReportRoute
   '/new-bill': typeof NewBillRoute
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/stock': typeof StockRoute
+  '/stock-in': typeof StockInRoute
   '/transactions': typeof TransactionsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/calendar': typeof CalendarRoute
+  '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
+  '/data-health': typeof DataHealthRoute
+  '/export-reports': typeof ExportReportsRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
   '/monthly-report': typeof MonthlyReportRoute
   '/new-bill': typeof NewBillRoute
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/stock': typeof StockRoute
+  '/stock-in': typeof StockInRoute
   '/transactions': typeof TransactionsRoute
 }
 export interface FileRouteTypes {
@@ -113,50 +167,74 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/backup'
+    | '/calendar'
+    | '/control-room'
     | '/customers'
+    | '/data-health'
+    | '/export-reports'
     | '/items'
     | '/ledger'
     | '/monthly-report'
     | '/new-bill'
     | '/new-payment'
     | '/print-bill'
+    | '/stock'
+    | '/stock-in'
     | '/transactions'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/backup'
+    | '/calendar'
+    | '/control-room'
     | '/customers'
+    | '/data-health'
+    | '/export-reports'
     | '/items'
     | '/ledger'
     | '/monthly-report'
     | '/new-bill'
     | '/new-payment'
     | '/print-bill'
+    | '/stock'
+    | '/stock-in'
     | '/transactions'
   id:
     | '__root__'
     | '/'
     | '/backup'
+    | '/calendar'
+    | '/control-room'
     | '/customers'
+    | '/data-health'
+    | '/export-reports'
     | '/items'
     | '/ledger'
     | '/monthly-report'
     | '/new-bill'
     | '/new-payment'
     | '/print-bill'
+    | '/stock'
+    | '/stock-in'
     | '/transactions'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BackupRoute: typeof BackupRoute
+  CalendarRoute: typeof CalendarRoute
+  ControlRoomRoute: typeof ControlRoomRoute
   CustomersRoute: typeof CustomersRoute
+  DataHealthRoute: typeof DataHealthRoute
+  ExportReportsRoute: typeof ExportReportsRoute
   ItemsRoute: typeof ItemsRoute
   LedgerRoute: typeof LedgerRoute
   MonthlyReportRoute: typeof MonthlyReportRoute
   NewBillRoute: typeof NewBillRoute
   NewPaymentRoute: typeof NewPaymentRoute
   PrintBillRoute: typeof PrintBillRoute
+  StockRoute: typeof StockRoute
+  StockInRoute: typeof StockInRoute
   TransactionsRoute: typeof TransactionsRoute
 }
 
@@ -167,6 +245,20 @@ declare module '@tanstack/react-router' {
       path: '/transactions'
       fullPath: '/transactions'
       preLoaderRoute: typeof TransactionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stock-in': {
+      id: '/stock-in'
+      path: '/stock-in'
+      fullPath: '/stock-in'
+      preLoaderRoute: typeof StockInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stock': {
+      id: '/stock'
+      path: '/stock'
+      fullPath: '/stock'
+      preLoaderRoute: typeof StockRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/print-bill': {
@@ -211,11 +303,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ItemsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/export-reports': {
+      id: '/export-reports'
+      path: '/export-reports'
+      fullPath: '/export-reports'
+      preLoaderRoute: typeof ExportReportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/data-health': {
+      id: '/data-health'
+      path: '/data-health'
+      fullPath: '/data-health'
+      preLoaderRoute: typeof DataHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/customers': {
       id: '/customers'
       path: '/customers'
       fullPath: '/customers'
       preLoaderRoute: typeof CustomersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/control-room': {
+      id: '/control-room'
+      path: '/control-room'
+      fullPath: '/control-room'
+      preLoaderRoute: typeof ControlRoomRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/calendar': {
+      id: '/calendar'
+      path: '/calendar'
+      fullPath: '/calendar'
+      preLoaderRoute: typeof CalendarRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/backup': {
@@ -238,13 +358,19 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BackupRoute: BackupRoute,
+  CalendarRoute: CalendarRoute,
+  ControlRoomRoute: ControlRoomRoute,
   CustomersRoute: CustomersRoute,
+  DataHealthRoute: DataHealthRoute,
+  ExportReportsRoute: ExportReportsRoute,
   ItemsRoute: ItemsRoute,
   LedgerRoute: LedgerRoute,
   MonthlyReportRoute: MonthlyReportRoute,
   NewBillRoute: NewBillRoute,
   NewPaymentRoute: NewPaymentRoute,
   PrintBillRoute: PrintBillRoute,
+  StockRoute: StockRoute,
+  StockInRoute: StockInRoute,
   TransactionsRoute: TransactionsRoute,
 }
 export const routeTree = rootRouteImport

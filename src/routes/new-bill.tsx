@@ -1,29 +1,53 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import html2canvas from 'html2canvas'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, RefreshCw, Trash2 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
-import { saveBillWithItems } from '@/data/bills'
+import { toUserMessage } from '@/app/errors'
+import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
+import { DateInput } from '@/components/ui/date-input'
+import { SearchableCombobox } from '@/components/ui/searchable-combobox'
+import { assertBillNumberAvailable, getNextBillNoForBook, saveBillWithItems } from '@/data/bills'
 import { pb } from '@/data/pocketbase'
+import { loadCurrentStock } from '@/data/stock'
 import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billing-calculations'
-import { useMarketRate } from '@/domain/market-rate'
+import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
+import { loadSavedMarketRateForDate, useMarketRate } from '@/domain/market-rate'
+import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
+import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
+import {
+  BILL_PREVIEW_CARD_CLASS,
+  BILL_PRINT_DOCUMENT_TITLE,
+  downloadBillLayoutAsJpg,
+  printBillLayoutFromElement,
+  shareBillLayoutImageWithWhatsAppFallback,
+} from '@/lib/bill-print-export'
 import { formatInQty, formatInrInteger, parseNonNegativeNumber, parsePositiveIntInput } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/new-bill')({
   component: NewBillPage,
 })
 
-type CustomerOption = { id: string; name: string }
-type ItemOption = { id: string; name: string; defaultRate: number }
-type BillItemRow = { itemName: string; qty: number; rate: number; manualRateEdited: boolean }
+type CustomerOption = { id: string; name: string; companyName: string; customerName: string }
+type ItemOption = { id: string; name: string; defaultRate: number; type: string; unit: string; bagWeight: number; openingStock: number }
+type BillItemRow = { itemId: string; itemName: string; qty: number; defaultRate: number; rate: number; manualRateEdited: boolean }
+type GstMode = 'none' | 'percent18' | 'manual'
 type CreditAdjustment = { date: string; amount: number }
 type AutoBalanceContext = { previousBalanceDate: string; previousBalanceAmount: number; credits: CreditAdjustment[] }
 type PBRecord = Record<string, unknown> & { id: string }
 const num = (v: unknown) => (Number.isFinite(Number(v ?? 0)) ? Number(v) : 0)
 const datePart = (v: unknown) => String(v ?? '').slice(0, 10)
-const COMPANY_NAME = 'Kapil Trading Co.'
+const toTs = (v: unknown) => {
+  const ts = new Date(String(v ?? '')).getTime()
+  return Number.isFinite(ts) ? ts : 0
+}
+const bagsFromQtyKg = (qtyKg: number) => {
+  if (!(qtyKg > 0)) return 0
+  return Math.round(qtyKg / 50)
+}
+const COMPANY_NAME = 'Kapil Products'
+const GST_RATE_DISCOUNT = 30
 const submitRowSchema = z.object({
   itemName: z.string().trim().min(1),
   qty: z.number().positive(),
@@ -39,6 +63,7 @@ const submitBillSchema = z.object({
 })
 
 function NewBillPage() {
+  const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
   const [bookNo, setBookNo] = useState<number>(51)
   const [billNo, setBillNo] = useState<number>(1)
@@ -46,21 +71,36 @@ function NewBillPage() {
   const [customerId, setCustomerId] = useState('')
   const [mktRate, setMktRate] = useState<number>(0)
   const [transport, setTransport] = useState<number>(0)
-  const [gstRate, setGstRate] = useState<number>(0)
+  const [gstMode, setGstMode] = useState<GstMode>('none')
+  const [manualGstAmount, setManualGstAmount] = useState<number>(0)
+  const gstRate = gstMode === 'percent18' ? 18 : 0
   const [lrInput, setLrInput] = useState('')
   const [lrList, setLrList] = useState<string[]>([])
-  const [rows, setRows] = useState<BillItemRow[]>([{ itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
+  const [rows, setRows] = useState<BillItemRow[]>([{ itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
   const [statusText, setStatusText] = useState('')
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
-  const { marketRate, refreshMarketRate } = useMarketRate()
+  const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
+  const [quickCommandInput, setQuickCommandInput] = useState('')
+  const [pendingCommandPreview, setPendingCommandPreview] = useState(false)
+  const { marketRate, refreshMarketRate } = useMarketRate(date)
   const billNoInitializedRef = useRef(false)
+  const manualBillNoRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
 
   const customersQuery = useQuery({
     queryKey: ['customers-options'],
     queryFn: async (): Promise<CustomerOption[]> => {
-      const records = await pb.collection('customers').getFullList({ sort: 'name' })
-      return records.map((r) => ({ id: r.id, name: String(r.name ?? '') }))
+      const records = await pb.collection('customers').getFullList({ sort: 'company_name,name' })
+      return records.map((r) => {
+        const customerName = String(r.name ?? '')
+        const companyName = formatCompanyName(r.company_name, r.name)
+        return {
+          id: r.id,
+          name: formatCustomerDisplayName(companyName, customerName),
+          companyName,
+          customerName,
+        }
+      })
     },
   })
 
@@ -72,17 +112,19 @@ function NewBillPage() {
         id: r.id,
         name: String(r.name ?? ''),
         defaultRate: Number(r.default_rate ?? 0),
+        type: String(r.type ?? ''),
+        unit: String(r.unit ?? ''),
+        bagWeight: Number(r.bag_weight ?? 50),
+        openingStock: Number(r.opening_stock ?? 0),
       }))
     },
   })
+  const currentStockQuery = useQuery({ queryKey: ['current-stock'], queryFn: loadCurrentStock, refetchOnMount: 'always' })
 
-  const latestBillNoQuery = useQuery({
-    queryKey: ['latest-bill-no'],
-    queryFn: async (): Promise<number> => {
-      const page = await pb.collection('bills').getList(1, 1, { sort: '-bill_no' })
-      const record = page.items[0]
-      return Number(record?.bill_no ?? 0)
-    },
+  const nextBillNoQuery = useQuery({
+    queryKey: ['next-bill-no', bookNo],
+    queryFn: () => getNextBillNoForBook(bookNo),
+    enabled: bookNo > 0,
   })
   const autoBalanceQuery = useQuery({
     queryKey: ['customer-auto-balance', customerId, date],
@@ -91,22 +133,34 @@ function NewBillPage() {
       const [billsRaw, billItemsRaw, paymentsRaw] = await Promise.all([
         pb.collection('bills').getFullList({
           sort: 'date,bill_no',
-          filter: `customer = "${customerId}" && date <= "${date}"`,
+          filter: `customer = "${customerId}"`,
         }),
-        pb.collection('bill_items').getFullList(),
+        pb.collection('bill_items').getFullList({ filter: `bill.customer = "${customerId}"` }),
         pb.collection('payments').getFullList({
           sort: 'date',
-          filter: `customer = "${customerId}" && date <= "${date}"`,
+          filter: `customer = "${customerId}"`,
         }),
       ])
       const customerRecord = await pb.collection('customers').getOne(customerId)
 
-      const bills = billsRaw as PBRecord[]
+      const bills = (billsRaw as PBRecord[])
+        .filter((bill) => datePart(bill.date) <= date)
+        .sort((a, b) => {
+          const d = datePart(a.date).localeCompare(datePart(b.date))
+          if (d !== 0) return d
+          const c = toTs(a.created) - toTs(b.created)
+          if (c !== 0) return c
+          return String(a.id).localeCompare(String(b.id))
+        })
       const billItems = billItemsRaw as PBRecord[]
-      const payments = (paymentsRaw as PBRecord[]).map((payment) => ({
-        date: datePart(payment.date),
-        amount: num(payment.amount),
-      }))
+      const payments = (paymentsRaw as PBRecord[])
+        .filter((payment) => datePart(payment.date) <= date)
+        .map((payment) => ({
+          date: datePart(payment.date),
+          amount: num(payment.amount),
+          createdTs: toTs(payment.created),
+          id: String(payment.id),
+        }))
       const openingBalance = num(customerRecord.opening_balance)
 
       const priorBills = bills.filter((bill) => datePart(bill.date) < date)
@@ -123,15 +177,33 @@ function NewBillPage() {
 
       const lastBill = priorBills[priorBills.length - 1]
       const lastBillDate = datePart(lastBill.date)
+      const lastBillCreatedTs = toTs(lastBill.created)
       const billTotals = priorBills.map((bill) => ({
         date: datePart(bill.date),
-        total: calculateBillTotalFromBase(itemTotalByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate)),
+        total: calculateBillTotalFromBase(itemTotalByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount)),
       }))
 
       const billedUntilLastBill = billTotals.reduce((sum, entry) => sum + entry.total, 0)
-      const paidUntilLastBill = payments.filter((entry) => entry.date <= lastBillDate).reduce((sum, entry) => sum + entry.amount, 0)
-      const previousBalanceAmount = openingBalance + billedUntilLastBill - paidUntilLastBill
-      const credits = payments.filter((entry) => entry.date > lastBillDate && entry.date <= date && entry.amount > 0)
+      const paidUntilLastBill = payments
+        .filter((entry) => {
+          if (entry.date < lastBillDate) return true
+          if (entry.date > lastBillDate) return false
+          // Same bill day: include only payments entered up to last bill creation time.
+          if (entry.createdTs > 0 && lastBillCreatedTs > 0) return entry.createdTs <= lastBillCreatedTs
+          return true
+        })
+        .reduce((sum, entry) => sum + entry.amount, 0)
+      const previousBalanceAmount = computeNetBalance(openingBalance, billedUntilLastBill, paidUntilLastBill)
+      const credits = payments.filter(
+        (entry) =>
+          entry.amount > 0 &&
+          // Credit should be after last bill cutoff.
+          (entry.date > lastBillDate ||
+            (entry.date === lastBillDate &&
+              ((entry.createdTs > 0 && lastBillCreatedTs > 0 && entry.createdTs > lastBillCreatedTs) ||
+                (entry.createdTs === 0 || lastBillCreatedTs === 0)))) &&
+          isOnOrBeforeDay(entry.date, date),
+      )
 
       return {
         previousBalanceDate: lastBillDate || date,
@@ -151,7 +223,7 @@ function NewBillPage() {
         bookNo,
         billNo,
         date,
-        items: validRows,
+        items: validRows.map((row) => ({ itemId: row.itemId, itemName: row.itemName, qty: row.qty, rate: row.rate, manualRateEdited: row.manualRateEdited })),
       })
       if (!parsed.success) {
         throw new Error(parsed.error.issues[0]?.message ?? 'Bill validation failed')
@@ -162,30 +234,40 @@ function NewBillPage() {
         billNo,
         date,
         customerId: customer.id,
-        customerName: customer.name,
+        customerName: customer.companyName,
         mktRate,
         transport,
         gstRate,
+        gstAmount,
         lrList,
         items: validRows,
       })
     },
-    onSuccess: () => {
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['transactions-page'] }),
+        queryClient.invalidateQueries({ queryKey: ['customers-ledger'] }),
+        queryClient.invalidateQueries({ queryKey: ['payment-ledger-context'] }),
+        queryClient.invalidateQueries({ queryKey: ['next-bill-no'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard-data'] }),
+        queryClient.invalidateQueries({ queryKey: ['current-stock'] }),
+        queryClient.invalidateQueries({ queryKey: ['stock-ledger'] }),
+      ])
       setStatusText('Bill saved successfully')
       resetForm()
     },
     onError: (err) => {
-      setStatusText(err instanceof Error ? err.message : 'Failed to save bill')
+      setStatusText(toUserMessage(err))
     },
   })
 
-  const totals = useMemo(() => {
-    return calculateBillTotals({
-      items: rows,
-      transport,
-      gstRate,
-    })
-  }, [rows, gstRate, transport])
+  const totals = calculateBillTotals({
+    items: rows,
+    transport,
+    gstRate,
+    gstAmountOverride: gstMode === 'manual' ? manualGstAmount : null,
+  })
+  const { totalQty, itemsTotal, gstAmount, grandTotal } = totals
 
   const helperStatusText = useMemo(() => {
     if (statusText) return statusText
@@ -193,60 +275,88 @@ function NewBillPage() {
     const hasValidRow = rows.some((r) => r.itemName && r.qty > 0 && r.rate > 0)
     return hasCustomer && hasValidRow ? 'Ready to save' : 'Fill required fields to save'
   }, [statusText, customerId, rows])
-  const selectedCustomerName = (customersQuery.data ?? []).find((c) => c.id === customerId)?.name ?? 'Unknown'
+  const selectedCustomerName = (customersQuery.data ?? []).find((c) => c.id === customerId)?.companyName ?? 'Unknown'
   const validRows = rows.filter((r) => r.itemName.trim() && r.qty > 0 && r.rate > 0)
+  const stockWarnings = useMemo(() => {
+    if (!currentStockQuery.isSuccess || currentStockQuery.isFetching) return []
+    const stockRows = currentStockQuery.data ?? []
+    return validRows
+      .map((row) => {
+        const matchesItem = (entry: (typeof stockRows)[number]) => entry.itemId === row.itemId || entry.itemName === row.itemName
+        const buyerStock = stockRows.find((entry) => entry.customerId === customerId && matchesItem(entry))
+        const generalStock = stockRows.find((entry) => entry.customerName.toLowerCase().includes('general') && matchesItem(entry))
+        const stock = buyerStock ?? generalStock
+        const item = (itemsQuery.data ?? []).find((entry) => entry.id === row.itemId || entry.name === row.itemName)
+        if (!stock || String(item?.type ?? '').toLowerCase() !== 'gas') return null
+        const available = stock?.currentStock ?? 0
+        const after = available - row.qty
+        if (after >= 0) return null
+        return {
+          itemName: row.itemName,
+          customerName: stock.customerName || selectedCustomerName,
+          unit: stock?.unit || item?.unit || 'kg',
+          type: stock?.type || item?.type || '',
+          bagWeight: stock?.bagWeight || item?.bagWeight || 50,
+          available,
+          outgoing: row.qty,
+          after,
+        }
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+  }, [currentStockQuery.data, currentStockQuery.isFetching, currentStockQuery.isSuccess, customerId, itemsQuery.data, validRows])
   const previousBalanceDate = autoBalanceQuery.data?.previousBalanceDate ?? date
   const previousBalanceAmount = autoBalanceQuery.data?.previousBalanceAmount ?? 0
   const validCredits = (autoBalanceQuery.data?.credits ?? []).filter((entry) => entry.amount > 0)
   const totalCredits = validCredits.reduce((sum, entry) => sum + entry.amount, 0)
-  const subTotalBeforeCredits = totals.grandTotal + previousBalanceAmount
-  const payableAfterAdjustments = totals.grandTotal + previousBalanceAmount - totalCredits
-  const previewLineItems = useMemo(
-    () => [
-      { particulars: `MKT : ${Math.round(mktRate) || 0}`, qty: '', rate: '', amount: '', isMeta: true },
-      ...validRows.map((row) => ({
-        particulars: row.itemName,
-        qty: `${row.qty} kg`,
-        rate: `${Math.round(row.rate)}`,
-        amount: `${Math.round(row.qty * row.rate)}`,
-        isMeta: false,
-      })),
-      ...(totals.transport > 0
-        ? [{ particulars: 'Transport', qty: '', rate: '+', amount: `${Math.round(totals.transport)}`, isMeta: true as const }]
-        : []),
-      ...(totals.gstAmount > 0
-        ? [{ particulars: `GST ${gstRate}%`, qty: '', rate: '+', amount: `${Math.round(totals.gstAmount)}`, isMeta: true as const }]
-        : []),
-      {
-        particulars: `Pre [${previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)}]`,
-        qty: '',
-        rate: previousBalanceAmount >= 0 ? '+' : '-',
-        amount: `${Math.round(Math.abs(previousBalanceAmount))}`,
-        isMeta: true as const,
-      },
-      ...(validCredits.length > 0
-        ? validCredits.map((entry) => ({
-            particulars: `Cr [${formatFullDate(entry.date)}]`,
-            qty: '',
-            rate: '-',
-            amount: `${Math.round(entry.amount)}`,
-            isMeta: true as const,
-          }))
-        : [{ particulars: 'Cr [No credits in this period]', qty: '', rate: '-', amount: '0', isMeta: true as const }]),
-    ],
-    [mktRate, validRows, totals.transport, totals.gstAmount, gstRate, previousBalanceAmount, previousBalanceDate, validCredits],
-  )
+  const subTotalBeforeCredits = grandTotal + previousBalanceAmount
+  const payableAfterAdjustments = grandTotal + previousBalanceAmount - totalCredits
+
+  const previewItemRows = validRows.map((r) => ({
+    itemName: r.itemName,
+    qty: r.qty,
+    rate: r.rate,
+    amount: r.qty * r.rate,
+    bags: bagsFromQtyKg(r.qty),
+  }))
+  const draftPrintProps: BillPrintLayoutProps | null =
+    customerId && validRows.length > 0
+      ? {
+          bookNo,
+          billNo,
+          date,
+          customerName: selectedCustomerName,
+          mkt: mktRate,
+          itemRows: previewItemRows,
+          gstAmount,
+          transport,
+          gstRate,
+          currentBillTotal: grandTotal,
+          previousBalance: previousBalanceAmount,
+          previousBillDate: previousBalanceDate,
+          periodCreditEntries: validCredits.map((c) => ({ date: c.date, amount: c.amount })),
+          subtotal: subTotalBeforeCredits,
+          finalTotal: payableAfterAdjustments,
+          totalQty,
+          totalBags: previewItemRows.reduce((s, r) => s + r.bags, 0),
+          lrList,
+        }
+      : null
 
   function resetForm() {
     setDate(today)
     setCustomerId('')
     setMktRate(0)
     setTransport(0)
-    setGstRate(0)
-    setRows([{ itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
+    setGstMode('none')
+    setManualGstAmount(0)
+    setRows([{ itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
     setLrInput('')
     setLrList([])
-    setBillNo((prev) => prev + 1)
+    manualBillNoRef.current = false
+    void getNextBillNoForBook(bookNo).then(setBillNo).catch(() => setBillNo((prev) => prev + 1))
+    setIsQuickEntryOpen(false)
+    setQuickCommandInput('')
+    setPendingCommandPreview(false)
   }
 
   function addLrChip() {
@@ -258,7 +368,7 @@ function NewBillPage() {
 
 
   function addItemRow() {
-    setRows((prev) => [...prev, { itemName: '', qty: 0, rate: 0, manualRateEdited: false }])
+    setRows((prev) => [...prev, { itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
   }
 
   function removeItemRow(index: number) {
@@ -267,6 +377,39 @@ function NewBillPage() {
 
   function updateRow(index: number, patch: Partial<BillItemRow>) {
     setRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)))
+  }
+
+  const getGstRateDiscount = useCallback((nextGstMode: GstMode = gstMode) => {
+    return nextGstMode === 'percent18' ? GST_RATE_DISCOUNT : 0
+  }, [gstMode])
+
+  const getAutoRateFromDefault = useCallback((defaultRate: number, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
+    const gstDiscount = nextGstMode === 'percent18' ? GST_RATE_DISCOUNT : 0
+    return Math.max(0, defaultRate + nextMktRate - gstDiscount)
+  }, [mktRate, gstMode])
+
+  const getDefaultRateFromFinal = useCallback((finalRate: number, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
+    return Math.max(0, finalRate - nextMktRate + getGstRateDiscount(nextGstMode))
+  }, [getGstRateDiscount, mktRate, gstMode])
+
+  const getAutoRate = useCallback((item: ItemOption, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
+    return getAutoRateFromDefault(item.defaultRate, nextMktRate, nextGstMode)
+  }, [getAutoRateFromDefault, mktRate, gstMode])
+
+  function updateGstMode(nextMode: GstMode) {
+    setGstMode(nextMode)
+    if (nextMode !== 'manual') setManualGstAmount(0)
+    const items = itemsQuery.data ?? []
+    if (items.length === 0) return
+    setRows((prev) =>
+      prev.map((row) => {
+        if (!row.itemName || row.manualRateEdited) return row
+        const selected = items.find((it) => it.name === row.itemName)
+        if (!selected) return row
+        const defaultRate = row.defaultRate || selected.defaultRate
+        return { ...row, itemId: selected.id, defaultRate, rate: getAutoRateFromDefault(defaultRate, mktRate, nextMode) }
+      }),
+    )
   }
 
   function validateBeforePreview() {
@@ -284,10 +427,82 @@ function NewBillPage() {
     return true
   }
 
-  function openPreview() {
+  async function openPreview() {
     if (!validateBeforePreview()) return
-    setStatusText('')
-    setIsPreviewOpen(true)
+    try {
+      await assertBillNumberAvailable(bookNo, billNo)
+      setStatusText('')
+      setIsPreviewOpen(true)
+    } catch (error) {
+      setStatusText(toUserMessage(error))
+    }
+  }
+
+  async function applyBillCommand(input: string) {
+    const firstPass = parseContextCommand(input, 'bill', {
+      customers: customersQuery.data ?? [],
+      items: itemsQuery.data ?? [],
+      today,
+      mktRate: 0,
+    })
+    const commandDate = firstPass.ok && firstPass.command.kind === 'bill' ? firstPass.command.date : date
+    const savedRate = await loadSavedMarketRateForDate(commandDate)
+    const commandMktRate = savedRate?.rate ?? 0
+    const parsed = parseContextCommand(input, 'bill', {
+      customers: customersQuery.data ?? [],
+      items: itemsQuery.data ?? [],
+      today,
+      mktRate: commandMktRate,
+    })
+    if (!parsed.ok) {
+      setStatusText(parsed.error)
+      return
+    }
+    if (parsed.command.kind !== 'bill') {
+      setStatusText('This command is not a bill command.')
+      return
+    }
+    const command = parsed.command
+    const nextGstMode = command.gstMode === 'manual' ? 'manual' : command.gstRate === 18 ? 'percent18' : 'none'
+    if (command.bookNo) {
+      setBookNo(command.bookNo)
+      if (command.billNo) {
+        manualBillNoRef.current = true
+        setBillNo(command.billNo)
+      } else {
+        manualBillNoRef.current = false
+        const nextNo = await getNextBillNoForBook(command.bookNo).catch(() => 1)
+        setBillNo(nextNo)
+      }
+    } else if (command.billNo) {
+      manualBillNoRef.current = true
+      setBillNo(command.billNo)
+    }
+    setCustomerId(command.customer.id)
+    setDate(command.date)
+    setMktRate(commandMktRate)
+    setTransport(command.transport)
+    setGstMode(nextGstMode)
+    setManualGstAmount(command.gstMode === 'manual' ? command.gstAmount : 0)
+    setRows(
+      command.items.map((line) => ({
+        itemName: line.item.name,
+        itemId: line.item.id,
+        qty: line.qty,
+        defaultRate: line.defaultRate || getDefaultRateFromFinal(line.rate, commandMktRate, nextGstMode),
+        rate: line.rate,
+        manualRateEdited: line.manualRateEdited,
+      })),
+    )
+    setIsQuickEntryOpen(false)
+    setStatusText(
+      `Command ready: ${command.customer.name} | ${command.bookNo ? `Bill ${command.bookNo}/${command.billNo ?? 'next'} | ` : ''}${command.items.length} item${command.items.length === 1 ? '' : 's'} | ${command.date} | MKT ${commandMktRate || 'not found'}`,
+    )
+    setPendingCommandPreview(true)
+  }
+
+  async function applyQuickEntry() {
+    await applyBillCommand(quickCommandInput)
   }
 
   async function confirmAndSave() {
@@ -299,59 +514,76 @@ function NewBillPage() {
     }
   }
 
+  useEffect(() => {
+    if (customersQuery.isLoading || itemsQuery.isLoading) return
+    const raw = window.sessionStorage.getItem(PENDING_COMMAND_STORAGE_KEY)
+    if (!raw) return
+    try {
+      const pending = JSON.parse(raw) as { kind?: string; body?: string; createdAt?: number }
+      if (pending.kind !== 'bill' || !pending.body || Date.now() - Number(pending.createdAt ?? 0) > 60_000) return
+      window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
+      void applyBillCommand(pending.body)
+    } catch {
+      window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
+    }
+  }, [customersQuery.isLoading, itemsQuery.isLoading, customersQuery.data, itemsQuery.data])
+
+  useEffect(() => {
+    if (!pendingCommandPreview) return
+    setPendingCommandPreview(false)
+    void openPreview()
+  }, [pendingCommandPreview, customerId, rows, date, bookNo, billNo])
+
+  useEffect(() => {
+    if (!isPreviewOpen) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.ctrlKey && event.key === 'Enter') {
+        event.preventDefault()
+        void confirmAndSave()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isPreviewOpen, saveMutation.isPending, bookNo, billNo, customerId, date, rows, transport, gstRate, gstAmount])
+
   function printPreview() {
     const previewElement = previewRef.current
     if (!previewElement) return
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=800')
-    if (!printWindow) {
-      setStatusText('Unable to open print window')
-      return
-    }
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Bill Preview</title>
-          <style>
-            @page { size: 11cm 18cm; margin: 0.25cm; }
-            body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #0f172a; background: #fff; }
-            .preview-print { width: 10.5cm; min-height: 17.5cm; margin: 0 auto; }
-            table { border-collapse: collapse; width: 100%; font-size: 10px; }
-            th, td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; vertical-align: top; }
-            .amount { text-align: right; font-family: monospace; }
-          </style>
-        </head>
-        <body><div class="preview-print">${previewElement.innerHTML}</div></body>
-      </html>
-    `)
-    printWindow.document.close()
-    printWindow.focus()
-    printWindow.print()
+    printBillLayoutFromElement(previewElement, BILL_PRINT_DOCUMENT_TITLE, setStatusText)
   }
 
   async function savePreviewAsJpg() {
     const previewElement = previewRef.current
     if (!previewElement) return
-    const canvas = await html2canvas(previewElement, { scale: 2, backgroundColor: '#ffffff' })
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-    const link = document.createElement('a')
-    link.href = dataUrl
-    link.download = `bill-preview-${bookNo}-${billNo}.jpg`
-    link.click()
+    try {
+      await downloadBillLayoutAsJpg(previewElement, `bill-preview-${bookNo}-${billNo}.jpg`)
+      setStatusText('')
+    } catch {
+      setStatusText('Unable to save JPG in this browser session. Please refresh once and retry.')
+    }
   }
 
-  function shareOnWhatsApp() {
+  async function shareOnWhatsApp() {
+    const previewElement = previewRef.current
+    if (!previewElement) return
     const billRef = `${String(bookNo).padStart(3, '0')}/${String(billNo).padStart(3, '0')}`
     const message = [
       `${COMPANY_NAME}`,
       `Bill Ref: ${billRef}`,
       `Party: ${selectedCustomerName}`,
       `Bill Date: ${formatFullDate(date)}`,
-      `Current Bill: ${formatInrInteger(totals.grandTotal)}`,
+      `Current Bill: ${formatInrInteger(grandTotal)}`,
       `${previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'}: ${formatInrInteger(Math.abs(previousBalanceAmount))} (${previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)})`,
-      `Payments Adjusted: ${formatInrInteger(totalCredits)}`,
+      ...validCredits.map((entry) => `Credited on ${formatFullDate(entry.date)}: ${formatInrInteger(entry.amount)}`),
       `${payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}: ${formatInrInteger(Math.abs(payableAfterAdjustments))}`,
     ].join('\n')
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
+
+    await shareBillLayoutImageWithWhatsAppFallback({
+      element: previewElement,
+      imageFilename: `bill-preview-${bookNo}-${billNo}.jpg`,
+      message,
+      setStatus: setStatusText,
+    })
   }
 
   useEffect(() => {
@@ -362,11 +594,15 @@ function NewBillPage() {
 
   useEffect(() => {
     if (billNoInitializedRef.current) return
-    if (latestBillNoQuery.isLoading) return
-    const latest = Number(latestBillNoQuery.data ?? 0)
-    setBillNo(latest > 0 ? latest + 1 : 1)
+    if (nextBillNoQuery.isLoading) return
+    setBillNo(Number(nextBillNoQuery.data ?? 1) || 1)
     billNoInitializedRef.current = true
-  }, [latestBillNoQuery.data, latestBillNoQuery.isLoading])
+  }, [nextBillNoQuery.data, nextBillNoQuery.isLoading])
+
+  useEffect(() => {
+    if (!billNoInitializedRef.current || manualBillNoRef.current || nextBillNoQuery.isLoading) return
+    setBillNo(Number(nextBillNoQuery.data ?? 1) || 1)
+  }, [bookNo, nextBillNoQuery.data, nextBillNoQuery.isLoading])
 
   useEffect(() => {
     const items = itemsQuery.data ?? []
@@ -374,12 +610,24 @@ function NewBillPage() {
     setRows((prev) =>
       prev.map((row) => {
         if (!row.itemName || row.manualRateEdited) return row
-        const selected = items.find((it) => it.name === row.itemName)
+        const selected = items.find((it) => it.id === row.itemId || it.name === row.itemName)
         if (!selected) return row
-        return { ...row, rate: selected.defaultRate + mktRate }
+        const defaultRate = row.defaultRate || selected.defaultRate
+        return { ...row, itemId: selected.id, defaultRate, rate: getAutoRateFromDefault(defaultRate) }
       }),
     )
-  }, [mktRate, itemsQuery.data])
+  }, [mktRate, itemsQuery.data, gstMode, getAutoRateFromDefault])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.altKey && event.key.toLowerCase() === 'b') {
+        event.preventDefault()
+        setIsQuickEntryOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
@@ -387,14 +635,29 @@ function NewBillPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Jamnagar Local Rate</p>
-            <p className="mt-1 font-mono text-2xl font-bold text-slate-900 tabular-nums">{formatInrInteger(marketRate.rate)}</p>
-            <p className="text-xs text-slate-500">{marketRate.rateDate}</p>
+            <p className="mt-1 flex items-baseline gap-2 font-mono text-2xl font-bold text-slate-900 tabular-nums">
+              <span>{formatInrInteger(marketRate.rate)}</span>
+              <span className="text-xs font-semibold text-slate-500">{marketRate.rateDate}</span>
+            </p>
+            {marketRate.change != null && marketRate.previousRate != null ? (
+              <p
+                className={`mt-2 inline-flex rounded-md px-2 py-1 text-xs font-semibold ${
+                  marketRate.change > 0
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : marketRate.change < 0
+                      ? 'bg-red-50 text-red-700'
+                      : 'bg-amber-50 text-amber-800'
+                }`}
+              >
+                Today rate {marketRate.change === 0 ? 'stable' : `${marketRate.change > 0 ? '+' : '-'}${formatInrInteger(Math.abs(marketRate.change))}`} vs previous {formatInrInteger(marketRate.previousRate)}
+              </p>
+            ) : null}
           </div>
           <button
             type="button"
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
             onClick={() => {
-              void refreshMarketRate().then((ok) => {
+              void refreshMarketRate({ targetDate: date }).then((ok) => {
                 if (ok) {
                   setStatusText('Market rate updated from RSS')
                 } else {
@@ -413,26 +676,44 @@ function NewBillPage() {
         <h3 className="mb-4 text-sm font-semibold text-slate-900">Bill Details</h3>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Book No">
-            <input className={inputClass} type="number" value={bookNo} onChange={(e) => setBookNo(parseNonNegativeNumber(e.target.value))} />
+            <input
+              className={inputClass}
+              type="number"
+              value={bookNo}
+              onChange={(e) => {
+                manualBillNoRef.current = false
+                setBookNo(parseNonNegativeNumber(e.target.value))
+              }}
+            />
           </Field>
           <Field label="Bill No">
-            <input className={inputClass} type="number" value={billNo} onChange={(e) => setBillNo(parseNonNegativeNumber(e.target.value))} />
+            <input
+              className={inputClass}
+              type="number"
+              value={billNo}
+              onChange={(e) => {
+                manualBillNoRef.current = true
+                setBillNo(parseNonNegativeNumber(e.target.value))
+              }}
+            />
           </Field>
           <Field label="Date">
-            <input className={inputClass} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <DateInput className={inputClass} value={date} onChange={setDate} />
           </Field>
           <Field label="Customer">
-            <select className={inputClass} value={customerId} onChange={(e) => setCustomerId(e.target.value)} disabled={customersQuery.isLoading || customersQuery.isError}>
-              <option value="">Select customer...</option>
-              {customersQuery.isLoading && <option value="" disabled>Loading customers...</option>}
-              {customersQuery.isError && <option value="" disabled>Unable to load customers</option>}
-              {!customersQuery.isLoading && !customersQuery.isError && (customersQuery.data ?? []).length === 0 && <option value="" disabled>No customers found</option>}
-              {(customersQuery.data ?? []).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <SearchableCombobox
+              options={customersQuery.data ?? []}
+              value={customerId}
+              onChange={(nextId) => {
+                setCustomerId(nextId)
+                setStatusText('')
+              }}
+              inputClassName={inputClass}
+              placeholder={customersQuery.isLoading ? 'Loading customers...' : 'Search customer...'}
+              disabled={customersQuery.isLoading || customersQuery.isError}
+              emptyText="No matching customer found."
+              maxResults={25}
+            />
           </Field>
           <Field label="MKT Rate">
             <input className={inputClass} type="number" value={mktRate} onChange={(e) => setMktRate(parseNonNegativeNumber(e.target.value))} />
@@ -441,13 +722,23 @@ function NewBillPage() {
             <input className={inputClass} type="number" value={transport} onChange={(e) => setTransport(parseNonNegativeNumber(e.target.value))} />
           </Field>
           <Field label="GST (optional)">
-            <select className={inputClass} value={gstRate} onChange={(e) => setGstRate(Number(e.target.value))}>
-              <option value={0}>No GST</option>
-              <option value={5}>5%</option>
-              <option value={12}>12%</option>
-              <option value={18}>18%</option>
+            <select className={inputClass} value={gstMode} onChange={(e) => updateGstMode(e.target.value as GstMode)}>
+              <option value="none">No GST</option>
+              <option value="percent18">18% GST (-₹30 rate)</option>
+              <option value="manual">Manual GST amount</option>
             </select>
           </Field>
+          {gstMode === 'manual' && (
+            <Field label="GST Amount (INR)">
+              <input
+                className={inputClass}
+                type="number"
+                value={manualGstAmount || ''}
+                onChange={(e) => setManualGstAmount(parseNonNegativeNumber(e.target.value))}
+                placeholder="0"
+              />
+            </Field>
+          )}
           <Field label="Previous Balance Date (auto)">
             <input className={`${inputClass} bg-slate-50`} type="text" value={previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)} readOnly />
           </Field>
@@ -532,18 +823,20 @@ function NewBillPage() {
           </button>
         </div>
         <div className="overflow-x-auto no-scrollbar">
-          <table className="w-full min-w-[760px] table-fixed border-separate border-spacing-x-2 border-spacing-y-0">
+          <table className="w-full min-w-[900px] table-fixed border-separate border-spacing-x-2 border-spacing-y-0">
             <colgroup>
-              <col className="w-[44%]" />
+              <col className="w-[34%]" />
+              <col className="w-[12%]" />
               <col className="w-[16%]" />
               <col className="w-[16%]" />
-              <col className="w-[24%]" />
+              <col className="w-[22%]" />
               <col className="w-[72px]" />
             </colgroup>
             <thead>
               <tr className="bg-slate-50">
                 <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Item</th>
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Qty</th>
+                <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Default Rate</th>
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Rate</th>
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
                 <th className="px-3 py-2.5 text-center text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
@@ -557,25 +850,28 @@ function NewBillPage() {
                     <td className="px-3 py-2.5 align-middle">
                       <select
                         className={inputClass}
-                        value={row.itemName}
+                        value={row.itemId || ((itemsQuery.data ?? []).find((it) => it.name === row.itemName)?.id ?? '')}
                         disabled={itemsQuery.isLoading || itemsQuery.isError}
                         onChange={(e) => {
-                          const itemName = e.target.value
-                          const selected = (itemsQuery.data ?? []).find((it) => it.name === itemName)
+                          const id = e.target.value
+                          const selected = (itemsQuery.data ?? []).find((it) => it.id === id)
+                          if (!selected) {
+                            updateRow(i, { itemId: '', itemName: '', defaultRate: 0, rate: 0, manualRateEdited: false })
+                            return
+                          }
                           updateRow(i, {
-                            itemName,
-                            rate: selected ? selected.defaultRate + mktRate : row.rate,
+                            itemId: selected.id,
+                            itemName: selected.name,
+                            defaultRate: selected.defaultRate,
+                            rate: getAutoRate(selected),
                             manualRateEdited: false,
                           })
                         }}
                       >
-                        <option value="">Select item...</option>
-                        {itemsQuery.isLoading && <option value="" disabled>Loading items...</option>}
-                        {itemsQuery.isError && <option value="" disabled>Unable to load items</option>}
-                        {!itemsQuery.isLoading && !itemsQuery.isError && (itemsQuery.data ?? []).length === 0 && <option value="" disabled>No items found</option>}
-                        {(itemsQuery.data ?? []).map((it) => (
-                          <option key={it.id} value={it.name}>
-                            {it.name}
+                        <option value="">{itemsQuery.isLoading ? 'Loading items…' : 'Select item…'}</option>
+                        {(itemsQuery.data ?? []).map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}
                           </option>
                         ))}
                       </select>
@@ -601,15 +897,40 @@ function NewBillPage() {
                         type="number"
                         min={0}
                         step="any"
+                        value={row.defaultRate || ''}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          if (v === '') {
+                            updateRow(i, { defaultRate: 0, rate: getAutoRateFromDefault(0), manualRateEdited: false })
+                            return
+                          }
+                          const n = Number(v)
+                          const defaultRate = Number.isFinite(n) ? n : 0
+                          updateRow(i, {
+                            defaultRate,
+                            rate: getAutoRateFromDefault(defaultRate),
+                            manualRateEdited: false,
+                          })
+                        }}
+                        placeholder="0"
+                      />
+                    </td>
+                    <td className="px-3 py-2.5 align-middle">
+                      <input
+                        className={`${inputClass} text-right tabular-nums`}
+                        type="number"
+                        min={0}
+                        step="any"
                         value={row.rate || ''}
                         onChange={(e) => {
                           const v = e.target.value
                           if (v === '') {
-                            updateRow(i, { rate: 0, manualRateEdited: true })
+                            updateRow(i, { rate: 0, defaultRate: 0, manualRateEdited: true })
                             return
                           }
                           const n = Number(v)
-                          updateRow(i, { rate: Number.isFinite(n) ? n : 0, manualRateEdited: true })
+                          const rate = Number.isFinite(n) ? n : 0
+                          updateRow(i, { rate, defaultRate: getDefaultRateFromFinal(rate), manualRateEdited: true })
                         }}
                         placeholder="0"
                       />
@@ -637,13 +958,15 @@ function NewBillPage() {
         <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-5">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div className="grid grid-cols-2 gap-x-8 gap-y-4 sm:flex sm:flex-wrap sm:items-end sm:gap-8">
-              <Metric label="Total Qty" value={formatInQty(totals.totalQty, 'kg')} />
-              <Metric label="Line items" value={formatInrInteger(totals.itemsTotal)} />
+              <Metric label="Total Qty" value={formatInQty(totalQty, 'kg')} />
+              <Metric label="Line items" value={formatInrInteger(itemsTotal)} />
               <Metric label="Transport" value={formatInrInteger(transport)} />
-              <Metric label="GST" value={formatInrInteger(totals.gstAmount)} />
-              <Metric label={previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'} value={formatInrInteger(Math.abs(previousBalanceAmount))} />
+              <Metric label="GST" value={formatInrInteger(gstAmount)} />
+              {previousBalanceAmount !== 0 && (
+                <Metric label={previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'} value={formatInrInteger(Math.abs(previousBalanceAmount))} />
+              )}
               <Metric label="Sub Total" value={formatInrInteger(subTotalBeforeCredits)} />
-              <Metric label="Credits" value={`- ${formatInrInteger(totalCredits)}`} />
+              <Metric label="Credited Entries" value={String(validCredits.length)} />
             </div>
             <div className="text-left lg:text-right">
               <p className="text-xs text-slate-400">{payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}</p>
@@ -652,7 +975,7 @@ function NewBillPage() {
           </div>
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="sticky bottom-[calc(3.85rem+env(safe-area-inset-bottom))] z-20 -mx-5 mt-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur lg:static lg:mx-0 lg:border-t-0 lg:bg-transparent lg:p-0">
           <span className="text-xs text-slate-500">{helperStatusText}</span>
           <div className="flex-1" />
           <button type="button" className="px-1 py-1 text-sm font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline" onClick={resetForm}>
@@ -660,8 +983,8 @@ function NewBillPage() {
           </button>
           <button
             type="button"
-            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={openPreview}
+            className="min-h-11 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0 lg:px-3"
+            onClick={() => void openPreview()}
             disabled={saveMutation.isPending || customersQuery.isLoading || itemsQuery.isLoading}
           >
             {saveMutation.isPending ? 'Saving...' : 'Save Bill'}
@@ -670,87 +993,50 @@ function NewBillPage() {
       </section>
 
       {isPreviewOpen && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <h3 className="text-base font-semibold text-slate-900">Bill Preview & Confirmation</h3>
-              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsPreviewOpen(false)}>
+        <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-900/60 px-3 py-4 sm:px-4 sm:py-8">
+          <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-[820px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-4rem)]">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+              <div className="min-w-0">
+                <h3 className="truncate text-base font-semibold text-slate-900">Bill Preview & Confirmation</h3>
+                <p className="mt-0.5 text-xs text-slate-500">Review the exact print layout before saving.</p>
+              </div>
+              <button type="button" className="shrink-0 rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsPreviewOpen(false)}>
                 Close
               </button>
             </div>
-            <div className="max-h-[70vh] overflow-auto p-4">
-              <div
-                ref={previewRef}
-                className="mx-auto rounded-md border border-slate-300 bg-white p-2 text-[10px] text-slate-800"
-                style={{ width: '11cm', minHeight: '18cm' }}
-              >
-                <div className="mb-1 border-b border-slate-300 pb-1 text-center text-[12px] font-semibold tracking-wide">
-                  {COMPANY_NAME}
-                </div>
-                <div className="mb-1 flex items-center justify-between border-b border-slate-300 pb-1 text-[11px]">
-                  <div>No. <span className="font-semibold">{String(bookNo).padStart(3, '0')}/{String(billNo).padStart(3, '0')}</span></div>
-                  <div>Date : <span className="font-semibold">{formatFullDate(date)}</span></div>
-                </div>
-                <div className="mb-1 border-b border-slate-300 pb-1">
-                  <span className="mr-1 font-semibold">M/s.</span>
-                  <span>{selectedCustomerName}</span>
-                </div>
-
-                <table className="w-full border-collapse text-[10px]">
-                  <thead>
-                    <tr className="bg-slate-50">
-                      <th className="w-[7%] border border-slate-300 px-1 py-1 text-left">Sr.</th>
-                      <th className="w-[46%] border border-slate-300 px-1 py-1 text-left">Particulars</th>
-                      <th className="w-[16%] border border-slate-300 px-1 py-1 text-right">Qty.</th>
-                      <th className="w-[13%] border border-slate-300 px-1 py-1 text-right">Rate</th>
-                      <th className="w-[18%] border border-slate-300 px-1 py-1 text-right">Amount Rs.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Array.from({ length: 14 }).map((_, idx) => {
-                      const row = previewLineItems[idx]
-                      return (
-                        <tr key={idx}>
-                          <td className="border border-slate-300 px-1 py-1 align-top text-[9px] text-slate-500">{row && !row.isMeta ? idx + 1 : ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 align-top">{row?.particulars ?? ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 text-right align-top font-mono">{row?.qty ?? ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 text-right align-top font-mono">{row?.rate ?? ''}</td>
-                          <td className="border border-slate-300 px-1 py-1 text-right align-top font-mono">{row?.amount ?? ''}</td>
-                        </tr>
-                      )
-                    })}
-                    <tr>
-                      <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">Current Bill Total</td>
-                      <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[11px] font-semibold">{Math.round(totals.grandTotal).toLocaleString('en-IN')}</td>
-                    </tr>
-                    <tr>
-                      <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">Sub Total</td>
-                      <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[11px] font-semibold">{Math.round(subTotalBeforeCredits).toLocaleString('en-IN')}</td>
-                    </tr>
-                    <tr>
-                      <td colSpan={4} className="border border-slate-300 px-1 py-1 text-right font-semibold">{payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}</td>
-                      <td className="border border-slate-300 px-1 py-1 text-right font-mono text-[12px] font-bold">{Math.round(Math.abs(payableAfterAdjustments)).toLocaleString('en-IN')}</td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <div className="mt-2 flex items-start justify-between">
-                  <div className="space-y-1">
-                    <p>Weight : <span className="font-semibold">{formatInQty(totals.totalQty, 'kg')}</span></p>
-                    <p>Bags : <span className="font-semibold">{validRows.length || 0}</span></p>
-                    <p>{previousBalanceAmount >= 0 ? 'Prev Bal' : 'Prev Advance'} [{previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)}] : <span className="font-semibold">{Math.round(Math.abs(previousBalanceAmount)).toLocaleString('en-IN')}</span></p>
-                    <p>Total Credits : <span className="font-semibold">-{Math.round(totalCredits).toLocaleString('en-IN')}</span></p>
-                    <p className="mt-2 inline-block rounded-md border border-slate-400 px-2 py-1">
-                      LR No. <span className="font-semibold">{lrList.length > 0 ? lrList.join(', ') : '-'}</span>
-                    </p>
+            <div className="min-h-0 flex-1 overflow-auto bg-slate-50 px-3 py-4 sm:px-4">
+              {stockWarnings.length > 0 && (
+                <div className="mx-auto mb-3 max-w-[14cm] rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 shadow-sm">
+                  <p className="font-semibold">Stock warning</p>
+                  <div className="mt-2 space-y-1">
+                    {stockWarnings.map((warning) => (
+                      <p key={warning.itemName}>
+                        {warning.itemName} / {warning.customerName}: available {formatStockQty(warning.available, warning.unit, warning.type, warning.bagWeight)}, this bill{' '}
+                        {formatStockQty(warning.outgoing, warning.unit, warning.type, warning.bagWeight)}, after bill{' '}
+                        {formatStockQty(warning.after, warning.unit, warning.type, warning.bagWeight)}.
+                      </p>
+                    ))}
                   </div>
-                  <div className="flex h-8 w-24 items-center justify-center rounded-full border border-slate-400 text-[11px] text-slate-500">
-                    Signature
-                  </div>
+                  <p className="mt-2 text-xs text-amber-800">Saving is allowed after review.</p>
+                </div>
+              )}
+              <div className="mx-auto flex w-full max-w-[14cm] justify-center">
+                <div
+                  ref={previewRef}
+                  className={`${BILL_PREVIEW_CARD_CLASS} w-full`}
+                  style={{ width: `${BILL_PRINT_PAGE_WIDTH_CM}cm`, maxWidth: '100%' }}
+                >
+                {draftPrintProps ? (
+                  <BillPrintLayout {...draftPrintProps} />
+                ) : (
+                  <p className="p-4 text-sm text-slate-500">Unable to build preview.</p>
+                )}
                 </div>
               </div>
             </div>
-            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+            <div className="grid shrink-0 gap-3 border-t border-slate-200 bg-white px-4 py-3 md:grid-cols-[1fr_auto] md:items-center">
+              <span className="text-xs text-slate-500">Ctrl+Enter confirms save</span>
+              <div className="flex flex-wrap justify-start gap-2 md:justify-end">
               <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={printPreview}>
                 Print
               </button>
@@ -770,6 +1056,44 @@ function NewBillPage() {
                 disabled={saveMutation.isPending}
               >
                 {saveMutation.isPending ? 'Saving...' : 'Confirm & Save'}
+              </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {isQuickEntryOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h3 className="text-base font-semibold text-slate-900">Bill Command (Alt + B)</h3>
+              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickEntryOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="space-y-2 px-4 py-4">
+              <input
+                autoFocus
+                className={inputClass}
+                value={quickCommandInput}
+                onChange={(e) => setQuickCommandInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void applyQuickEntry()
+                  }
+                }}
+                placeholder='party [item] qty [rate=auto] [gst] [date=today|-1|DD-MM-YYYY] [+t 2000] (default item: Spindle (8.5.Gm))'
+              />
+              <p className="text-xs text-slate-500">Gas qty rule: 10 means 10 bags / 500 kg. Use kg suffix for exact kg. Default item is Spindle (8.5GM).</p>
+              <p className="text-xs text-slate-500">Examples: `sambhu 10` | `sambhu spindle 10 gst +t 2000` | `sambhu tapper 620kg 790 -1`</p>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsQuickEntryOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" onClick={() => void applyQuickEntry()}>
+                Preview Command
               </button>
             </div>
           </div>
@@ -795,6 +1119,14 @@ function Metric({ label, value }: { label: string; value: string }) {
       <p className="font-mono text-sm font-medium tabular-nums text-slate-800">{value}</p>
     </div>
   )
+}
+
+function formatStockQty(qty: number, unit: string, type: string, bagWeight: number) {
+  if (type === 'gas') {
+    const bags = qty / (bagWeight || 50)
+    return `${formatInQty(qty, 'kg')} / ${bags.toFixed(Number.isInteger(bags) ? 0 : 1)} bags`
+  }
+  return formatInQty(qty, unit || 'piece')
 }
 
 const inputClass =
