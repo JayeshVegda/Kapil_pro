@@ -16,6 +16,7 @@
 ## Operations
 
 - `operations/deploy/`
+- `operations/doppler-secrets.md`
 - `operations/security-auth-setup.md`
 - `operations/incident-notes.md`
 - `operations/audits/`

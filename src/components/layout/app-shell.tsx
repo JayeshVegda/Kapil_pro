@@ -1,6 +1,6 @@
 import { useIsFetching, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query'
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
-import { AlertTriangle, CheckCircle2, Clock3, Command, FileText, HelpCircle, IndianRupee, Loader2, Menu, Package, RefreshCw, Search, TerminalSquare, TrendingUp, UserRound } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clock3, Command, FileText, HelpCircle, IndianRupee, Loader2, Menu, RefreshCw, Search, TerminalSquare, TrendingUp, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { pb } from '@/data/pocketbase'
 import { loadQuickSearchResults, type QuickSearchResult } from '@/data/quick-search'
@@ -18,25 +18,17 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Dashboard', subtitle: 'Live business overview and pending actions' },
   '/new-bill': { title: 'Bills', subtitle: 'Create and preview new sale bills' },
   '/new-payment': { title: 'Payments', subtitle: 'Record collections and adjustments' },
-  '/stock': { title: 'Stock', subtitle: 'Finished goods stock control and audit' },
-  '/stock-in': { title: 'Stock', subtitle: 'Finished goods stock control and audit' },
   '/transactions': { title: 'Logs', subtitle: 'Manage recent bills and payments with CRUD actions' },
   '/ledger': { title: 'Party', subtitle: 'Single-party ledger and analytics' },
   '/monthly-report': { title: 'Report', subtitle: 'Company-level performance insights' },
   '/calendar': { title: 'Calendar', subtitle: 'Month view of sales, collections, and market rate' },
-  '/export-reports': { title: 'Exports', subtitle: 'Download ledger, company, stock, and backup reports' },
+  '/export-reports': { title: 'Exports', subtitle: 'Download ledger, company, and backup reports' },
   '/customers': { title: 'Customers', subtitle: 'Manage customer master data' },
   '/items': { title: 'Items', subtitle: 'Manage item master and defaults' },
-  '/data-health': { title: 'Data Health', subtitle: 'Find stock, bill, and setup data issues' },
+  '/data-health': { title: 'Data Health', subtitle: 'Find bill and setup data issues' },
   '/backup': { title: 'Backup', subtitle: 'Export and validate data snapshots' },
   '/print-bill': { title: 'Print Bill', subtitle: 'Filter, preview, and print bills' },
   '/control-room': { title: 'Control Room', subtitle: 'Admin operations, command workflows, and system controls' },
-  '/buying': { title: 'Buying Overview', subtitle: 'Scrap procurement workspace' },
-  '/buying/suppliers': { title: 'Suppliers', subtitle: 'Supplier master and payable setup' },
-  '/buying/new-purchase': { title: 'New Purchase', subtitle: 'Record incoming scrap purchases' },
-  '/buying/supplier-payments': { title: 'Supplier Payments', subtitle: 'Record supplier-side payments' },
-  '/buying/purchase-logs': { title: 'Purchase Logs', subtitle: 'Review buying activity' },
-  '/buying/supplier-ledger': { title: 'Supplier Ledger', subtitle: 'Supplier payable ledger' },
   '/casting': { title: 'Casting Overview', subtitle: 'Furnace sessions, output, and cost signals' },
   '/casting/new-session': { title: 'New Casting Session', subtitle: 'Record material inputs and furnace output' },
   '/casting/log': { title: 'Casting Log', subtitle: 'Review and edit casting sessions' },
@@ -52,9 +44,7 @@ const BACKGROUND_SYNC_QUERY_PREFIXES = new Set([
   'print-bill-balance',
   'backup-snapshot',
   'export-reports-snapshot',
-  'export-reports-monthly-stock',
   'customer-auto-balance',
-  'stock-ledger',
 ])
 
 function isBackgroundSyncQuery(queryKey: QueryKey) {
@@ -65,7 +55,6 @@ const commandRoutes = [
   { label: 'Dashboard', path: '/' },
   { label: 'New Bill', path: '/new-bill' },
   { label: 'New Payment', path: '/new-payment' },
-  { label: 'Stock', path: '/stock' },
   { label: 'Transactions', path: '/transactions' },
   { label: 'Ledger', path: '/ledger' },
   { label: 'Calendar', path: '/calendar' },
@@ -74,12 +63,6 @@ const commandRoutes = [
   { label: 'Data Health', path: '/data-health' },
   { label: 'Backup', path: '/backup' },
   { label: 'Control Room', path: '/control-room' },
-  { label: 'Buying Overview', path: '/buying' },
-  { label: 'Suppliers', path: '/buying/suppliers' },
-  { label: 'New Purchase', path: '/buying/new-purchase' },
-  { label: 'Supplier Payments', path: '/buying/supplier-payments' },
-  { label: 'Purchase Logs', path: '/buying/purchase-logs' },
-  { label: 'Supplier Ledger', path: '/buying/supplier-ledger' },
   { label: 'Casting Overview', path: '/casting' },
   { label: 'New Casting Session', path: '/casting/new-session' },
   { label: 'Casting Log', path: '/casting/log' },
@@ -278,7 +261,6 @@ export function AppShell() {
       return
     }
     if (result.kind === 'Stock') {
-      void navigate({ to: '/stock' })
       return
     }
     if (result.kind === 'Customer' && result.customerId) {
@@ -306,7 +288,6 @@ export function AppShell() {
       return
     }
     if (result.kind === 'Stock') {
-      void navigate({ to: action === 'secondary' ? '/stock' : '/stock-in' })
       return
     }
     openQuickSearchResult(result)
@@ -439,7 +420,6 @@ export function AppShell() {
     window.sessionStorage.setItem(PENDING_COMMAND_STORAGE_KEY, JSON.stringify({ kind: parsed.kind, body, createdAt: Date.now() }))
     if (parsed.kind === 'bill') void navigate({ to: '/new-bill' })
     if (parsed.kind === 'payment') void navigate({ to: '/new-payment' })
-    if (parsed.kind === 'stock') void navigate({ to: '/stock' })
   }
 
   function submitBillSession() {
@@ -593,7 +573,7 @@ export function AppShell() {
               onClick={() => {
                 setQuickSearchOpen(true)
               }}
-              aria-label="Search customers, bills, payments, stock, and market rates"
+              aria-label="Search customers, bills, payments, and market rates"
             >
               <Search size={17} />
             </button>
@@ -706,7 +686,7 @@ export function AppShell() {
                     billSession
                       ? 'Add item: 2 spindle, gst, +t 500, or Enter to review'
                       : inferCommandKind(pathname) === 'neutral'
-                      ? `${commandRegistry.bill.aliases[0]} sambhu 10, ${commandRegistry.payment.aliases[0]} sambhu 50k, ${commandRegistry.stock.aliases[0]} spindle 20, ${commandRegistry.print.aliases[0]} 51/24`
+                      ? `${commandRegistry.bill.aliases[0]} sambhu 10, ${commandRegistry.payment.aliases[0]} sambhu 50k, ${commandRegistry.print.aliases[0]} 51/24`
                       : 'Type command for this page, or use prefix for another action'
                   }
                 />
@@ -730,7 +710,6 @@ export function AppShell() {
               <span className="rounded-full bg-slate-900 px-2 py-1 text-white">: actions</span>
               <span className="rounded-full bg-slate-100 px-2 py-1">{commandRegistry.bill.aliases.join(', ')} bill</span>
               <span className="rounded-full bg-slate-100 px-2 py-1">{commandRegistry.payment.aliases.join(', ')} payment</span>
-              <span className="rounded-full bg-slate-100 px-2 py-1">{commandRegistry.stock.aliases.join(', ')} stock</span>
               <span className="rounded-full bg-slate-100 px-2 py-1">{commandRegistry.print.aliases.join(', ')} print</span>
               <span className="ml-auto hidden sm:inline">Arrows select, Tab fills, Enter runs</span>
             </div>
@@ -749,7 +728,7 @@ export function AppShell() {
                   value={quickSearch}
                   onChange={(event) => setQuickSearch(event.target.value)}
                   onKeyDown={handleQuickSearchKeyDown}
-                  placeholder="Search customers, bills like 1/21, payments, stock, market rate..."
+                  placeholder="Search customers, bills like 1/21, payments, market rate..."
                 />
                 <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500 sm:block">Ctrl /</span>
               </div>
@@ -764,7 +743,7 @@ export function AppShell() {
                 {!quickSearchQuery.isLoading && !quickSearchQuery.isError && quickSearchResults.length === 0 && (
                   <div className="px-3 py-10 text-center">
                     <p className="text-sm font-semibold text-slate-700">No matches</p>
-                    <p className="mt-1 text-sm text-slate-500">Try: bill 51, rate 23-may, stock spindle, or a party name.</p>
+                    <p className="mt-1 text-sm text-slate-500">Try: bill 51, rate 23-may, or a party name.</p>
                   </div>
                 )}
                 {quickSearchSections.map((section) => (
@@ -796,15 +775,14 @@ export function AppShell() {
   )
 }
 
-const QUICK_SEARCH_SECTION_META: Record<QuickSearchSectionKey, { label: string; limit: number; icon: typeof FileText }> = {
+const QUICK_SEARCH_SECTION_META: Partial<Record<QuickSearchSectionKey, { label: string; limit: number; icon: typeof FileText }>> = {
   Bill: { label: 'Bills', limit: 5, icon: FileText },
   Customer: { label: 'Customers', limit: 4, icon: UserRound },
   Payment: { label: 'Payments', limit: 3, icon: IndianRupee },
   Rate: { label: 'Brass Rates', limit: 2, icon: TrendingUp },
-  Stock: { label: 'Stock', limit: 3, icon: Package },
 }
 
-const QUICK_SEARCH_SECTION_ORDER: QuickSearchSectionKey[] = ['Bill', 'Customer', 'Payment', 'Rate', 'Stock']
+const QUICK_SEARCH_SECTION_ORDER: QuickSearchSectionKey[] = ['Bill', 'Customer', 'Payment', 'Rate']
 
 type QuickSearchSectionModel = {
   key: QuickSearchSectionKey
@@ -817,6 +795,7 @@ type QuickSearchSectionModel = {
 function groupQuickSearchResults(results: QuickSearchResult[], expanded: Partial<Record<QuickSearchSectionKey, boolean>>): QuickSearchSectionModel[] {
   return QUICK_SEARCH_SECTION_ORDER.map((key) => {
     const meta = QUICK_SEARCH_SECTION_META[key]
+    if (!meta) return null
     const sectionResults = results.filter((result) => result.kind === key)
     return {
       key,
@@ -825,7 +804,7 @@ function groupQuickSearchResults(results: QuickSearchResult[], expanded: Partial
       total: sectionResults.length,
       visibleResults: expanded[key] ? sectionResults : sectionResults.slice(0, meta.limit),
     }
-  }).filter((section) => section.total > 0)
+  }).filter((section): section is QuickSearchSectionModel => Boolean(section && section.total > 0))
 }
 
 function QuickSearchSection({
@@ -940,7 +919,7 @@ function CommandLivePreview({
   if (mode === 'action') {
     return (
       <div className="border-b border-slate-100 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-        Action mode jumps to app pages and system tools. Type a page name like stock, backup, or control.
+        Action mode jumps to app pages and system tools. Type a page name like backup, casting, or control.
       </div>
     )
   }
@@ -1149,7 +1128,7 @@ function buildCommandDraft(
   const raw = input.trim()
   if (mode === 'search') return { mode: 'Search', lines: [], suggestions: ['Type / followed by party name', 'Enter opens selected ledger'] }
   if (mode === 'help') return { mode: 'Help', lines: [], suggestions: ['Try ? b', '? payment', '? session'] }
-  if (mode === 'action') return { mode: 'Actions', lines: [], suggestions: ['Type :stock, :backup, :control'] }
+  if (mode === 'action') return { mode: 'Actions', lines: [], suggestions: ['Type :casting, :backup, :control'] }
   if (billSession && !raw) {
     return {
       mode: 'Bill Session',
@@ -1166,7 +1145,7 @@ function buildCommandDraft(
     return {
       mode: 'Command',
       lines: [],
-      suggestions: ['Start with b bill', 'p payment', 's stock', 'pr print'],
+      suggestions: ['Start with b bill', 'p payment', 'pr print'],
     }
   }
   if (resolved.kind === 'payment') return buildPaymentDraft(resolved.body, deps)
@@ -1306,7 +1285,6 @@ function buildCommandStarterSuggestions(query: string, history: string[] = []): 
     ...buildHistoryControlSuggestion(query, history),
     { id: 'start-bill', label: 'b bill', detail: 'Create bill or start bill session', kind: 'mode' as const, value: 'b ' },
     { id: 'start-payment', label: 'p payment', detail: 'Record customer payment', kind: 'mode' as const, value: 'p ' },
-    { id: 'start-stock', label: 's stock', detail: 'Add stock in', kind: 'mode' as const, value: 's ' },
     { id: 'start-search', label: '/ search', detail: 'Find party ledger', kind: 'mode' as const, value: '/ ' },
     { id: 'start-help', label: '? help', detail: 'Show command examples', kind: 'mode' as const, value: '? ' },
     { id: 'start-action', label: ': actions', detail: 'Jump to app page', kind: 'mode' as const, value: ': ' },
@@ -1357,7 +1335,6 @@ function buildHelpSuggestions(input: string): CommandSuggestion[] {
     { id: 'bill', label: 'Bill command', detail: 'b <customer> <item> <qty> [book n|1/04] [date]', value: '? b' },
     { id: 'session', label: 'Bill session memory', detail: 'b mukesh, then 2 spindle, 3 motor, Enter', value: '? session' },
     { id: 'payment', label: 'Payment command', detail: 'p <customer> <amount> [cash|bank] [date]', value: '? payment' },
-    { id: 'stock', label: 'Stock command', detail: 's <item> <qty> [date]', value: '? stock' },
     { id: 'modes', label: 'Command modes', detail: '/ search, ? help, : actions', value: '? modes' },
   ]
   return filterRankedNameMatches(topics, query, (topic) => `${topic.label} ${topic.detail}`)

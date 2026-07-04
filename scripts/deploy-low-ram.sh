@@ -8,9 +8,22 @@ set -euo pipefail
 # 3) Remove old compose containers and recreate them
 # 4) Verify public app, PocketBase, and market-rate endpoints
 
-APP_DIR="${APP_DIR:-/opt/docker/apps/Kapil_Test}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
+
+APP_DIR="${APP_DIR:-${REPO_DIR}}"
 DOMAIN="${DOMAIN:-https://kapil-test.zayu.dev}"
 NODE_BIN_DIR="${NODE_BIN_DIR:-/home/ubuntu/.nvm/versions/node/v24.15.0/bin}"
+DOPPLER_PROJECT="${DOPPLER_PROJECT:-kapil-billing}"
+DOPPLER_CONFIG="${DOPPLER_CONFIG:-prd}"
+
+if [[ "${KAPIL_SKIP_DOPPLER:-}" != "1" && "${KAPIL_DOPPLER_WRAPPED:-}" != "1" && -z "${PB_ADMIN_PASSWORD:-}" ]]; then
+  if command -v doppler >/dev/null 2>&1; then
+    echo "==> Re-running deploy with Doppler secrets (${DOPPLER_PROJECT}/${DOPPLER_CONFIG})"
+    export KAPIL_DOPPLER_WRAPPED=1
+    exec doppler run --project "${DOPPLER_PROJECT}" --config "${DOPPLER_CONFIG}" -- "$0" "$@"
+  fi
+fi
 
 cd "${APP_DIR}"
 
@@ -25,12 +38,19 @@ npm ci --prefer-offline
 echo "==> Building static frontend"
 npm run build
 
-if [[ -d "pb_data" ]]; then
+PB_DATA_DIR=""
+if [[ -d "data" ]]; then
+  PB_DATA_DIR="data"
+elif [[ -d "pb_data" ]]; then
+  PB_DATA_DIR="pb_data"
+fi
+
+if [[ -n "${PB_DATA_DIR}" ]]; then
   BACKUP_DIR="${BACKUP_DIR:-${APP_DIR}/logs/deploy-backups}"
-  BACKUP_FILE="${BACKUP_DIR}/pb_data_$(date -u +%Y%m%dT%H%M%SZ).zip"
+  BACKUP_FILE="${BACKUP_DIR}/${PB_DATA_DIR}_$(date -u +%Y%m%dT%H%M%SZ).zip"
   mkdir -p "${BACKUP_DIR}"
   echo "==> Creating local PocketBase backup: ${BACKUP_FILE}"
-  zip -qr "${BACKUP_FILE}" pb_data
+  zip -qr "${BACKUP_FILE}" "${PB_DATA_DIR}"
 fi
 
 echo "==> Removing old compose containers"
@@ -44,13 +64,6 @@ curl -fsS --max-time 20 "${DOMAIN}" >/dev/null
 
 echo "==> Verifying PocketBase health through domain proxy"
 curl -fsS --max-time 20 "${DOMAIN}/pb/api/health" >/dev/null
-
-if [[ -f ".env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source ".env"
-  set +a
-fi
 
 export PB_URL="${PB_URL:-${DOMAIN}/pb}"
 echo "==> Ensuring PocketBase collections"

@@ -31,7 +31,7 @@ const routeOptions = [
   { label: 'Dashboard', path: '/' },
   { label: 'New Bill', path: '/new-bill' },
   { label: 'New Payment', path: '/new-payment' },
-  { label: 'Stock', path: '/stock' },
+  { label: 'Casting', path: '/casting/new-session' },
   { label: 'Logs', path: '/transactions' },
   { label: 'Ledger', path: '/ledger' },
   { label: 'Calendar', path: '/calendar' },
@@ -183,11 +183,10 @@ function ControlRoomPage() {
     <div className="w-full space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {statusText && <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">{statusText}</p>}
 
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         <Metric label="Auth" value={pb.authStore.isValid ? 'Active' : 'Missing'} tone={pb.authStore.isValid ? 'green' : 'red'} />
         <Metric label="Customers" value={String(systemQuery.data?.counts.customers ?? '-')} />
         <Metric label="Bills" value={String(systemQuery.data?.counts.bills ?? '-')} />
-        <Metric label="Stock Buckets" value={String(systemQuery.data?.counts.stockBuckets ?? '-')} />
         <Metric label="Health Issues" value={String(systemQuery.data?.counts.healthIssues ?? '-')} tone={(systemQuery.data?.counts.healthIssues ?? 0) > 0 ? 'amber' : 'green'} />
       </section>
 
@@ -218,9 +217,6 @@ function ControlRoomPage() {
             <Field label="Payment aliases">
               <input className={inputClass} value={settings.commandAliases.payment.join(', ')} onChange={(event) => updateAliases('payment', event.target.value)} />
             </Field>
-            <Field label="Stock aliases">
-              <input className={inputClass} value={settings.commandAliases.stock.join(', ')} onChange={(event) => updateAliases('stock', event.target.value)} />
-            </Field>
             <Field label="Print aliases">
               <input className={inputClass} value={settings.commandAliases.print.join(', ')} onChange={(event) => updateAliases('print', event.target.value)} />
             </Field>
@@ -232,7 +228,6 @@ function ControlRoomPage() {
                   <option value="neutral">Neutral</option>
                   <option value="bill">Bill</option>
                   <option value="payment">Payment</option>
-                  <option value="stock">Stock</option>
                   <option value="print">Print</option>
                 </select>
               </Field>

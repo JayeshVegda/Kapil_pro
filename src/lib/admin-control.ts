@@ -19,12 +19,12 @@ export const defaultAdminControlSettings: AdminControlSettings = {
   commandAliases: {
     bill: ['b', 'bill', 'sale'],
     payment: ['p', 'pay', 'payment'],
-    stock: ['s', 'stock', 'stockin', 'in'],
+    stock: [],
     print: ['pr', 'print'],
   },
   pinnedRoutes: [
     { label: 'New Bill', path: '/new-bill' },
-    { label: 'Stock', path: '/stock' },
+    { label: 'Casting', path: '/casting/new-session' },
     { label: 'Data Health', path: '/data-health' },
     { label: 'Backup', path: '/backup' },
   ],

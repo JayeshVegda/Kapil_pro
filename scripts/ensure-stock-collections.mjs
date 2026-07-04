@@ -8,7 +8,7 @@
 import PocketBase from 'pocketbase'
 
 const PB_URL = process.env.PB_URL || 'http://127.0.0.1:8090'
-const PB_ADMIN_EMAIL = process.env.PB_ADMIN_EMAIL || process.env.PB_SUPERUSER_EMAIL || 'admin@kapil.cosearch.me'
+const PB_ADMIN_EMAIL = process.env.PB_ADMIN_EMAIL || process.env.PB_SUPERUSER_EMAIL
 const PB_ADMIN_PASSWORD = process.env.PB_ADMIN_PASSWORD || process.env.PB_SUPERUSER_PASSWORD || ''
 
 const pb = new PocketBase(PB_URL)
@@ -20,8 +20,8 @@ main().catch((err) => {
 })
 
 async function main() {
-  if (!PB_ADMIN_PASSWORD) {
-    console.error('Missing PB_ADMIN_PASSWORD (set in environment).')
+  if (!PB_ADMIN_EMAIL || !PB_ADMIN_PASSWORD) {
+    console.error('Missing PocketBase admin credentials. Run with Doppler or set PB_ADMIN_EMAIL/PB_ADMIN_PASSWORD.')
     process.exit(1)
   }
 

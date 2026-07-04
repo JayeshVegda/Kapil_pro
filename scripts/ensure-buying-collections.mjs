@@ -5,8 +5,8 @@
 import PocketBase from 'pocketbase'
 
 const PB_URL = process.env.PB_URL || 'http://127.0.0.1:8090'
-const PB_ADMIN_EMAIL = process.env.PB_ADMIN_EMAIL || 'admin@kapil.cosearch.me'
-const PB_ADMIN_PASSWORD = process.env.PB_ADMIN_PASSWORD || 'Kapil@2026!PB'
+const PB_ADMIN_EMAIL = process.env.PB_ADMIN_EMAIL
+const PB_ADMIN_PASSWORD = process.env.PB_ADMIN_PASSWORD
 
 const pb = new PocketBase(PB_URL)
 pb.autoCancellation(false)
@@ -17,6 +17,11 @@ main().catch((err) => {
 })
 
 async function main() {
+  if (!PB_ADMIN_EMAIL || !PB_ADMIN_PASSWORD) {
+    console.error('Missing PocketBase admin credentials. Run with Doppler or set PB_ADMIN_EMAIL and PB_ADMIN_PASSWORD.')
+    process.exit(1)
+  }
+
   console.log(`Connecting to PocketBase: ${PB_URL}`)
   await pb.collection('_superusers').authWithPassword(PB_ADMIN_EMAIL, PB_ADMIN_PASSWORD)
   console.log(`Authenticated as ${PB_ADMIN_EMAIL}`)

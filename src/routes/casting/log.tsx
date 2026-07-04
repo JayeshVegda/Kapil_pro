@@ -191,16 +191,26 @@ function CastingLogPage() {
     return {
       id: snap.id,
       date: snap.date,
+      coalKg: snap.coalKg,
+      coalRate: snap.coalRate,
+      workerSalary: snap.workerSalary,
       unit: snap.unit,
       wireOut: snap.wireOut,
       wastage: snap.wastage,
       cholIn: snap.cholIn,
       costPerKg: snap.costPerKg,
+      metalCostPerKg: snap.costPerKg,
+      coalCostPerKg: 0,
+      workerCostPerKg: 0,
+      finalProductCostPerKg: snap.finalProductCostPerKg,
+      totalWireOut: snap.wireOut,
+      totalMel: snap.wastage,
       totalInputCost: snap.totalInputCost,
       totalInputKg: snap.totalInputKg,
       note: snap.note,
       createdAt: '',
       updatedAt: '',
+      batches: [],
       inputs: snap.inputs.map((i, idx) => ({
         id: `snap-${idx}`,
         sessionId: snap.id,
@@ -217,11 +227,15 @@ function CastingLogPage() {
       const snapshot: CastingSessionTrashSnapshot = {
         id: session.id,
         date: session.date,
+        coalKg: session.coalKg,
+        coalRate: session.coalRate,
+        workerSalary: session.workerSalary,
         unit: session.unit,
         wireOut: session.wireOut,
         wastage: session.wastage,
         cholIn: session.cholIn,
         costPerKg: session.costPerKg,
+        finalProductCostPerKg: session.finalProductCostPerKg,
         totalInputCost: session.totalInputCost,
         totalInputKg: session.totalInputKg,
         note: session.note,
@@ -250,6 +264,9 @@ function CastingLogPage() {
       const s = entry.snapshot
       await saveCastingSession({
         date: s.date,
+        coalKg: s.coalKg,
+        coalRate: s.coalRate,
+        workerSalary: s.workerSalary,
         unit: s.unit,
         wireOut: s.wireOut,
         wastage: s.wastage,
@@ -458,10 +475,10 @@ function CastingLogPage() {
       'Other Materials',
       'Total Input Kg',
       'Total Input Cost',
-      'Cost/kg',
+      'Casting Cost/kg',
+      'Final Product Cost/kg',
       'Wire Out',
       'Wastage',
-      'Chol IN',
       'Note',
     ]
     const lines = [header.join(',')]
@@ -488,9 +505,9 @@ function CastingLogPage() {
         String(s.totalInputKg),
         String(s.totalInputCost),
         String(s.costPerKg),
+        String(s.finalProductCostPerKg),
         String(s.wireOut),
         String(s.wastage),
-        String(s.cholIn),
         s.note,
       ].map((c) => csvEscape(String(c)))
       lines.push(row.join(','))
@@ -585,10 +602,10 @@ function CastingLogPage() {
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Batches</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Input kg</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Input cost</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Cost/kg</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Casting cost/kg</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Product cost/kg</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Wire out</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Wastage</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Chol IN</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Actions</th>
                 </tr>
               </thead>
@@ -611,9 +628,9 @@ function CastingLogPage() {
                         {row.costPerKg > 0 ? `₹${row.costPerKg.toFixed(2)}` : '—'}
                       </span>
                     </td>
+                    <td className="px-3 py-3 text-right font-mono font-semibold tabular-nums text-slate-950">{row.finalProductCostPerKg > 0 ? `₹${row.finalProductCostPerKg.toFixed(2)}` : '—'}</td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">{row.wireOut.toFixed(3)}</td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">{row.wastage.toFixed(3)}</td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums">{row.cholIn.toFixed(3)}</td>
                     <td className="px-3 py-3 text-right">
                       <div className="inline-flex flex-wrap justify-end gap-2">
                         {viewMode === 'active' && (

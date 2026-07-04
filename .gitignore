@@ -45,3 +45,9 @@ docs/**/*.xlsm
 *.njsproj
 *.sln
 *.sw?
+
+# Project data
+data/
+!data/types.d.ts
+Claude_*.json
+

@@ -48,6 +48,7 @@ function DashboardPage() {
       }),
     [currentMonthStockQuery.data, previousMonthStockQuery.data, stockFiscalRows, stockRows],
   )
+  void stockSummary
 
   if (isPending) {
     return (
@@ -113,30 +114,6 @@ function DashboardPage() {
             />
           </div>
         </div>
-      </section>
-
-      <section className="mb-4">
-        {currentStockQuery.isLoading && (
-          <div className="grid grid-cols-1 gap-4 xl:flex xl:items-stretch">
-            <div className="h-[148px] animate-pulse rounded-xl bg-blue-100/70 xl:w-fit xl:min-w-[25rem] xl:flex-none" />
-            <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:min-w-0 xl:flex-1">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <div className="h-[124px] animate-pulse rounded-lg border border-slate-200 bg-white" />
-                <div className="h-[124px] animate-pulse rounded-lg border border-slate-200 bg-white" />
-                <div className="h-[124px] animate-pulse rounded-lg border border-slate-200 bg-white" />
-              </div>
-            </div>
-          </div>
-        )}
-        {currentStockQuery.isError && <p className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">Unable to load stock summary.</p>}
-        {!currentStockQuery.isLoading && !currentStockQuery.isError && (
-          <DashboardStockPanel
-            rows={stockRows}
-            summary={stockSummary}
-            item={stockRows[0]}
-            onSelect={() => navigate({ to: '/stock' })}
-          />
-        )}
       </section>
 
       <section className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -486,3 +463,5 @@ function previousMonthKey(monthKey: string) {
   const date = new Date(Number(yearRaw), Number(monthRaw) - 2, 1)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
+
+void DashboardStockPanel

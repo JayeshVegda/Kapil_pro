@@ -69,6 +69,7 @@ npm run preview -- --host 0.0.0.0 --port 4174
 For the current VPS deployment path, use the repo deployment script and container config already checked into the repository. See:
 
 - `scripts/deploy-low-ram.sh`
+- `docs/operations/doppler-secrets.md`
 - `docs/operations/deploy/`
 - `docs/operations/audits/vps-ram-and-restart-audit-2026-04-25.md`
 
@@ -124,4 +125,3 @@ Start here when you need deeper context:
 - `docs/features/keyboard-first-new-bill-and-payment.md`
 - `docs/operations/incident-notes.md`
 - `cursor_project_scope_and_organization_d.md`
-

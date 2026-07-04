@@ -1,12 +1,12 @@
 /**
- * One-time / CI PocketBase admin migration: casting_sessions + casting_materials + casting_inputs.
+ * One-time / CI PocketBase admin migration: casting sessions + batches + batch inputs.
  * Usage: PB_URL=... PB_ADMIN_EMAIL=... PB_ADMIN_PASSWORD=... node scripts/ensure-casting-collections.mjs
  */
 import PocketBase from 'pocketbase'
 
 const PB_URL = process.env.PB_URL || 'http://127.0.0.1:8090'
-const PB_ADMIN_EMAIL = process.env.PB_ADMIN_EMAIL || 'admin@kapil.cosearch.me'
-const PB_ADMIN_PASSWORD = process.env.PB_ADMIN_PASSWORD || 'Kapil@2026!PB'
+const PB_ADMIN_EMAIL = process.env.PB_ADMIN_EMAIL
+const PB_ADMIN_PASSWORD = process.env.PB_ADMIN_PASSWORD
 
 const pb = new PocketBase(PB_URL)
 pb.autoCancellation(false)
@@ -17,6 +17,11 @@ main().catch((err) => {
 })
 
 async function main() {
+  if (!PB_ADMIN_EMAIL || !PB_ADMIN_PASSWORD) {
+    console.error('Missing PocketBase admin credentials. Run with Doppler or set PB_ADMIN_EMAIL and PB_ADMIN_PASSWORD.')
+    process.exit(1)
+  }
+
   console.log(`Connecting to PocketBase: ${PB_URL}`)
   await pb.collection('_superusers').authWithPassword(PB_ADMIN_EMAIL, PB_ADMIN_PASSWORD)
   console.log(`Authenticated as ${PB_ADMIN_EMAIL}`)
@@ -25,7 +30,9 @@ async function main() {
   const sessionsCol = await pb.collections.getOne('casting_sessions')
   await ensureCastingMaterials()
   const materialsCol = await pb.collections.getOne('casting_materials')
-  await ensureCastingInputs(sessionsCol.id, materialsCol.id)
+  await ensureCastingBatches(sessionsCol.id)
+  const batchesCol = await pb.collections.getOne('casting_batches')
+  await ensureCastingBatchInputs(batchesCol.id, materialsCol.id)
   console.log('Casting collections are ready.')
 }
 
@@ -62,10 +69,19 @@ async function ensureCastingSessions() {
   const fields = [
     textField('date', true),
     numberField('unit', false),
+    numberField('coal_kg', false),
+    numberField('coal_rate', false),
+    numberField('worker_salary', false),
     numberField('wire_out', false),
     numberField('wastage', false),
     numberField('chol_in', false),
+    numberField('total_wire_out', false),
+    numberField('total_mel', false),
     numberField('cost_per_kg', false),
+    numberField('metal_cost_per_kg', false),
+    numberField('coal_cost_per_kg', false),
+    numberField('worker_cost_per_kg', false),
+    numberField('final_product_cost_per_kg', false),
     numberField('total_input_cost', false),
     numberField('total_input_kg', false),
     textField('note', false),
@@ -149,8 +165,8 @@ async function ensureCastingMaterials() {
   console.log('Updated casting_materials schema')
 }
 
-async function ensureCastingInputs(sessionsCollectionId, materialsCollectionId) {
-  const existing = await pb.collections.getOne('casting_inputs').catch(() => null)
+async function ensureCastingBatches(sessionsCollectionId) {
+  const existing = await pb.collections.getOne('casting_batches').catch(() => null)
   const fields = [
     {
       name: 'session',
@@ -158,6 +174,56 @@ async function ensureCastingInputs(sessionsCollectionId, materialsCollectionId) 
       required: true,
       maxSelect: 1,
       collectionId: sessionsCollectionId,
+      cascadeDelete: true,
+    },
+    numberField('batch_number', true),
+    numberField('wire_out', false),
+    numberField('mel', false),
+  ]
+  const indexes = [
+    'CREATE INDEX idx_casting_batches_session ON casting_batches (session)',
+    'CREATE INDEX idx_casting_batches_session_number ON casting_batches (session, batch_number)',
+  ]
+  const apiRule = '@request.auth.id != ""'
+
+  if (!existing) {
+    await pb.collections.create({
+      name: 'casting_batches',
+      type: 'base',
+      fields,
+      indexes,
+      listRule: apiRule,
+      viewRule: apiRule,
+      createRule: apiRule,
+      updateRule: apiRule,
+      deleteRule: apiRule,
+    })
+    console.log('Created casting_batches')
+    return
+  }
+
+  await pb.collections.update(existing.id, {
+    ...existing,
+    fields: mergeCustomFields(existing.fields ?? [], fields),
+    indexes,
+    listRule: apiRule,
+    viewRule: apiRule,
+    createRule: apiRule,
+    updateRule: apiRule,
+    deleteRule: apiRule,
+  })
+  console.log('Updated casting_batches schema')
+}
+
+async function ensureCastingBatchInputs(batchesCollectionId, materialsCollectionId) {
+  const existing = await pb.collections.getOne('casting_batch_inputs').catch(() => null)
+  const fields = [
+    {
+      name: 'batch',
+      type: 'relation',
+      required: true,
+      maxSelect: 1,
+      collectionId: batchesCollectionId,
       cascadeDelete: true,
     },
     {
@@ -174,15 +240,15 @@ async function ensureCastingInputs(sessionsCollectionId, materialsCollectionId) 
     numberField('amount', false),
   ]
   const indexes = [
-    'CREATE INDEX idx_casting_inputs_session ON casting_inputs (session)',
-    'CREATE INDEX idx_casting_inputs_material ON casting_inputs (material)',
-    'CREATE INDEX idx_casting_inputs_material_name ON casting_inputs (material_name)',
+    'CREATE INDEX idx_casting_batch_inputs_batch ON casting_batch_inputs (batch)',
+    'CREATE INDEX idx_casting_batch_inputs_material ON casting_batch_inputs (material)',
+    'CREATE INDEX idx_casting_batch_inputs_material_name ON casting_batch_inputs (material_name)',
   ]
   const apiRule = '@request.auth.id != ""'
 
   if (!existing) {
     await pb.collections.create({
-      name: 'casting_inputs',
+      name: 'casting_batch_inputs',
       type: 'base',
       fields,
       indexes,
@@ -192,7 +258,7 @@ async function ensureCastingInputs(sessionsCollectionId, materialsCollectionId) 
       updateRule: apiRule,
       deleteRule: apiRule,
     })
-    console.log('Created casting_inputs')
+    console.log('Created casting_batch_inputs')
     return
   }
 
@@ -206,5 +272,5 @@ async function ensureCastingInputs(sessionsCollectionId, materialsCollectionId) 
     updateRule: apiRule,
     deleteRule: apiRule,
   })
-  console.log('Updated casting_inputs schema')
+  console.log('Updated casting_batch_inputs schema')
 }

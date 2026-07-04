@@ -1,23 +1,56 @@
 services:
-  kapil-test:
+  kapil-billing:
     image: nginx:alpine
-    container_name: kapil-test
+    container_name: kapil-billing
     restart: unless-stopped
     volumes:
       - ./dist:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - caddy-net
+      - proxy-net
+    mem_limit: 64m
 
-  kapil-test-pb:
+  kapil-pb:
     image: ghcr.io/muchobien/pocketbase:latest
-    container_name: kapil-test-pb
+    container_name: kapil-billing-pb
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8090"
     volumes:
-      - ./pb_data:/pb_data
+      - ./data:/pb_data
+      - ./pb_migrations:/pb_migrations
+    command: serve --dir /pb_data --http 0.0.0.0:8090
     networks:
-      - caddy-net
+      - proxy-net
+    mem_limit: 256m
+
+  kapil-bot:
+    image: node:alpine
+    container_name: kapil-billing-brass-bot
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - .:/app:ro
+    entrypoint: ["node", "scripts/brass-rss-daemon.mjs"]
+    environment:
+      BRASS_RSS_URL: ${BRASS_RSS_URL:-https://rss.zayu.dev/telegram/channel/brassb2b}
+      BRASS_TELEGRAM_BOT_TOKEN: ${BRASS_TELEGRAM_BOT_TOKEN:?Run docker compose through Doppler or set BRASS_TELEGRAM_BOT_TOKEN}
+      BRASS_TELEGRAM_CHAT_ID: ${BRASS_TELEGRAM_CHAT_ID:?Run docker compose through Doppler or set BRASS_TELEGRAM_CHAT_ID}
+      BRASS_DAEMON_TZ: ${BRASS_DAEMON_TZ:-Asia/Kolkata}
+      BRASS_DAEMON_WINDOW_START: ${BRASS_DAEMON_WINDOW_START:-10:20}
+      BRASS_DAEMON_WINDOW_END: ${BRASS_DAEMON_WINDOW_END:-10:50}
+      BRASS_DAEMON_ACTIVE_INTERVAL_SECONDS: ${BRASS_DAEMON_ACTIVE_INTERVAL_SECONDS:-120}
+      BRASS_DAEMON_IDLE_INTERVAL_SECONDS: ${BRASS_DAEMON_IDLE_INTERVAL_SECONDS:-900}
+      BRASS_DAEMON_REQUIRE_TODAY: ${BRASS_DAEMON_REQUIRE_TODAY:-true}
+      PB_URL: http://kapil-pb:8090
+      PB_ADMIN_EMAIL: ${PB_ADMIN_EMAIL:?Run docker compose through Doppler or set PB_ADMIN_EMAIL}
+      PB_ADMIN_PASSWORD: ${PB_ADMIN_PASSWORD:?Run docker compose through Doppler or set PB_ADMIN_PASSWORD}
+    networks:
+      - proxy-net
+    mem_limit: 128m
+    depends_on:
+      - kapil-pb
 
 networks:
-  caddy-net:
+  proxy-net:
     external: true

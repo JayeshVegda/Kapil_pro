@@ -29,6 +29,8 @@ const isDryRun = args.has('--dry-run')
 const isForce = args.has('--force')
 const skipTelegram = args.has('--no-telegram')
 const isBackfill = args.has('--backfill')
+const requireToday = args.has('--require-today') || process.env.BRASS_REQUIRE_TODAY === 'true'
+const requireTodayTz = process.env.BRASS_DAEMON_TZ || process.env.BRASS_TZ || 'Asia/Kolkata'
 
 main().catch((error) => {
   console.error('Brass RSS watcher failed:', error?.message || error)
@@ -44,6 +46,11 @@ async function main() {
   const parsed = parseBrassBulletinFromRss(rssText)
   if (!parsed) {
     console.log('No BrassB2B bulletin found in RSS.')
+    return
+  }
+
+  if (requireToday && parsed.date !== todayInZone(requireTodayTz)) {
+    console.log(`Latest BrassB2B bulletin is ${parsed.date}; waiting for today's bulletin in ${requireTodayTz}.`)
     return
   }
 
@@ -206,4 +213,15 @@ function loadEnvFile(path) {
     const value = trimmed.slice(index + 1).trim().replace(/^['"]|['"]$/g, '')
     if (!process.env[key]) process.env[key] = value
   }
+}
+
+function todayInZone(timeZone) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day}`
 }

@@ -332,6 +332,7 @@ function ReportPage() {
   const salesDelta = report.thisMonth.sales - report.lastMonth.sales
   const collectionEfficiencyStatus = getEfficiencyStatus(report.overall.collectionEfficiencyPct)
   const stockSummary = useMemo(() => buildStockSummary(stockQuery.data ?? []), [stockQuery.data])
+  void stockSummary
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
@@ -357,8 +358,6 @@ function ReportPage() {
             collectionEfficiencyPct={report.overall.collectionEfficiencyPct}
             gstEstimate={report.thisMonth.gstEstimate}
           />
-
-          <StockManagementPanel summary={stockSummary} isLoading={stockQuery.isLoading} isError={stockQuery.isError} />
 
           <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.35fr_1fr]" aria-label="Main analytics">
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -617,7 +616,7 @@ function StockManagementPanel({ summary, isLoading, isError }: { summary: StockS
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Stock management</p>
           <h2 className="mt-1 text-base font-semibold text-slate-950">Inventory control</h2>
         </div>
-        <Link to="/stock-in" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-100">
+        <Link to="/monthly-report" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-100">
           Open Stock
         </Link>
       </div>
@@ -649,7 +648,7 @@ function StockList({ title, rows, empty, attention = false }: { title: string; r
       <div className="mt-3 space-y-2">
         {rows.length === 0 && <p className="text-sm text-slate-500">{empty}</p>}
         {rows.map((row) => (
-          <Link key={`${title}-${row.id}`} to="/stock-in" className="block rounded-md border border-slate-200 bg-white px-3 py-2 hover:border-blue-200 hover:bg-blue-50/30 focus:outline-none focus:ring-2 focus:ring-blue-100">
+          <Link key={`${title}-${row.id}`} to="/monthly-report" className="block rounded-md border border-slate-200 bg-white px-3 py-2 hover:border-blue-200 hover:bg-blue-50/30 focus:outline-none focus:ring-2 focus:ring-blue-100">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-slate-900">{row.itemName}</p>
@@ -1139,3 +1138,5 @@ function getFinancialYearMonths(startYear: number) {
   }
   return months
 }
+
+void StockManagementPanel

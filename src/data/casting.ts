@@ -4,8 +4,8 @@
  */
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
-import { calculateCastingCost, type CastingInputRow } from '@/domain/casting-calculations'
-import type { CastingInputRecord, CastingMaterialRecord, CastingSessionRecord, CastingSessionWithInputs } from '@/domain/casting-types'
+import { calculateCastingCost, type CastingBatchCostInput, type CastingInputRow } from '@/domain/casting-calculations'
+import type { CastingBatchRecord, CastingInputRecord, CastingMaterialRecord, CastingSessionRecord, CastingSessionWithInputs } from '@/domain/casting-types'
 
 type PBRecord = Record<string, unknown> & { id: string }
 const PAGE_SIZE = 200
@@ -17,14 +17,29 @@ const num = (value: unknown) => {
 }
 
 function mapSession(row: PBRecord): CastingSessionRecord {
+  const totalWireOut = num(row.total_wire_out) || num(row.wire_out)
+  const totalMel = num(row.total_mel) || num(row.wastage)
+  const costPerKg = num(row.cost_per_kg)
+  const metalCostPerKg = num(row.metal_cost_per_kg) || costPerKg
+  const coalCostPerKg = num(row.coal_cost_per_kg)
+  const workerCostPerKg = num(row.worker_cost_per_kg)
   return {
     id: row.id,
     date: String(row.date ?? '').slice(0, 10),
+    coalKg: num(row.coal_kg),
+    coalRate: num(row.coal_rate),
+    workerSalary: num(row.worker_salary),
     unit: num(row.unit),
-    wireOut: num(row.wire_out),
-    wastage: num(row.wastage),
+    wireOut: totalWireOut,
+    wastage: totalMel,
     cholIn: num(row.chol_in),
-    costPerKg: num(row.cost_per_kg),
+    costPerKg,
+    metalCostPerKg,
+    coalCostPerKg,
+    workerCostPerKg,
+    finalProductCostPerKg: num(row.final_product_cost_per_kg),
+    totalWireOut,
+    totalMel,
     totalInputCost: num(row.total_input_cost),
     totalInputKg: num(row.total_input_kg),
     note: String(row.note ?? ''),
@@ -37,11 +52,23 @@ function mapInput(row: PBRecord): CastingInputRecord {
   return {
     id: row.id,
     sessionId: String(row.session ?? ''),
+    batchId: row.batch ? String(row.batch) : undefined,
     materialId: row.material ? String(row.material) : undefined,
     materialName: String(row.material_name ?? ''),
     qty: num(row.qty),
     rate: num(row.rate),
     amount: num(row.amount),
+  }
+}
+
+function mapBatch(row: PBRecord): CastingBatchRecord {
+  return {
+    id: row.id,
+    sessionId: String(row.session ?? ''),
+    batchNumber: num(row.batch_number),
+    wireOut: num(row.wire_out),
+    mel: num(row.mel),
+    inputs: [],
   }
 }
 
@@ -52,6 +79,40 @@ function mapMaterial(row: PBRecord): CastingMaterialRecord {
     code: String(row.code ?? ''),
     category: String(row.category ?? ''),
     isActive: Boolean(row.is_active ?? true),
+  }
+}
+
+function withRecalculatedSessionCosts(session: CastingSessionRecord, batches: CastingBatchRecord[]): CastingSessionRecord {
+  if (batches.length === 0) return session
+  const cost = calculateCastingCost({
+    batches: batches.map((batch) => ({
+      batchNumber: batch.batchNumber,
+      wireOut: batch.wireOut,
+      mel: batch.mel,
+      inputs: batch.inputs.map((input) => ({
+        materialName: input.materialName,
+        qty: input.qty,
+        rate: input.rate,
+      })),
+    })),
+    coalKg: session.coalKg,
+    coalRate: session.coalRate,
+    workerSalary: session.workerSalary,
+  })
+  return {
+    ...session,
+    unit: batches.length,
+    wireOut: cost.totalWireOut,
+    wastage: cost.totalMel,
+    totalWireOut: cost.totalWireOut,
+    totalMel: cost.totalMel,
+    costPerKg: cost.finalCastingCostPerKg,
+    metalCostPerKg: cost.metalCostPerKg,
+    coalCostPerKg: cost.coalCostPerKg,
+    workerCostPerKg: cost.workerCostPerKg,
+    finalProductCostPerKg: cost.finalProductCostPerKg,
+    totalInputCost: cost.totalInputCost,
+    totalInputKg: cost.totalInputKg,
   }
 }
 
@@ -76,17 +137,6 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-async function loadMaterialNameMap(): Promise<Map<string, string>> {
-  const materialRows = await listAllPaged('casting_materials', { sort: 'name' }).catch(() => [])
-  const map = new Map<string, string>()
-  for (const row of materialRows) {
-    const id = row.id
-    const name = String(row.name ?? '').trim()
-    if (id && name) map.set(id, name)
-  }
-  return map
-}
-
 export async function loadCastingSessions(params?: { from?: string; to?: string }): Promise<CastingSessionWithInputs[]> {
   const filters: string[] = []
   if (params?.from) filters.push(`date >= "${params.from}"`)
@@ -97,34 +147,74 @@ export async function loadCastingSessions(params?: { from?: string; to?: string 
   const sessions = sessionsRaw.map(mapSession)
   if (sessions.length === 0) return []
 
-  const materialNameById = await loadMaterialNameMap()
   const idChunks = chunk(sessions.map((s) => s.id), 30)
-  const inputsChunkResults = await Promise.all(
+  const batchChunkResults = await Promise.all(
     idChunks.map((ids) => {
       const filter = ids.map((id) => `session = "${id}"`).join(' || ')
-      return listAllPaged('casting_inputs', { filter })
+      return listAllPaged('casting_batches', { filter })
+    }),
+  )
+  const batchesRaw = batchChunkResults.flat()
+  const batches = batchesRaw.map(mapBatch)
+  const batchChunks = chunk(batches.map((b) => b.id), 30)
+  const inputsChunkResults = await Promise.all(
+    batchChunks.map((ids) => {
+      const filter = ids.map((id) => `batch = "${id}"`).join(' || ')
+      return listAllPaged('casting_batch_inputs', { filter })
     }),
   )
   const inputsRaw = inputsChunkResults.flat()
 
   const inputs = inputsRaw.map((row) => {
     const mapped = mapInput(row)
-    const linkedName = mapped.materialId ? materialNameById.get(mapped.materialId) : undefined
     return {
       ...mapped,
-      materialName: linkedName || mapped.materialName,
+      sessionId: batches.find((batch) => batch.id === mapped.batchId)?.sessionId ?? '',
     }
   })
-  const bySession = new Map<string, CastingInputRecord[]>()
+  const inputsByBatch = new Map<string, CastingInputRecord[]>()
   for (const line of inputs) {
+    if (!line.batchId) continue
+    const batch = batches.find((b) => b.id === line.batchId)
+    const next = { ...line, sessionId: batch?.sessionId ?? '', batchNumber: batch?.batchNumber }
+    const list = inputsByBatch.get(line.batchId) ?? []
+    list.push(next)
+    inputsByBatch.set(line.batchId, list)
+  }
+  const batchesBySession = new Map<string, CastingBatchRecord[]>()
+  for (const batch of batches) {
+    const withInputs = { ...batch, inputs: inputsByBatch.get(batch.id) ?? [] }
+    const list = batchesBySession.get(batch.sessionId) ?? []
+    list.push(withInputs)
+    batchesBySession.set(batch.sessionId, list)
+  }
+  const bySession = new Map<string, CastingInputRecord[]>()
+  for (const batch of batches) {
+    for (const line of inputsByBatch.get(batch.id) ?? []) {
+      const next = { ...line, sessionId: batch.sessionId, batchNumber: batch.batchNumber }
+      const list = bySession.get(batch.sessionId) ?? []
+      list.push(next)
+      bySession.set(batch.sessionId, list)
+    }
+  }
+  if (inputs.length === 0) {
+    const legacyInputsChunkResults = await Promise.all(
+      idChunks.map((ids) => {
+        const filter = ids.map((id) => `session = "${id}"`).join(' || ')
+        return listAllPaged('casting_inputs', { filter }).catch(() => [])
+      }),
+    )
+    for (const line of legacyInputsChunkResults.flat().map(mapInput)) {
     if (!line.sessionId) continue
     const list = bySession.get(line.sessionId) ?? []
     list.push(line)
     bySession.set(line.sessionId, list)
+    }
   }
 
   return sessions.map((s) => ({
-    ...s,
+    ...withRecalculatedSessionCosts(s, (batchesBySession.get(s.id) ?? []).sort((a, b) => a.batchNumber - b.batchNumber)),
+    batches: (batchesBySession.get(s.id) ?? []).sort((a, b) => a.batchNumber - b.batchNumber),
     inputs: bySession.get(s.id) ?? [],
   }))
 }
@@ -132,15 +222,32 @@ export async function loadCastingSessions(params?: { from?: string; to?: string 
 export async function loadCastingSession(id: string): Promise<CastingSessionWithInputs | null> {
   try {
     const session = await pb.collection('casting_sessions').getOne(id)
-    const [inputsRaw, materialNameById] = await Promise.all([listAllPaged('casting_inputs', { filter: `session = "${id}"` }), loadMaterialNameMap()])
+    const batchesRaw = await listAllPaged('casting_batches', { filter: `session = "${id}"` })
+    const batches = batchesRaw.map(mapBatch).sort((a, b) => a.batchNumber - b.batchNumber)
+    const inputsRaw = batches.length
+      ? (
+          await Promise.all(
+            chunk(batches.map((batch) => batch.id), 30).map((ids) => listAllPaged('casting_batch_inputs', { filter: ids.map((batchId) => `batch = "${batchId}"`).join(' || ') })),
+          )
+        ).flat()
+      : await listAllPaged('casting_inputs', { filter: `session = "${id}"` }).catch(() => [])
     const base = mapSession(session as PBRecord)
+    const inputsByBatch = new Map<string, CastingInputRecord[]>()
+    for (const row of inputsRaw) {
+      const mapped = mapInput(row)
+      const batch = batches.find((b) => b.id === mapped.batchId)
+      const next = { ...mapped, sessionId: batch?.sessionId ?? base.id, batchNumber: batch?.batchNumber }
+      const key = mapped.batchId ?? 'legacy'
+      const list = inputsByBatch.get(key) ?? []
+      list.push(next)
+      inputsByBatch.set(key, list)
+    }
+    const withInputs = batches.map((batch) => ({ ...batch, inputs: inputsByBatch.get(batch.id) ?? [] }))
+    const recalculated = withRecalculatedSessionCosts(base, withInputs)
     return {
-      ...base,
-      inputs: inputsRaw.map((row) => {
-        const mapped = mapInput(row)
-        const linkedName = mapped.materialId ? materialNameById.get(mapped.materialId) : undefined
-        return { ...mapped, materialName: linkedName || mapped.materialName }
-      }),
+      ...recalculated,
+      batches: withInputs,
+      inputs: batches.length ? withInputs.flatMap((batch) => batch.inputs) : inputsRaw.map(mapInput),
     }
   } catch {
     return null
@@ -193,7 +300,7 @@ export async function mergeCastingMaterials(sourceId: string, targetId: string):
     const [target, source] = await Promise.all([pb.collection('casting_materials').getOne(targetId), pb.collection('casting_materials').getOne(sourceId)])
     const targetName = String((target as PBRecord).name ?? '').trim()
     const sourceName = String((source as PBRecord).name ?? '').trim()
-    const allInputRows = await listAllPaged('casting_inputs')
+    const allInputRows = await listAllPaged('casting_batch_inputs').catch(() => [])
     const sourceRows = allInputRows.filter((row) => {
       const materialId = row.material ? String(row.material) : ''
       const materialName = String(row.material_name ?? '').trim().toLowerCase()
@@ -201,8 +308,7 @@ export async function mergeCastingMaterials(sourceId: string, targetId: string):
     })
     await Promise.all(
       sourceRows.map((row) =>
-        pb.collection('casting_inputs').update(row.id, {
-          material: targetId,
+        pb.collection('casting_batch_inputs').update(row.id, {
           material_name: targetName || String(row.material_name ?? ''),
         }),
       ),
@@ -213,7 +319,7 @@ export async function mergeCastingMaterials(sourceId: string, targetId: string):
 
 export async function syncCastingMaterialMaster(): Promise<{ created: number; linkedRows: number; totalMaterials: number }> {
   return await runDataOperation('sync-casting-material-master', async () => {
-    const [inputs, materials] = await Promise.all([listAllPaged('casting_inputs'), listAllPaged('casting_materials', { sort: 'name' }).catch(() => [])])
+    const [inputs, materials] = await Promise.all([listAllPaged('casting_batch_inputs').catch(() => []), listAllPaged('casting_materials', { sort: 'name' }).catch(() => [])])
     const byName = new Map<string, string>()
     for (const m of materials) {
       const name = String(m.name ?? '').trim()
@@ -258,8 +364,7 @@ export async function syncCastingMaterialMaster(): Promise<{ created: number; li
         .filter(Boolean)
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join(' ')
-      await pb.collection('casting_inputs').update(row.id, {
-        material: mappedId,
+      await pb.collection('casting_batch_inputs').update(row.id, {
         material_name: canonicalPretty || rowNameRaw,
       })
       linkedRows += 1
@@ -275,12 +380,16 @@ export async function syncCastingMaterialMaster(): Promise<{ created: number; li
 
 export type SaveCastingSessionPayload = {
   date: string
-  unit: number
-  wireOut: number
-  wastage: number
-  cholIn: number
+  coalKg?: number
+  coalRate?: number
+  workerSalary?: number
+  unit?: number
+  wireOut?: number
+  wastage?: number
+  cholIn?: number
   note: string
-  inputs: CastingInputRow[]
+  inputs?: CastingInputRow[]
+  batches?: CastingBatchCostInput[]
 }
 
 function normalizeInputsForSave(rows: CastingInputRow[]): CastingInputRow[] {
@@ -291,6 +400,28 @@ function normalizeInputsForSave(rows: CastingInputRow[]): CastingInputRow[] {
       rate: num(r.rate),
     }))
     .filter((r) => r.materialName.length > 0 && r.qty > 0 && r.rate > 0)
+}
+
+function normalizeBatchesForSave(payload: SaveCastingSessionPayload): CastingBatchCostInput[] {
+  if (payload.batches?.length) {
+    return payload.batches
+      .map((batch, index) => ({
+        batchNumber: num(batch.batchNumber) || index + 1,
+        wireOut: num(batch.wireOut),
+        mel: num(batch.mel),
+        inputs: normalizeInputsForSave(batch.inputs),
+      }))
+      .filter((batch) => batch.inputs.length > 0 || batch.wireOut > 0 || batch.mel > 0)
+  }
+  const legacyInputs = normalizeInputsForSave(payload.inputs ?? [])
+  return [
+    {
+      batchNumber: 1,
+      wireOut: num(payload.wireOut),
+      mel: num(payload.wastage),
+      inputs: legacyInputs,
+    },
+  ].filter((batch) => batch.inputs.length > 0 || batch.wireOut > 0 || batch.mel > 0)
 }
 
 async function ensureMaterialMap(materialNames: string[]) {
@@ -337,39 +468,59 @@ async function ensureMaterialMap(materialNames: string[]) {
 }
 
 export async function saveCastingSession(payload: SaveCastingSessionPayload): Promise<{ id: string }> {
-  const inputs = normalizeInputsForSave(payload.inputs)
-  const { totalInputKg, totalInputCost, costPerKg } = calculateCastingCost(inputs)
+  const batches = normalizeBatchesForSave(payload)
+  const inputs = batches.flatMap((batch) => batch.inputs)
+  const cost = calculateCastingCost({
+    batches,
+    coalKg: payload.coalKg,
+    coalRate: payload.coalRate,
+    workerSalary: payload.workerSalary,
+  })
 
   return await runDataOperation('save-casting-session', async () => {
-    const materialMap = await ensureMaterialMap(inputs.map((r) => r.materialName))
+    await ensureMaterialMap(inputs.map((r) => r.materialName))
     const session = await pb.collection('casting_sessions').create({
       date: payload.date.slice(0, 10),
-      unit: num(payload.unit),
-      wire_out: num(payload.wireOut),
-      wastage: num(payload.wastage),
-      chol_in: num(payload.cholIn),
-      cost_per_kg: costPerKg,
-      total_input_cost: totalInputCost,
-      total_input_kg: totalInputKg,
+      unit: batches.length,
+      coal_kg: num(payload.coalKg),
+      coal_rate: num(payload.coalRate),
+      worker_salary: num(payload.workerSalary),
+      wire_out: cost.totalWireOut,
+      wastage: cost.totalMel,
+      chol_in: 0,
+      total_wire_out: cost.totalWireOut,
+      total_mel: cost.totalMel,
+      cost_per_kg: cost.finalCastingCostPerKg,
+      total_input_cost: cost.totalInputCost,
+      total_input_kg: cost.totalInputKg,
       note: String(payload.note ?? ''),
     })
 
+    const createdBatchIds: string[] = []
     const createdInputIds: string[] = []
     try {
-      for (const row of inputs) {
-        const materialId = materialMap.get(row.materialName.toLowerCase())
-        const created = await pb.collection('casting_inputs').create({
+      for (const batch of batches) {
+        const createdBatch = await pb.collection('casting_batches').create({
           session: session.id,
-          ...(materialId ? { material: materialId } : {}),
-          material_name: row.materialName,
-          qty: row.qty,
-          rate: row.rate,
-          amount: row.qty * row.rate,
+          batch_number: batch.batchNumber,
+          wire_out: batch.wireOut,
+          mel: batch.mel,
         })
-        createdInputIds.push(created.id)
+        createdBatchIds.push(createdBatch.id)
+        for (const row of batch.inputs) {
+          const created = await pb.collection('casting_batch_inputs').create({
+            batch: createdBatch.id,
+            material_name: row.materialName,
+            qty: row.qty,
+            rate: row.rate,
+            amount: row.qty * row.rate,
+          })
+          createdInputIds.push(created.id)
+        }
       }
     } catch (error) {
-      await Promise.allSettled(createdInputIds.map((id) => pb.collection('casting_inputs').delete(id)))
+      await Promise.allSettled(createdInputIds.map((id) => pb.collection('casting_batch_inputs').delete(id)))
+      await Promise.allSettled(createdBatchIds.map((id) => pb.collection('casting_batches').delete(id)))
       await pb.collection('casting_sessions').delete(session.id).catch(() => undefined)
       throw new Error(error instanceof Error ? error.message : 'Failed to save casting inputs')
     }
@@ -379,34 +530,58 @@ export async function saveCastingSession(payload: SaveCastingSessionPayload): Pr
 }
 
 export async function updateCastingSession(sessionId: string, payload: SaveCastingSessionPayload): Promise<void> {
-  const inputs = normalizeInputsForSave(payload.inputs)
-  const { totalInputKg, totalInputCost, costPerKg } = calculateCastingCost(inputs)
+  const batches = normalizeBatchesForSave(payload)
+  const inputs = batches.flatMap((batch) => batch.inputs)
+  const cost = calculateCastingCost({
+    batches,
+    coalKg: payload.coalKg,
+    coalRate: payload.coalRate,
+    workerSalary: payload.workerSalary,
+  })
 
   await runDataOperation('update-casting-session', async () => {
-    const materialMap = await ensureMaterialMap(inputs.map((r) => r.materialName))
-    const existing = await listAllPaged('casting_inputs', { filter: `session = "${sessionId}"` })
-    const oldIds = existing.map((row) => row.id)
+    await ensureMaterialMap(inputs.map((r) => r.materialName))
+    const existingBatches = await listAllPaged('casting_batches', { filter: `session = "${sessionId}"` }).catch(() => [])
+    const existingBatchIds = existingBatches.map((row) => row.id)
+    const existingInputs = existingBatchIds.length
+      ? (
+          await Promise.all(
+            chunk(existingBatchIds, 30).map((ids) => listAllPaged('casting_batch_inputs', { filter: ids.map((id) => `batch = "${id}"`).join(' || ') })),
+          )
+        ).flat()
+      : []
 
+    const createdBatchIds: string[] = []
     const createdInputIds: string[] = []
     try {
-      for (const row of inputs) {
-        const materialId = materialMap.get(row.materialName.toLowerCase())
-        const created = await pb.collection('casting_inputs').create({
+      for (const batch of batches) {
+        const createdBatch = await pb.collection('casting_batches').create({
           session: sessionId,
-          ...(materialId ? { material: materialId } : {}),
-          material_name: row.materialName,
-          qty: row.qty,
-          rate: row.rate,
-          amount: row.qty * row.rate,
+          batch_number: batch.batchNumber,
+          wire_out: batch.wireOut,
+          mel: batch.mel,
         })
-        createdInputIds.push(created.id)
+        createdBatchIds.push(createdBatch.id)
+        for (const row of batch.inputs) {
+          const created = await pb.collection('casting_batch_inputs').create({
+            batch: createdBatch.id,
+            material_name: row.materialName,
+            qty: row.qty,
+            rate: row.rate,
+            amount: row.qty * row.rate,
+          })
+          createdInputIds.push(created.id)
+        }
       }
     } catch (error) {
-      await Promise.allSettled(createdInputIds.map((id) => pb.collection('casting_inputs').delete(id)))
+      await Promise.allSettled(createdInputIds.map((id) => pb.collection('casting_batch_inputs').delete(id)))
+      await Promise.allSettled(createdBatchIds.map((id) => pb.collection('casting_batches').delete(id)))
       throw new Error(error instanceof Error ? error.message : 'Failed to replace casting inputs')
     }
 
-    const deleteOldResults = await Promise.allSettled(oldIds.map((id) => pb.collection('casting_inputs').delete(id)))
+    const deleteOldInputResults = await Promise.allSettled(existingInputs.map((row) => pb.collection('casting_batch_inputs').delete(row.id)))
+    const deleteOldBatchResults = await Promise.allSettled(existingBatchIds.map((id) => pb.collection('casting_batches').delete(id)))
+    const deleteOldResults = [...deleteOldInputResults, ...deleteOldBatchResults]
     const failedOldDeletes = deleteOldResults.filter((r) => r.status === 'rejected')
     if (failedOldDeletes.length > 0) {
       throw new Error('Failed to clean old input rows. Session not finalized; please retry update.')
@@ -414,13 +589,18 @@ export async function updateCastingSession(sessionId: string, payload: SaveCasti
 
     await pb.collection('casting_sessions').update(sessionId, {
       date: payload.date.slice(0, 10),
-      unit: num(payload.unit),
-      wire_out: num(payload.wireOut),
-      wastage: num(payload.wastage),
-      chol_in: num(payload.cholIn),
-      cost_per_kg: costPerKg,
-      total_input_cost: totalInputCost,
-      total_input_kg: totalInputKg,
+      unit: batches.length,
+      coal_kg: num(payload.coalKg),
+      coal_rate: num(payload.coalRate),
+      worker_salary: num(payload.workerSalary),
+      wire_out: cost.totalWireOut,
+      wastage: cost.totalMel,
+      chol_in: 0,
+      total_wire_out: cost.totalWireOut,
+      total_mel: cost.totalMel,
+      cost_per_kg: cost.finalCastingCostPerKg,
+      total_input_cost: cost.totalInputCost,
+      total_input_kg: cost.totalInputKg,
       note: String(payload.note ?? ''),
     })
   })
@@ -428,8 +608,17 @@ export async function updateCastingSession(sessionId: string, payload: SaveCasti
 
 export async function deleteCastingSession(sessionId: string): Promise<void> {
   await runDataOperation('delete-casting-session', async () => {
-    const existing = await listAllPaged('casting_inputs', { filter: `session = "${sessionId}"` })
-    await Promise.all(existing.map((row) => pb.collection('casting_inputs').delete(row.id)))
+    const existingBatches = await listAllPaged('casting_batches', { filter: `session = "${sessionId}"` }).catch(() => [])
+    const batchIds = existingBatches.map((row) => row.id)
+    const existingInputs = batchIds.length
+      ? (
+          await Promise.all(
+            chunk(batchIds, 30).map((ids) => listAllPaged('casting_batch_inputs', { filter: ids.map((id) => `batch = "${id}"`).join(' || ') })),
+          )
+        ).flat()
+      : await listAllPaged('casting_inputs', { filter: `session = "${sessionId}"` }).catch(() => [])
+    await Promise.all(existingInputs.map((row) => pb.collection(row.batch ? 'casting_batch_inputs' : 'casting_inputs').delete(row.id)))
+    await Promise.all(existingBatches.map((row) => pb.collection('casting_batches').delete(row.id)))
     await pb.collection('casting_sessions').delete(sessionId)
   })
 }
@@ -440,7 +629,14 @@ export async function loadLatestMaterialRates(): Promise<Record<string, number>>
     const latestSession = (latestSessionPage.items?.[0] as PBRecord | undefined) ?? undefined
     if (!latestSession?.id) return {}
 
-    const latestInputs = await listAllPaged('casting_inputs', { filter: `session = "${latestSession.id}"` })
+    const latestBatches = await listAllPaged('casting_batches', { filter: `session = "${latestSession.id}"` }).catch(() => [])
+    const latestInputs = latestBatches.length
+      ? (
+          await Promise.all(
+            chunk(latestBatches.map((batch) => batch.id), 30).map((ids) => listAllPaged('casting_batch_inputs', { filter: ids.map((id) => `batch = "${id}"`).join(' || ') })),
+          )
+        ).flat()
+      : await listAllPaged('casting_inputs', { filter: `session = "${latestSession.id}"` }).catch(() => [])
     if (latestInputs.length === 0) return {}
 
     const out: Record<string, number> = {}
@@ -453,6 +649,18 @@ export async function loadLatestMaterialRates(): Promise<Record<string, number>>
     return out
   } catch {
     return {}
+  }
+}
+
+export async function loadLatestCastingDefaults(): Promise<{ coalRate: number; materialRates: Record<string, number> }> {
+  try {
+    const latestSessionPage = await pb.collection('casting_sessions').getList(1, 1, { sort: '-date,-created' })
+    const latestSession = (latestSessionPage.items?.[0] as PBRecord | undefined) ?? undefined
+    if (!latestSession?.id) return { coalRate: 0, materialRates: {} }
+    const materialRates = await loadLatestMaterialRates()
+    return { coalRate: num(latestSession.coal_rate), materialRates }
+  } catch {
+    return { coalRate: 0, materialRates: {} }
   }
 }
 

@@ -6,6 +6,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
 
 const MARKET_RATE_ROUTE = '/api/market-rate'
+const POCKETBASE_ROUTE = '/pb'
 const MARKET_RATE_CANDIDATES = [
   'https://kapil.cosearch.me/api/market-rate',
   'https://rss.cosearch.me/telegram/channel/brassb2b',
@@ -73,8 +74,37 @@ const marketRateProxyPlugin = {
   },
 }
 
+const pocketBaseProxyPlugin = {
+  name: 'pocketbase-proxy',
+  configureServer(server: { middlewares: { use: (route: string, mw: Connect.NextHandleFunction) => void } }) {
+    server.middlewares.use(POCKETBASE_ROUTE, pocketBaseProxyMiddleware())
+  },
+}
+
+function pocketBaseProxyMiddleware(): Connect.NextHandleFunction {
+  return async (req, res) => {
+    const targetUrl = new URL(req.url ?? '/', 'http://127.0.0.1:8090')
+    const headers = new Headers(req.headers as Record<string, string>)
+    headers.set('host', '127.0.0.1:8090')
+    const response = await fetch(targetUrl, {
+      method: req.method,
+      headers,
+      body: req.method === 'GET' || req.method === 'HEAD' ? undefined : req,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' })
+    res.statusCode = response.status
+    response.headers.forEach((value, key) => res.setHeader(key, value))
+    if (!response.body) {
+      res.end()
+      return
+    }
+    const body = Buffer.from(await response.arrayBuffer())
+    res.end(body)
+  }
+}
+
 export default defineConfig({
-  plugins: [marketRateProxyPlugin, tanstackRouter({ target: 'react', autoCodeSplitting: true }), react(), tailwindcss()],
+  plugins: [marketRateProxyPlugin, pocketBaseProxyPlugin, tanstackRouter({ target: 'react', autoCodeSplitting: true }), react(), tailwindcss()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

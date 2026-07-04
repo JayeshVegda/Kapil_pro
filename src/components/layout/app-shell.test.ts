@@ -25,10 +25,10 @@ describe('Command K guidance', () => {
     expect(suggestions[0]?.label).toBe('Spindle (8.5GM)')
   })
 
-  it('suggests gas stock items and excludes electronic items', () => {
+  it('does not expose removed stock command suggestions', () => {
     const suggestions = buildCommandSuggestionsForTest('s ', customers, items)
 
-    expect(suggestions.map((suggestion) => suggestion.label)).toContain('Spindle (8.5GM)')
+    expect(suggestions.map((suggestion) => suggestion.label)).not.toContain('Spindle (8.5GM)')
     expect(suggestions.map((suggestion) => suggestion.label)).not.toContain('Electronic Part')
   })
 

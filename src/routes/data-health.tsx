@@ -169,6 +169,6 @@ function PreviewBlock({ label, value }: { label: string; value: string }) {
 
 function fixLink(issue: DataHealthIssue) {
   if (issue.area === 'Items') return <Link to="/items" className="font-medium text-blue-700 hover:underline">Open Items</Link>
-  if (issue.area === 'Stock') return <Link to="/stock-in" className="font-medium text-blue-700 hover:underline">Open Stock</Link>
+  if (issue.area === 'Stock') return <span className="font-medium text-slate-500">Stock module removed</span>
   return <Link to="/transactions" search={{ focusKind: '', focusId: '' }} className="font-medium text-blue-700 hover:underline">Open Logs</Link>
 }
