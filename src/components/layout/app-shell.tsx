@@ -7,7 +7,7 @@ import { loadQuickSearchResults, type QuickSearchResult } from '@/data/quick-sea
 import { useMarketRate } from '@/domain/market-rate'
 import { getAdminControlSettings, subscribeAdminControlSettings } from '@/lib/admin-control'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
-import { formatInrInteger, formatInQty } from '@/lib/inr-format'
+import { formatInrInteger } from '@/lib/inr-format'
 import { PENDING_COMMAND_STORAGE_KEY, splitCommandPrefix, inferCommandKind, getCommandRegistry, parseContextCommand, parseAmountToken } from '@/lib/commands'
 import { rememberQuickSearchResult } from '@/lib/recent-items'
 import { filterRankedNameMatches, findBestNameMatch } from '@/lib/search'
@@ -32,7 +32,8 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/casting': { title: 'Casting Overview', subtitle: 'Furnace sessions, output, and cost signals' },
   '/casting/new-session': { title: 'New Casting Session', subtitle: 'Record material inputs and furnace output' },
   '/casting/log': { title: 'Casting Log', subtitle: 'Review and edit casting sessions' },
-  '/casting/materials': { title: 'Casting Materials', subtitle: 'Manage casting material master data' },
+  '/casting/materials': { title: 'Casting Materials', subtitle: 'Material usage from casting logs' },
+  '/casting/bill': { title: 'Casting Bill', subtitle: 'Print-style furnace session cost sheet' },
 }
 
 const DOC_TITLE_SUFFIX = 'Kapil Billing'
@@ -67,6 +68,7 @@ const commandRoutes = [
   { label: 'New Casting Session', path: '/casting/new-session' },
   { label: 'Casting Log', path: '/casting/log' },
   { label: 'Casting Materials', path: '/casting/materials' },
+  { label: 'Casting Bill', path: '/casting/bill' },
 ]
 
 type CommandDraft = {
@@ -260,9 +262,6 @@ export function AppShell() {
       void navigate({ to: '/transactions', search: { focusKind: 'payment', focusId: result.paymentId } })
       return
     }
-    if (result.kind === 'Stock') {
-      return
-    }
     if (result.kind === 'Customer' && result.customerId) {
       void navigate({ to: '/ledger', search: { customerId: result.customerId, focus: '' } })
     }
@@ -285,9 +284,6 @@ export function AppShell() {
     if (result.kind === 'Customer') {
       if (action === 'secondary') void navigate({ to: '/new-bill' })
       if (action === 'tertiary') void navigate({ to: '/new-payment' })
-      return
-    }
-    if (result.kind === 'Stock') {
       return
     }
     openQuickSearchResult(result)
@@ -388,7 +384,7 @@ export function AppShell() {
     const context = inferCommandKind(pathname)
     const parsed = splitCommandPrefix(commandInput, context)
     if (!parsed.kind) {
-      setCommandError('Use prefix from this page: b bill, p payment, s stock, pr print.')
+      setCommandError('Use prefix from this page: b bill, p payment, pr print.')
       return
     }
     const body = parsed.body.trim()
@@ -1021,15 +1017,6 @@ function CommandLivePreview({
             </div>
           </>
         )}
-        {command.kind === 'stock' && (
-          <>
-            <PreviewLine label="Mode" value="Stock" />
-            <PreviewLine label="Item" value={command.item.name} />
-            <PreviewLine label="Qty" value={formatInQty(command.qty, command.item.unit || 'kg')} />
-            <PreviewLine label="Date" value={formatFullDate(command.date)} />
-            <PreviewLine label="Note" value={command.note || '-'} />
-          </>
-        )}
         {command.kind === 'print' && (
           <>
             <PreviewLine label="Mode" value="Print" />
@@ -1150,7 +1137,6 @@ function buildCommandDraft(
   }
   if (resolved.kind === 'payment') return buildPaymentDraft(resolved.body, deps)
   if (resolved.kind === 'bill') return buildBillDraft(resolved.body, deps)
-  if (resolved.kind === 'stock') return buildStockDraft(resolved.body, deps)
   return {
     mode: 'Print',
     lines: resolved.body ? [{ label: 'Bill Ref', value: resolved.body }] : [],
@@ -1224,7 +1210,6 @@ function buildCommandSuggestions(
     return buildItemSuggestions(getBillItemQuery(remainingBody), deps.items)
   }
   if (resolved.kind === 'payment') return buildCustomerSuggestions(resolved.body, deps.customers, 'p ')
-  if (resolved.kind === 'stock') return buildItemSuggestions(getBillItemQuery(resolved.body), deps.items)
   if (!resolved.kind) return [...buildHistorySuggestions(raw, deps.history), ...buildCommandStarterSuggestions(raw, deps.history)].slice(0, 8)
   return [...buildHistorySuggestions(raw, deps.history).slice(0, 3)]
 }
@@ -1365,15 +1350,6 @@ function getCommandHelp(topic: string) {
       meaning: 'Mukesh paid ₹5,00,000 by bank yesterday',
     }
   }
-  if (topic === 's' || topic.includes('stock')) {
-    return {
-      title: 'Stock Command',
-      description: 'Adds stock for a gas item with optional backdate and note.',
-      format: 's <item> <qty> [date] ["note"]',
-      example: 's spindle 20 yday',
-      meaning: 'Add 20 bags of spindle stock for yesterday',
-    }
-  }
   if (topic.includes('session') || topic.includes('memory')) {
     return {
       title: 'Bill Session Memory',
@@ -1388,7 +1364,7 @@ function getCommandHelp(topic: string) {
       title: 'Command Modes',
       description: 'Modes keep the command system scalable as more workflows are added.',
       format: '/ search, ? help, : actions',
-      example: '/ mukesh or : stock or ? b',
+      example: '/ mukesh or : print or ? b',
       meaning: 'Search parties, explain commands, or jump to tools',
     }
   }
@@ -1506,27 +1482,6 @@ function buildBillDraft(
   if (detectedItems === 0) suggestions.push('Add item, e.g. spindle')
   suggestions.push('Optional: book 52', 'Optional: 1/04 bill ref', 'Optional: dr 80', 'Optional: rate 620', 'Optional: gst or cgst 1200', 'Optional: +t 500', 'Optional: yday or 15-may')
   return { mode: 'Bill', lines, suggestions: Array.from(new Set(suggestions)) }
-}
-
-function buildStockDraft(
-  body: string,
-  deps: {
-    items: Array<{ id: string; name: string; defaultRate?: number; type?: string; unit?: string; bagWeight?: number }>
-  },
-): CommandDraft {
-  const tokens = body.trim().split(/\s+/).filter(Boolean)
-  const qtyIndex = tokens.findIndex((token) => parseAmountForDraft(token) > 0)
-  const itemQuery = tokens.slice(0, qtyIndex >= 0 ? qtyIndex : tokens.length).join(' ')
-  const item = itemQuery ? findBestNameMatch(commandGasItems(deps.items), itemQuery, (row) => row.name) : null
-  const qty = qtyIndex >= 0 ? parseAmountForDraft(tokens[qtyIndex]) : 0
-  return {
-    mode: 'Stock',
-    lines: [
-      ...(item ? [{ label: 'Item', value: item.name }] : itemQuery ? [{ label: 'Item', value: `Searching: ${itemQuery}` }] : []),
-      ...(qty > 0 ? [{ label: 'Qty', value: String(qty) }] : []),
-    ],
-    suggestions: [!item ? 'Add stock item' : '', qty <= 0 ? 'Add quantity' : '', 'Optional: yday or 15-may', 'Optional: "note"'].filter(Boolean),
-  }
 }
 
 function commandGasItems<T extends { type?: string }>(items: T[]) {

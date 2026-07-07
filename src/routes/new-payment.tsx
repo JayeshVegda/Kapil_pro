@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowDownRight, CheckCircle2, IndianRupee, Landmark, ReceiptText } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
@@ -14,7 +15,7 @@ import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands
 import { formatFullDate } from '@/lib/date'
 import { buildPaymentPreview } from '@/domain/payment-ledger'
 import { getLocalIsoDate } from '@/lib/date'
-import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
+import { formatInrInteger, parseIndianPaymentAmountInput } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/new-payment')({
   component: NewPaymentPage,
@@ -35,6 +36,7 @@ function NewPaymentPage() {
   const [customerId, setCustomerId] = useState('')
   const [mode, setMode] = useState<'Cash' | 'Bank'>('Cash')
   const [amount, setAmount] = useState<number>(0)
+  const [amountInput, setAmountInput] = useState('')
   const [note, setNote] = useState('')
   const [statusText, setStatusText] = useState('')
   const [lastSavedPayment, setLastSavedPayment] = useState<SavedPaymentReceipt | null>(null)
@@ -66,6 +68,14 @@ function NewPaymentPage() {
       asOfDate: date,
     })
   }, [ledgerQuery.data, amount, date])
+
+  const coveragePercent = useMemo(() => {
+    if (!paymentPreview) return 0
+    if (paymentPreview.outstandingBeforePayment <= 0) return amount > 0 ? 100 : 0
+    return Math.min(100, Math.max(0, (paymentPreview.paymentApplied / paymentPreview.outstandingBeforePayment) * 100))
+  }, [paymentPreview, amount])
+
+  const balanceAfterLabel = paymentPreview && paymentPreview.outstandingAfterPayment < 0 ? 'Advance after' : 'Balance after'
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -170,6 +180,7 @@ function NewPaymentPage() {
         }
       })
       setAmount(0)
+      setAmountInput('')
       setNote('')
       await invalidateAfterPaymentWrite(queryClient, customerId)
       const refreshed = await ledgerQuery.refetch()
@@ -239,11 +250,23 @@ function NewPaymentPage() {
     setCustomerId('')
     setMode('Cash')
     setAmount(0)
+    setAmountInput('')
     setNote('')
     setStatusText('')
     setIsQuickPaymentOpen(false)
     setQuickPaymentCommand('')
     setIsCommandConfirmOpen(false)
+  }
+
+  function updateAmountInput(nextAmountInput: string) {
+    setAmountInput(nextAmountInput)
+    setAmount(parseIndianPaymentAmountInput(nextAmountInput))
+    setStatusText('')
+  }
+
+  function normalizeAmountInput() {
+    if (amount <= 0) return
+    setAmountInput(formatInrInteger(amount).replace('₹', ''))
   }
 
   function applyPaymentCommand(input: string) {
@@ -261,6 +284,7 @@ function NewPaymentPage() {
     }
     setCustomerId(parsed.command.customer.id)
     setAmount(parsed.command.amount)
+    setAmountInput(formatInrInteger(parsed.command.amount))
     setMode(parsed.command.mode)
     setDate(parsed.command.date)
     setNote(parsed.command.note)
@@ -322,72 +346,160 @@ function NewPaymentPage() {
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-4 text-sm font-semibold text-slate-900">Payment Details</h2>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <Field label="Date">
-            <DateInput className={inputClass} value={date} onChange={setDate} />
-          </Field>
-          <Field label="Customer">
-            <SearchableCombobox
-              options={customersQuery.data ?? []}
-              value={customerId}
-              onChange={(nextId) => {
-                setCustomerId(nextId)
-                setStatusText('')
-              }}
-              inputClassName={inputClass}
-              placeholder="Search customer..."
-              disabled={customersQuery.isLoading || customersQuery.isError}
-              emptyText="No matching customer found."
-              maxResults={50}
-            />
-          </Field>
-          <Field label="Mode">
-            <select className={inputClass} value={mode} onChange={(e) => setMode((e.target.value === 'Bank' ? 'Bank' : 'Cash'))}>
-              <option value="Cash">Cash</option>
-              <option value="Bank">Bank</option>
-            </select>
-          </Field>
-          <Field label="Amount (INR)">
-            <input className={inputClass} type="number" min={0} value={amount || ''} onChange={(e) => setAmount(parseNonNegativeNumber(e.target.value))} placeholder="0" />
-          </Field>
-        </div>
-        <div className="mt-3">
-          <Field label="Note (optional)">
-            <input className={inputClass} type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Reference, cheque no., remark..." />
-          </Field>
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-4 text-sm font-semibold text-slate-900">Live Summary</h2>
-        {ledgerQuery.isLoading && <p className="text-sm text-slate-500">Loading customer ledger...</p>}
-        {ledgerQuery.isError && <p className="text-sm text-red-600">Unable to load customer ledger.</p>}
-        {!ledgerQuery.isLoading && !ledgerQuery.isError && !paymentPreview && (
-          <p className="text-sm text-slate-500">Select a customer and payment date to view balances.</p>
-        )}
-        {paymentPreview && (
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <Metric
-              label={`Opening Balance (${paymentPreview.openingBalanceDate ? paymentPreview.openingBalanceDate : 'Opening'})`}
-              value={formatInrInteger(paymentPreview.openingBalance)}
-            />
-            <Metric label={paymentPreview.outstandingBeforePayment >= 0 ? 'Outstanding Before' : 'Advance Before'} value={formatInrInteger(Math.abs(paymentPreview.outstandingBeforePayment))} />
-            <Metric label="Payment Applied" value={`- ${formatInrInteger(paymentPreview.paymentApplied)}`} />
-            <Metric label={paymentPreview.outstandingAfterPayment >= 0 ? 'Outstanding After' : 'Advance After'} value={formatInrInteger(Math.abs(paymentPreview.outstandingAfterPayment))} />
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-950">Payment Entry</h2>
+              <p className="mt-1 text-xs text-slate-500">Record receipt and preview oldest-first adjustment before saving.</p>
+            </div>
+            <button
+              type="button"
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              onClick={() => setIsQuickPaymentOpen(true)}
+            >
+              Alt + B command
+            </button>
           </div>
-        )}
-      </section>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <Field label="Date">
+              <DateInput className={inputClass} value={date} onChange={setDate} />
+            </Field>
+            <Field label="Customer">
+              <SearchableCombobox
+                options={customersQuery.data ?? []}
+                value={customerId}
+                onChange={(nextId) => {
+                  setCustomerId(nextId)
+                  setStatusText('')
+                }}
+                inputClassName={inputClass}
+                placeholder="Search customer..."
+                disabled={customersQuery.isLoading || customersQuery.isError}
+                emptyText="No matching customer found."
+                maxResults={50}
+              />
+            </Field>
+            <Field label="Mode">
+              <div className="grid grid-cols-2 rounded-md border border-slate-300 bg-slate-50 p-1">
+                {(['Cash', 'Bank'] as const).map((nextMode) => (
+                  <button
+                    key={nextMode}
+                    type="button"
+                    className={`h-8 rounded px-2 text-sm font-medium transition ${
+                      mode === nextMode ? 'bg-white text-slate-950 shadow-sm ring-1 ring-slate-200' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                    onClick={() => setMode(nextMode)}
+                  >
+                    {nextMode}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <Field label="Amount">
+              <div className="relative">
+                <IndianRupee className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
+                <input
+                  className={`${inputClass} pl-8 font-mono tabular-nums`}
+                  type="text"
+                  inputMode="decimal"
+                  value={amountInput}
+                  onChange={(e) => updateAmountInput(e.target.value)}
+                  onBlur={normalizeAmountInput}
+                  placeholder="2, 2.5l, 50k, 142"
+                />
+              </div>
+            </Field>
+          </div>
+
+          <div className="mt-3">
+            <Field label="Note (optional)">
+              <input className={inputClass} type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Reference, cheque no., remark..." />
+            </Field>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-4">
+            <span className="text-xs text-slate-500">{helperText}</span>
+            <div className="flex-1" />
+            <button type="button" className="px-1 py-1 text-sm font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline" onClick={resetForm}>
+              Clear
+            </button>
+            <button
+              type="button"
+              className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => void saveMutation.mutateAsync()}
+              disabled={saveMutation.isPending || !customerId || amount <= 0}
+            >
+              {saveMutation.isPending ? 'Saving...' : 'Save Payment'}
+            </button>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-950">Payment Impact</h2>
+              <p className="mt-1 text-xs text-slate-500">{selectedCustomer ? selectedCustomer.name : 'Select party to see ledger impact'}</p>
+            </div>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">{mode}</span>
+          </div>
+
+          {ledgerQuery.isLoading && <p className="text-sm text-slate-500">Loading customer ledger...</p>}
+          {ledgerQuery.isError && <p className="text-sm text-red-600">Unable to load customer ledger.</p>}
+          {!ledgerQuery.isLoading && !ledgerQuery.isError && !paymentPreview && (
+            <p className="text-sm text-slate-500">Select a customer and payment date to view balances.</p>
+          )}
+          {paymentPreview && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <ImpactMetric
+                  icon={<ReceiptText className="h-4 w-4" />}
+                  label={paymentPreview.outstandingBeforePayment >= 0 ? 'Before' : 'Advance before'}
+                  value={formatInrInteger(Math.abs(paymentPreview.outstandingBeforePayment))}
+                />
+                <ImpactMetric icon={<IndianRupee className="h-4 w-4" />} label="Paying now" value={formatInrInteger(amount)} />
+                <ImpactMetric icon={<ArrowDownRight className="h-4 w-4" />} label="Applied" value={formatInrInteger(paymentPreview.paymentApplied)} tone="green" />
+                <ImpactMetric
+                  icon={<Landmark className="h-4 w-4" />}
+                  label={balanceAfterLabel}
+                  value={formatInrInteger(Math.abs(paymentPreview.outstandingAfterPayment))}
+                  tone={paymentPreview.outstandingAfterPayment <= 0 ? 'green' : 'slate'}
+                />
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="font-medium text-slate-700">Settlement coverage</span>
+                  <span className="font-mono tabular-nums text-slate-900">{Math.round(coveragePercent)}%</span>
+                </div>
+                <div className="mt-2 h-2 rounded-full bg-white ring-1 ring-slate-200">
+                  <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${coveragePercent}%` }} />
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  {paymentPreview.advanceAfterPayment > 0
+                    ? `${formatInrInteger(paymentPreview.advanceAfterPayment)} will remain as advance.`
+                    : `${formatInrInteger(Math.abs(paymentPreview.outstandingAfterPayment))} remains after this receipt.`}
+                </p>
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
 
       {lastSavedPayment && (
         <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
-          <p className="text-sm font-semibold text-emerald-800">Latest saved payment confirmed</p>
-          <p className="mt-1 text-xs text-emerald-700">
-            {formatFullDate(lastSavedPayment.date)} - {lastSavedPayment.customerName} - {formatInrInteger(lastSavedPayment.amount)} ({lastSavedPayment.mode})
-          </p>
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-700" />
+            <div>
+              <p className="text-sm font-semibold text-emerald-800">Latest saved payment confirmed</p>
+              <p className="mt-1 text-xs text-emerald-700">
+                {formatFullDate(lastSavedPayment.date)} - {lastSavedPayment.customerName} - {formatInrInteger(lastSavedPayment.amount)} ({lastSavedPayment.mode})
+              </p>
+            </div>
+          </div>
           {currentOutstanding !== null && (
-            <p className="mt-1 text-xs text-emerald-700">
+            <p className="mt-2 pl-7 text-xs text-emerald-700">
               Updated balance now: {formatInrInteger(Math.abs(currentOutstanding))} {currentOutstanding >= 0 ? 'Outstanding' : 'Advance'}
             </p>
           )}
@@ -395,9 +507,12 @@ function NewPaymentPage() {
       )}
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-900">Auto Adjustment Preview (Oldest First)</h2>
-          {selectedCustomer && <span className="text-xs text-slate-500">Party: {selectedCustomer.name}</span>}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-950">Auto Adjustment Preview</h2>
+            <p className="mt-1 text-xs text-slate-500">Oldest dues are settled first, with remaining balance shown per bill.</p>
+          </div>
+          {selectedCustomer && <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">{selectedCustomer.name}</span>}
         </div>
         {!paymentPreview && <p className="text-sm text-slate-500">No allocation preview yet.</p>}
         {paymentPreview && (
@@ -421,16 +536,24 @@ function NewPaymentPage() {
                     </td>
                   </tr>
                 )}
-                {paymentPreview.lines.map((line) => (
-                  <tr key={`${line.dueRef}-${line.dueDate}`} className="border-t border-slate-100">
-                    <td className="px-3 py-2 text-sm font-medium text-slate-800">{line.dueRef}</td>
-                    <td className="px-3 py-2 text-sm text-slate-600">{line.dueDate}</td>
-                    <td className="max-w-[420px] px-3 py-2 text-xs text-slate-700">{line.compactDetails}</td>
-                    <td className="px-3 py-2 text-right text-sm font-mono text-slate-800">{formatInrInteger(line.dueAmount)}</td>
-                    <td className="px-3 py-2 text-right text-sm font-mono text-emerald-700">{formatInrInteger(line.paidAmount)}</td>
-                    <td className="px-3 py-2 text-right text-sm font-mono text-slate-800">{formatInrInteger(line.remainingAmount)}</td>
-                  </tr>
-                ))}
+                {paymentPreview.lines.map((line) => {
+                  const paidPercent = line.dueAmount > 0 ? Math.min(100, Math.max(0, (line.paidAmount / line.dueAmount) * 100)) : 0
+                  return (
+                    <tr key={`${line.dueRef}-${line.dueDate}`} className="border-t border-slate-100 align-top">
+                      <td className="px-3 py-2 text-sm font-medium text-slate-800">{line.dueRef}</td>
+                      <td className="px-3 py-2 text-sm text-slate-600">{line.dueDate}</td>
+                      <td className="max-w-[420px] px-3 py-2">
+                        <p className="text-xs text-slate-700">{line.compactDetails}</p>
+                        <div className="mt-2 h-1.5 rounded-full bg-slate-100">
+                          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${paidPercent}%` }} />
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right text-sm font-mono text-slate-800">{formatInrInteger(line.dueAmount)}</td>
+                      <td className="px-3 py-2 text-right text-sm font-mono font-semibold text-emerald-700">{formatInrInteger(line.paidAmount)}</td>
+                      <td className="px-3 py-2 text-right text-sm font-mono text-slate-800">{formatInrInteger(line.remainingAmount)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -438,52 +561,27 @@ function NewPaymentPage() {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-3 text-sm font-semibold text-slate-900">Recent Payments (Selected Party)</h2>
+        <h2 className="mb-3 text-sm font-semibold text-slate-950">Recent Payments</h2>
         {!customerId && <p className="text-sm text-slate-500">Select customer to view recent payments.</p>}
         {customerId && recentPayments.length === 0 && <p className="text-sm text-slate-500">No payment history for selected date range.</p>}
         {recentPayments.length > 0 && (
-          <div className="overflow-x-auto no-scrollbar">
-            <table className="w-full min-w-[720px]">
-              <thead>
-                <tr className="bg-slate-50">
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Date</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Ref</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Mode</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentPayments.map((payment) => (
-                  <tr key={`${payment.id ?? 'na'}-${payment.businessDate}-${payment.amount}`} className="border-t border-slate-100">
-                    <td className="px-3 py-2 text-sm text-slate-700">{formatFullDate(payment.businessDate ?? payment.date ?? '')}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-600">{(payment.id ?? '-').slice(0, 8)}</td>
-                    <td className="px-3 py-2 text-sm text-slate-700">{payment.mode || '-'}</td>
-                    <td className="px-3 py-2 text-right font-mono text-sm text-slate-900">{formatInrInteger(payment.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {recentPayments.map((payment) => (
+              <div key={`${payment.id ?? 'na'}-${payment.businessDate}-${payment.amount}`} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-medium text-slate-500">{formatFullDate(payment.businessDate ?? payment.date ?? '')}</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">{payment.mode || '-'}</p>
+                  </div>
+                  <p className="font-mono text-base font-semibold tabular-nums text-slate-950">{formatInrInteger(payment.amount)}</p>
+                </div>
+                <p className="mt-2 font-mono text-[11px] text-slate-500">Ref {(payment.id ?? '-').slice(0, 8)}</p>
+              </div>
+            ))}
           </div>
         )}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-xs text-slate-500">{helperText}</span>
-          <div className="flex-1" />
-          <button type="button" className="px-1 py-1 text-sm font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline" onClick={resetForm}>
-            Clear
-          </button>
-          <button
-            type="button"
-            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={() => void saveMutation.mutateAsync()}
-            disabled={saveMutation.isPending || !customerId || amount <= 0}
-          >
-            {saveMutation.isPending ? 'Saving...' : 'Save Payment'}
-          </button>
-        </div>
-      </section>
       {isQuickPaymentOpen && (
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
           <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl">
@@ -569,10 +667,14 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function ImpactMetric({ icon, label, value, tone = 'slate' }: { icon: ReactNode; label: string; value: string; tone?: 'slate' | 'green' }) {
+  const toneClass = tone === 'green' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-500'
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <p className="text-xs text-slate-500">{label}</p>
+    <div className={`rounded-lg border p-3 ${toneClass}`}>
+      <div className="flex items-center gap-2">
+        {icon}
+        <p className="text-xs font-medium">{label}</p>
+      </div>
       <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-slate-900">{value}</p>
     </div>
   )

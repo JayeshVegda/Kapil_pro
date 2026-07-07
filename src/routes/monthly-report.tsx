@@ -3,13 +3,11 @@ import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, CircleDollarSign, Landmark, ReceiptText, TrendingUp } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { loadDashboardCollections } from '@/data/dashboard'
-import { loadCurrentStock, type CurrentStockRecord } from '@/data/stock'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { computeCustomerOutstanding, type CanonicalBillRecord, type CanonicalPaymentRecord } from '@/domain/records'
-import { formatBagCount, formatStockQty } from '@/components/stock/stock-inventory-strip'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
-import { formatInQty, formatInrInteger } from '@/lib/inr-format'
+import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/monthly-report')({
   component: ReportPage,
@@ -22,11 +20,6 @@ function ReportPage() {
     queryKey: ['company-report', today],
     queryFn: loadDashboardCollections,
   })
-  const stockQuery = useQuery({
-    queryKey: ['company-report-stock', today],
-    queryFn: loadCurrentStock,
-  })
-
   const report = useMemo(() => {
     const data = reportQuery.data
     if (!data) {
@@ -331,9 +324,6 @@ function ReportPage() {
   const monthlyCashGap = report.thisMonth.sales - report.thisMonth.collections
   const salesDelta = report.thisMonth.sales - report.lastMonth.sales
   const collectionEfficiencyStatus = getEfficiencyStatus(report.overall.collectionEfficiencyPct)
-  const stockSummary = useMemo(() => buildStockSummary(stockQuery.data ?? []), [stockQuery.data])
-  void stockSummary
-
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {reportQuery.isLoading && <section className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">Loading company report...</section>}
@@ -449,14 +439,6 @@ function ReportPage() {
 type Tone = 'blue' | 'green' | 'red' | 'orange' | 'gray'
 type HealthStatus = 'Healthy' | 'Warning' | 'Risk'
 type AgingBucket = 'current' | 'days31to60' | 'days61to90' | 'above90'
-type StockSummary = {
-  currentStock: number
-  stockInThisMonth: number
-  soldThisMonth: number
-  adjustmentThisMonth: number
-  fastMovingRows: CurrentStockRecord[]
-  attentionRows: CurrentStockRecord[]
-}
 
 function SectionHeader({ eyebrow, title, subtitle }: { eyebrow: string; title: string; subtitle: string }) {
   return (
@@ -604,69 +586,6 @@ function ActionSignal({ icon, tone, label, value, detail }: { icon: ReactNode; t
       </div>
       <p className="mt-2 text-lg font-bold text-slate-950">{value}</p>
       <p className="mt-1 line-clamp-2 text-xs text-slate-500">{detail}</p>
-    </div>
-  )
-}
-
-function StockManagementPanel({ summary, isLoading, isError }: { summary: StockSummary; isLoading: boolean; isError: boolean }) {
-  return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm" aria-label="Stock management">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Stock management</p>
-          <h2 className="mt-1 text-base font-semibold text-slate-950">Inventory control</h2>
-        </div>
-        <Link to="/monthly-report" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-100">
-          Open Stock
-        </Link>
-      </div>
-      {isLoading && <p className="text-sm text-slate-500">Loading stock summary...</p>}
-      {isError && <p className="text-sm text-rose-700">Unable to load stock summary.</p>}
-      {!isLoading && !isError && (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1.1fr]">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 xl:grid-cols-2">
-            <MiniMetric label="Current stock" value={formatInQty(summary.currentStock, 'kg')} tone={summary.currentStock < 0 ? 'red' : 'blue'} />
-            <MiniMetric label="Stock in this month" value={formatInQty(summary.stockInThisMonth, 'kg')} tone="green" />
-            <MiniMetric label="Sold this month" value={formatInQty(summary.soldThisMonth, 'kg')} tone="red" />
-            <MiniMetric label="Adjustments" value={formatInQty(summary.adjustmentThisMonth, 'kg')} tone={summary.adjustmentThisMonth < 0 ? 'orange' : 'gray'} />
-            <MiniMetric label="Needs attention" value={`${summary.attentionRows.length}`} tone={summary.attentionRows.length > 0 ? 'orange' : 'green'} />
-          </div>
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <StockList title="Fast moving stock" rows={summary.fastMovingRows} empty="No sold stock this month." />
-            <StockList title="Stock attention" rows={summary.attentionRows} empty="No low or negative stock buckets." attention />
-          </div>
-        </div>
-      )}
-    </section>
-  )
-}
-
-function StockList({ title, rows, empty, attention = false }: { title: string; rows: CurrentStockRecord[]; empty: string; attention?: boolean }) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
-      <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
-      <div className="mt-3 space-y-2">
-        {rows.length === 0 && <p className="text-sm text-slate-500">{empty}</p>}
-        {rows.map((row) => (
-          <Link key={`${title}-${row.id}`} to="/monthly-report" className="block rounded-md border border-slate-200 bg-white px-3 py-2 hover:border-blue-200 hover:bg-blue-50/30 focus:outline-none focus:ring-2 focus:ring-blue-100">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-900">{row.itemName}</p>
-                <p className="truncate text-xs text-slate-500">{row.customerName}</p>
-              </div>
-              <div className="shrink-0 text-right">
-                <p className={`font-mono text-sm font-bold ${row.currentStock < 0 ? 'text-rose-700' : 'text-slate-950'}`}>{formatBagCount(row.currentStock, row)}</p>
-                <p className="text-[11px] text-slate-500">{formatStockQty(row.currentStock, row)}</p>
-              </div>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-500">
-              <span>In {formatBagCount(row.stockInThisMonth, row)}</span>
-              <span>Sold {formatBagCount(row.soldThisMonth, row)}</span>
-              {attention && <span className={row.currentStock < 0 ? 'font-semibold text-rose-700' : 'font-semibold text-amber-700'}>{row.currentStock < 0 ? 'Negative stock' : 'Low stock'}</span>}
-            </div>
-          </Link>
-        ))}
-      </div>
     </div>
   )
 }
@@ -867,23 +786,6 @@ function FinancialYearSummary({ fy }: { fy: { label: string; sales: number; coll
 function RiskBadge({ dueDays }: { dueDays: number }) {
   const status: HealthStatus = dueDays > 90 ? 'Risk' : dueDays > 60 ? 'Warning' : 'Healthy'
   return <StatusBadge status={status} />
-}
-
-function buildStockSummary(rows: CurrentStockRecord[]): StockSummary {
-  return {
-    currentStock: rows.reduce((sum, row) => sum + row.currentStock, 0),
-    stockInThisMonth: rows.reduce((sum, row) => sum + row.stockInThisMonth, 0),
-    soldThisMonth: rows.reduce((sum, row) => sum + row.soldThisMonth, 0),
-    adjustmentThisMonth: rows.reduce((sum, row) => sum + row.adjustmentThisMonth, 0),
-    fastMovingRows: [...rows]
-      .filter((row) => row.soldThisMonth > 0)
-      .sort((a, b) => b.soldThisMonth - a.soldThisMonth)
-      .slice(0, 3),
-    attentionRows: [...rows]
-      .filter((row) => row.currentStock <= 0 || (row.soldThisMonth > 0 && row.currentStock <= row.soldThisMonth))
-      .sort((a, b) => a.currentStock - b.currentStock)
-      .slice(0, 3),
-  }
 }
 
 function buildHeatmapSummary(daily: Array<{ date: string; sales: number; bags: number }>) {
@@ -1138,5 +1040,3 @@ function getFinancialYearMonths(startYear: number) {
   }
   return months
 }
-
-void StockManagementPanel

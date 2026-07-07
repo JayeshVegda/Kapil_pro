@@ -1,7 +1,6 @@
 import { pb } from '@/data/pocketbase'
 import { recalculateAndPersistBillStatusesForCustomer } from '@/data/bill-statuses'
 import { runDataOperation } from '@/data/reliability'
-import { invalidateStockDataCache } from '@/data/stock'
 import type { BillSnapshot, PaymentSnapshot } from '@/domain/transactions'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { BAGS_PER_KG } from '@/shared/constants'
@@ -191,7 +190,6 @@ export async function updateBillWithItems(
         cause: error,
       })
     }
-    invalidateStockDataCache()
     await recalculateBillStatusesForCustomers([oldCustomerId, input.customerId])
   })
 }
@@ -205,7 +203,6 @@ export async function deleteBillWithItems(billId: string) {
     })
     await Promise.all(existingItems.map((row) => pb.collection('bill_items').delete(row.id)))
     await pb.collection('bills').delete(billId)
-    invalidateStockDataCache()
     if (customerId) {
       await recalculateAndPersistBillStatusesForCustomer(customerId)
     }
@@ -242,7 +239,6 @@ export async function restoreBillFromSnapshot(snapshot: BillSnapshot) {
         bags: bagsFromQtyKg(item.qty),
       })
     }
-    invalidateStockDataCache()
     await recalculateAndPersistBillStatusesForCustomer(snapshot.customerId)
   })
 }

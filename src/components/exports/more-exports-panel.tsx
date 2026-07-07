@@ -3,7 +3,6 @@ import type { ReactNode } from 'react'
 export function MoreExportsPanel(props: {
   bookBlock: ReactNode
   salesBlock: ReactNode
-  stockBlock: ReactNode
 }) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -12,12 +11,11 @@ export function MoreExportsPanel(props: {
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">More exports</p>
           <h3 className="mt-1 text-lg font-semibold text-slate-950">Small tools</h3>
         </div>
-        <p className="max-w-xl text-sm text-slate-500">Use these when you need a register, stock sheet, or one complete bill book.</p>
+        <p className="max-w-xl text-sm text-slate-500">Use these when you need a sales register or one complete bill book.</p>
       </div>
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
         {props.bookBlock}
         {props.salesBlock}
-        {props.stockBlock}
       </div>
     </section>
   )

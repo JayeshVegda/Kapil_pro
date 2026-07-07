@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Download } from 'lucide-react'
+import { Download, Search, User, AlertTriangle, CheckCircle2, Printer } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { jsPDF } from 'jspdf'
@@ -35,7 +35,7 @@ function LedgerPage() {
   const [exportStatus, setExportStatus] = useState('')
   const [isExporting, setIsExporting] = useState(false)
   const statementPageSize = 20
-
+ 
   const asOfDate = toDate || today
 
   const dashboardQuery = useQuery({
@@ -266,6 +266,14 @@ function LedgerPage() {
     }
   }, [statementQuery.data, selectedRow, toDate])
 
+  const maxTrendVal = useMemo(() => {
+    let max = 1e-9
+    for (const entry of analytics.monthlyTrend) {
+      max = Math.max(max, entry.debit, entry.credit)
+    }
+    return max
+  }, [analytics.monthlyTrend])
+
   const filteredEvents = useMemo(() => {
     const events = statementQuery.data?.events ?? []
     if (statementFilter === 'all') return events
@@ -288,253 +296,427 @@ function LedgerPage() {
   }, [statementPage, totalStatementPages])
 
   return (
-    <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-base font-semibold text-slate-900">Party Analytics Dashboard</h2>
-          <p className="text-xs text-slate-500">As of {formatFullDate(asOfDate)}</p>
-        </div>
-        <div className="mt-3 grid grid-cols-1 gap-2">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <select className={inputClass} value={selectedCustomerIdResolved} onChange={(event) => setSelectedCustomerId(event.target.value)}>
+    <div className="w-full px-3 pb-10 pt-3 sm:px-4 lg:px-6 space-y-5">
+      {/* Row 1: Party Selector & Actions */}
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
+          <div className="w-full sm:w-72 relative">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <select
+              className={`${inputClass} pl-8 font-semibold text-xs`}
+              value={selectedCustomerIdResolved}
+              onChange={(event) => setSelectedCustomerId(event.target.value)}
+            >
+              <option value="" disabled>Choose a party...</option>
               {rows.map((row) => (
                 <option key={row.customerId} value={row.customerId}>
                   {row.customerName}
                 </option>
               ))}
             </select>
-            <button type="button" className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => void exportPartyPackage()} disabled={!selectedCustomerIdResolved || isExporting}>
-              <Download size={14} />
-              {isExporting ? 'Exporting...' : 'Export'}
-            </button>
           </div>
-          {exportStatus && <p className="text-xs text-slate-500" role="status" aria-live="polite">{exportStatus}</p>}
-          {dashboardQuery.isSuccess && rows.length === 0 && (
-            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-              No party data yet. Add customer bills/payments to see analytics.
-            </p>
+          
+          {selectedRow && (
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Status Badge */}
+              {(() => {
+                const isOverdue = selectedRow.status === 'Overdue' && selectedRow.dueAmount > 0
+                const isAdvance = selectedRow.advanceAmount > 0
+                return isOverdue ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-700 border border-rose-100">
+                    <AlertTriangle size={10} /> {selectedRow.overdueDays}d Overdue
+                  </span>
+                ) : isAdvance ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700 border border-emerald-100">
+                    <CheckCircle2 size={10} /> Advance Balance
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-semibold text-slate-600 border border-slate-100">
+                    Clear Account
+                  </span>
+                )
+              })()}
+              
+              <span className="text-slate-300 font-light hidden sm:inline">|</span>
+              <span className="text-xs text-slate-500 font-medium">
+                Closing Balance: <strong className="font-mono text-slate-800">{formatInrInteger(selectedRow.dueAmount || selectedRow.advanceAmount || 0)}</strong>
+              </span>
+            </div>
           )}
         </div>
+
+        {selectedRow && (
+          <div className="flex items-center gap-2 print:hidden shrink-0">
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-3.5 transition shadow-sm"
+              onClick={printStatement}
+            >
+              <Printer size={13} /> Print Statement
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white px-3.5 transition shadow-sm disabled:opacity-60"
+              onClick={() => void exportPartyPackage()}
+              disabled={isExporting}
+            >
+              <Download size={13} /> {isExporting ? 'Exporting...' : 'Export ZIP'}
+            </button>
+          </div>
+        )}
       </section>
 
+      {exportStatus && <p className="text-[10px] text-slate-455 font-semibold px-1" role="status">{exportStatus}</p>}
+
+      {!selectedRow && (
+        <div className="grid min-h-[400px] place-items-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-center p-6 print:hidden">
+          <div className="max-w-xs space-y-1">
+            <User size={32} className="mx-auto text-slate-400 mb-2" />
+            <p className="text-sm font-bold text-slate-750">Select a Party</p>
+            <p className="text-xs text-slate-400">Choose a party from the selector dropdown in the top row to visualize billing trends, monthly gaps, and full ledger statements.</p>
+          </div>
+        </div>
+      )}
+
       {selectedRow && (
-        <>
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Party snapshot</p>
-                <h3 className="mt-1 text-xl font-semibold text-slate-950">{selectedRow.customerName}</h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Last bill: {selectedRow.lastBillDate ? formatFullDate(selectedRow.lastBillDate) : '-'} | Last payment: {selectedRow.lastPaymentDate ? formatFullDate(selectedRow.lastPaymentDate) : '-'}
-                </p>
-              </div>
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-right">
-                <p className="text-[11px] uppercase tracking-[0.08em] text-slate-500">Days since payment</p>
-                <p className="mt-0.5 font-mono text-lg font-semibold text-slate-900">{daysSinceDate(selectedRow.lastPaymentDate, asOfDate)}</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.15fr_1fr_1fr]">
-              <div className="rounded-lg border border-rose-200 bg-rose-50 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-rose-700">Current Due</p>
-                <p className="mt-2 font-mono text-3xl font-bold tracking-normal text-rose-900">{formatInrInteger(selectedRow.dueAmount)}</p>
-                {selectedRow.advanceAmount > 0 && <p className="mt-1 text-sm font-medium text-emerald-700">Advance: {formatInrInteger(selectedRow.advanceAmount)}</p>}
-                <div className="mt-4 grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
-                  <SummaryLine label="Opening" value={formatInrInteger(selectedRow.openingBalance)} />
-                  <SummaryLine label="Billed" value={formatInrInteger(selectedRow.billedTotal)} />
-                  <SummaryLine label="Paid" value={formatInrInteger(selectedRow.paidTotal)} />
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-white p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Monthly Performance</p>
-                <div className="mt-3 space-y-2">
-                  <SummaryLine label="This Month Billing" value={formatInrInteger(analytics.monthDebit)} />
-                  <SummaryLine label="This Month Collection" value={formatInrInteger(analytics.monthCredit)} />
-                  <SummaryLine label="Net Gap" value={`${analytics.monthCredit - analytics.monthDebit >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(analytics.monthCredit - analytics.monthDebit))}`} strong />
-                </div>
-                <p className="mt-3 text-xs text-slate-500">
-                  Highest bill {formatInrInteger(analytics.highestBill)} | highest payment {formatInrInteger(analytics.highestPayment)}
-                </p>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-white p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Purchase Summary</p>
-                <p className="mt-2 text-sm font-semibold text-slate-900">{statementQuery.data?.itemSummary?.[0]?.itemName ?? 'All items'}</p>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                  <SummaryLine label="Bills" value={String(selectedRow.billCount)} />
-                  <SummaryLine label="Bags" value={String(Math.round(selectedRow.totalBags))} />
-                  <SummaryLine label="Weight" value={`${Math.round(selectedRow.totalWeight)} kg`} />
-                  <SummaryLine label="Avg Rate" value={formatInrInteger(selectedRow.averageSellingRate)} />
-                  <SummaryLine label="Avg Weight" value={`${Math.round(selectedRow.averageSellingWeight)} kg`} />
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Billing vs Collection</p>
-                <div className="space-y-2">
-                  {analytics.monthlyTrend.length === 0 && <p className="text-sm text-slate-500">No monthly trend data yet.</p>}
-                  {analytics.monthlyTrend.map((entry) => (
-                    <div key={entry.month} className="grid grid-cols-[70px_1fr_1fr_1fr] items-center gap-2 text-xs">
-                      <span className="font-medium text-slate-700">{formatMonthYear(entry.month)}</span>
-                      <span className="rounded bg-blue-100 px-2 py-1 text-right font-mono text-blue-700">{formatInrInteger(entry.debit)}</span>
-                      <span className="rounded bg-emerald-100 px-2 py-1 text-right font-mono text-emerald-700">{formatInrInteger(entry.credit)}</span>
-                      <span className={`rounded px-2 py-1 text-right font-mono ${entry.debit - entry.credit > 0 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                        {formatInrInteger(Math.abs(entry.debit - entry.credit))}
+        <div className="space-y-5">
+          {/* Row 2: Customer Snapshot Cards */}
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {/* Current Due Card */}
+            {(() => {
+              const isOverdue = selectedRow.status === 'Overdue' && selectedRow.dueAmount > 0
+              const isAdvance = selectedRow.advanceAmount > 0
+              const colorClass = isOverdue
+                ? 'border-rose-200 bg-rose-50/40 text-rose-900'
+                : isAdvance
+                ? 'border-emerald-200 bg-emerald-50/40 text-emerald-900'
+                : 'border-slate-200 bg-slate-50/40 text-slate-900'
+              return (
+                <div className={`rounded-xl border p-4 space-y-2.5 ${colorClass}`}>
+                  <div className="flex justify-between items-center">
+                    <span className={`text-[10px] uppercase font-bold tracking-wider ${isOverdue ? 'text-rose-500' : isAdvance ? 'text-emerald-500' : 'text-slate-400'}`}>
+                      {isAdvance ? 'Advance Balance' : 'Current Due'}
+                    </span>
+                    {isOverdue && (
+                      <span className="rounded bg-rose-100 px-2 py-0.5 text-[8px] font-black text-rose-700 uppercase">
+                        Overdue
                       </span>
-                    </div>
-                  ))}
+                    )}
+                  </div>
+                  <p className="font-mono text-xl font-bold tracking-tight">
+                    {formatInrInteger(selectedRow.dueAmount || selectedRow.advanceAmount || 0)}
+                  </p>
+                  <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-dashed border-slate-200/50 text-[9px] font-semibold text-slate-500">
+                    <SummaryLine label="Opening" value={formatInrInteger(selectedRow.openingBalance)} />
+                    <SummaryLine label="Billed" value={formatInrInteger(selectedRow.billedTotal)} />
+                    <SummaryLine label="Paid" value={formatInrInteger(selectedRow.paidTotal)} />
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* Monthly Performance Card */}
+            <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5">
+              <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider">This Month</span>
+              <div className="space-y-1.5 text-[11px] font-medium text-slate-500">
+                <SummaryLine label="Billing" value={formatInrInteger(analytics.monthDebit)} />
+                <SummaryLine label="Collection" value={formatInrInteger(analytics.monthCredit)} />
+                <div className="flex justify-between items-center py-1 border-t border-slate-100 text-xs font-bold text-slate-900">
+                  <span>Net Difference</span>
+                  <span className={analytics.monthCredit - analytics.monthDebit >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                    {analytics.monthCredit - analytics.monthDebit >= 0 ? '+' : '-'}
+                    {formatInrInteger(Math.abs(analytics.monthCredit - analytics.monthDebit))}
+                  </span>
                 </div>
               </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Recent Insight</p>
-                <p className="mb-2 text-xs text-slate-600">
-                  Peak billing month: <span className="font-semibold text-slate-900">{analytics.highestBillingMonth === '-' ? '-' : formatMonthYear(analytics.highestBillingMonth)}</span> | Peak collection month:{' '}
-                  <span className="font-semibold text-slate-900">{analytics.highestCollectionMonth === '-' ? '-' : formatMonthYear(analytics.highestCollectionMonth)}</span>
-                </p>
-                <ul className="space-y-1 text-sm text-slate-700">
-                  {analytics.insights.length === 0 && <li>No urgent insight for selected period.</li>}
-                  {analytics.insights.map((line, idx) => (
-                    <li key={idx}>- {line}</li>
-                  ))}
-                </ul>
+            </div>
+
+            {/* Purchase Summary Card */}
+            <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5">
+              <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider">Volume Summary</span>
+              <span className="block text-[11px] font-bold text-slate-700 truncate">
+                {statementQuery.data?.itemSummary?.[0]?.itemName ?? 'All Items'}
+              </span>
+              <div className="grid grid-cols-2 gap-x-2.5 gap-y-1 text-[10px] font-medium text-slate-500 pt-0.5">
+                <SummaryLine label="Total Bills" value={String(selectedRow.billCount)} />
+                <SummaryLine label="Total Bags" value={String(Math.round(selectedRow.totalBags))} />
+                <SummaryLine label="Total Weight" value={`${Math.round(selectedRow.totalWeight)} kg`} />
+                <SummaryLine label="Avg Rate" value={formatInrInteger(selectedRow.averageSellingRate)} />
               </div>
             </div>
           </section>
 
+          {/* Row 3: Visualization & Insights */}
+          <section className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Visual vertical grouped bar chart */}
+            <div className="lg:col-span-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Billing vs Collection Trend</h3>
+                <div className="flex items-center gap-3 text-[10px] font-bold">
+                  <div className="flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded bg-blue-500 block" />
+                    <span className="text-slate-500">Billed</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded bg-emerald-500 block" />
+                    <span className="text-slate-500">Received</span>
+                  </div>
+                </div>
+              </div>
+
+              {analytics.monthlyTrend.length === 0 ? (
+                <p className="text-xs text-slate-400 italic py-8 text-center">No trend data available.</p>
+              ) : (
+                <div className="space-y-4 pt-1">
+                  {/* Vertical bars container */}
+                  <div className="flex h-48 items-end gap-3 sm:gap-4 border-b border-slate-200 pb-2 pt-4 relative">
+                    {/* Grid lines in background */}
+                    <div className="absolute inset-x-0 top-0 bottom-2 flex flex-col justify-between pointer-events-none text-[8px] text-slate-350 font-bold select-none z-0">
+                      <div className="border-b border-slate-100 w-full pb-0.5"></div>
+                      <div className="border-b border-slate-100 w-full pb-0.5"></div>
+                      <div className="border-b border-slate-100 w-full pb-0.5"></div>
+                      <div className="border-b border-slate-100 w-full pb-0.5"></div>
+                    </div>
+                    
+                    {/* Bars */}
+                    {analytics.monthlyTrend.map((entry) => {
+                      const billingHeight = (entry.debit / maxTrendVal) * 100
+                      const collectionHeight = (entry.credit / maxTrendVal) * 100
+                      return (
+                        <div key={entry.month} className="flex-1 flex flex-col items-center h-full justify-end z-10 group">
+                          <div className="flex items-end gap-1 w-full justify-center h-full">
+                            {/* Billing bar */}
+                            <div className="relative group/bar flex justify-center items-end h-full w-4 sm:w-5">
+                              {/* Tooltip */}
+                              <div className="absolute bottom-full mb-1 hidden group-hover/bar:block bg-slate-900 text-white text-[9px] px-1.5 py-0.5 rounded font-mono z-30 whitespace-nowrap shadow-md">
+                                Billed: {formatInrInteger(entry.debit)}
+                              </div>
+                              <div
+                                className="bg-blue-500 rounded-t w-full transition-all duration-500 hover:bg-blue-600 cursor-pointer"
+                                style={{ height: `${billingHeight}%` }}
+                              />
+                            </div>
+                            {/* Collection bar */}
+                            <div className="relative group/bar flex justify-center items-end h-full w-4 sm:w-5">
+                              {/* Tooltip */}
+                              <div className="absolute bottom-full mb-1 hidden group-hover/bar:block bg-slate-900 text-white text-[9px] px-1.5 py-0.5 rounded font-mono z-30 whitespace-nowrap shadow-md">
+                                Received: {formatInrInteger(entry.credit)}
+                              </div>
+                              <div
+                                className="bg-emerald-500 rounded-t w-full transition-all duration-500 hover:bg-emerald-600 cursor-pointer"
+                                style={{ height: `${collectionHeight}%` }}
+                              />
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-bold text-slate-500 mt-2 truncate max-w-full text-center">
+                            {formatMonthYear(entry.month)}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Insights Panel */}
+            <div className="lg:col-span-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Recent Insights</h3>
+              <div className="text-[10px] text-slate-500 uppercase tracking-wide font-bold space-y-1">
+                <p>Peak Bill: <strong className="text-slate-800">{analytics.highestBillingMonth === '-' ? '—' : formatMonthYear(analytics.highestBillingMonth)}</strong></p>
+                <p>Peak Recv: <strong className="text-slate-800">{analytics.highestCollectionMonth === '-' ? '—' : formatMonthYear(analytics.highestCollectionMonth)}</strong></p>
+                {selectedRow.lastPaymentDate && (
+                  <p>Days since last payment: <strong className="text-slate-800">{daysSinceDate(selectedRow.lastPaymentDate, asOfDate)}</strong></p>
+                )}
+              </div>
+              <div className="space-y-2 pt-3 border-t border-slate-100">
+                {analytics.insights.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">No urgent insights or anomalies found for this party.</p>
+                ) : (
+                  analytics.insights.map((line, idx) => (
+                    <div key={idx} className="flex gap-2 items-start text-xs text-slate-700 bg-slate-50 p-2.5 rounded-lg border border-slate-150">
+                      <span className="text-blue-500 font-bold">•</span>
+                      <span>{line}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </section>
+
+          {/* Row 4: Item-wise Purchase Summary */}
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-3">
-              <h3 className="text-sm font-semibold text-slate-900">Item-wise Purchase Summary</h3>
-              <p className="text-xs text-slate-500">Compact purchase mix with quantity, amount, and average rate.</p>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Item-wise Purchase Summary</h3>
+              <p className="text-[11px] text-slate-400 font-semibold">Compact purchase mix showing quantities, total values, and average rates.</p>
             </div>
-            <div className="max-h-[320px] overflow-auto rounded-md border border-slate-100 no-scrollbar">
-              <table className="w-full min-w-[860px]">
+            <div className="max-h-[300px] overflow-auto rounded-xl border border-slate-200 no-scrollbar">
+              <table className="w-full min-w-[720px] text-xs">
                 <thead>
-                  <tr className="bg-slate-50">
-                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Item</th>
-                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bills</th>
-                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bags</th>
-                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Qty (kg)</th>
-                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
-                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Avg Rate</th>
-                    <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Last Date</th>
+                  <tr className="border-b border-slate-200 text-slate-500 text-xs font-bold uppercase tracking-wider text-left bg-slate-50/50">
+                    <th className="px-3 py-2 text-left font-bold text-slate-600">Item Name</th>
+                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-20">Bills</th>
+                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-24">Bags</th>
+                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Qty (kg)</th>
+                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-32">Amount</th>
+                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Avg Rate</th>
+                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Last Purchased</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
                   {(statementQuery.data?.itemSummary ?? []).length === 0 && (
                     <tr>
-                      <td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-500">
-                        No item-level bill details found for this party.
-                      </td>
+                      <td colSpan={7} className="px-3 py-6 text-center text-slate-400 italic">No bill details recorded.</td>
                     </tr>
                   )}
-                  {(statementQuery.data?.itemSummary ?? []).map((item, index) => (
-                    <tr key={`${item.itemName}-${index}`} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-                      <td className="px-3 py-2.5 text-sm font-medium text-slate-800">{item.itemName}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-sm text-slate-700">{item.billCount}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-sm text-slate-700">{Math.round(item.totalBags)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-sm text-slate-700">{Math.round(item.totalQty)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-sm font-semibold text-slate-900">{formatInrInteger(item.totalAmount)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-sm text-slate-700">{formatInrInteger(item.averageRate)}</td>
-                      <td className="px-3 py-2.5 text-sm text-slate-700">{item.lastDate ? formatFullDate(item.lastDate) : '-'}</td>
+                  {(statementQuery.data?.itemSummary ?? []).map((item, idx) => (
+                    <tr key={`${item.itemName}-${idx}`} className="hover:bg-slate-50/20 transition">
+                      <td className="px-3 py-2.5 font-medium text-slate-900">{item.itemName}</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums">{item.billCount}</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums">{Math.round(item.totalBags)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums">{Math.round(item.totalQty)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums font-bold text-slate-900">{formatInrInteger(item.totalAmount)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums">{formatInrInteger(item.averageRate)}</td>
+                      <td className="px-3 py-2.5 text-right text-slate-600">{item.lastDate ? formatFullDate(item.lastDate) : '-'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </section>
-        </>
-      )}
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-slate-900">Party Statement</h3>
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="button" className={`rounded-md border px-2.5 py-1 text-xs ${statementFilter === 'all' ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 text-slate-700'}`} onClick={() => setStatementFilter('all')}>All</button>
-            <button type="button" className={`rounded-md border px-2.5 py-1 text-xs ${statementFilter === 'bills' ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 text-slate-700'}`} onClick={() => setStatementFilter('bills')}>Bills</button>
-            <button type="button" className={`rounded-md border px-2.5 py-1 text-xs ${statementFilter === 'payments' ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 text-slate-700'}`} onClick={() => setStatementFilter('payments')}>Payments</button>
-            <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50" onClick={printStatement}>
-              Print / Export
-            </button>
-          </div>
-        </div>
-        {selectedRow && (
-          <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
-            <StatementFact label="Last payment" value={selectedRow.lastPaymentDate ? formatFullDate(selectedRow.lastPaymentDate) : '-'} />
-            <StatementFact label="Last bill" value={selectedRow.lastBillDate ? formatFullDate(selectedRow.lastBillDate) : '-'} />
-            <StatementFact label="Highest bill" value={formatInrInteger(analytics.highestBill)} />
-            <StatementFact label="Days since payment" value={String(daysSinceDate(selectedRow.lastPaymentDate, asOfDate))} />
-          </div>
-        )}
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
-          <p>
-            Showing {filteredEvents.length === 0 ? 0 : (statementPage - 1) * statementPageSize + 1}-
-            {Math.min(statementPage * statementPageSize, filteredEvents.length)} of {filteredEvents.length} entries
-          </p>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setStatementPage((current) => Math.max(1, current - 1))}
-              disabled={statementPage <= 1}
-              className="rounded-md border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Prev
-            </button>
-            <span>
-              Page {statementPage} / {totalStatementPages}
-            </span>
-            <button
-              type="button"
-              onClick={() => setStatementPage((current) => Math.min(totalStatementPages, current + 1))}
-              disabled={statementPage >= totalStatementPages}
-              className="rounded-md border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        </div>
-        {statementQuery.isLoading && <p className="text-sm text-slate-500">Loading statement...</p>}
-        {statementQuery.isError && <p className="text-sm text-red-600">Unable to load statement.</p>}
-        {statementQuery.data && (
-          <div className="max-h-[480px] overflow-auto rounded-md border border-slate-100 no-scrollbar">
-            <table className="w-full min-w-[980px]">
-              <thead>
-                <tr className="bg-slate-50">
-                  <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Date</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Type</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Details</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Debit</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Credit</th>
-                  <th className="sticky right-0 top-0 z-20 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500 shadow-[-8px_0_12px_-14px_rgba(15,23,42,0.8)]">Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginatedEvents.map((event, index) => (
-                  <tr
-                    key={event.id}
-                    className={`border-t border-slate-100 bg-white transition hover:bg-slate-50 ${index % 2 === 0 ? '' : 'bg-slate-50/30'}`}
+          {/* Row 5: Party Statement Ledger Table */}
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-slate-100">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Party Ledger Book</h3>
+                <p className="text-[11px] text-slate-400 font-semibold">Ledger entries for bills and payments.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
+                  <button
+                    type="button"
+                    className={`rounded-md px-2.5 py-1 transition ${statementFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                    onClick={() => setStatementFilter('all')}
                   >
-                    <td className="px-3 py-3 text-sm text-slate-700">{event.date === '-' ? '-' : formatShortDate(event.date)}</td>
-                    <td className="px-3 py-3 text-sm text-slate-700"><TypeBadge type={event.type} /></td>
-                    <td className="px-3 py-3 text-sm text-slate-700">
-                      <p>{event.details}</p>
-                      {event.compactDetails ? <p className="mt-0.5 text-xs text-slate-500">{event.compactDetails}</p> : null}
-                    </td>
-                    <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{event.debit > 0 ? formatInrInteger(event.debit) : '-'}</td>
-                    <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{event.credit > 0 ? formatInrInteger(event.credit) : '-'}</td>
-                    <td className="sticky right-0 bg-inherit px-3 py-3 text-right font-mono text-sm font-semibold text-slate-900 shadow-[-8px_0_12px_-14px_rgba(15,23,42,0.8)]">{formatSignedBalance(event.balance)}</td>
+                    All Entries
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-md px-2.5 py-1 transition ${statementFilter === 'bills' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                    onClick={() => setStatementFilter('bills')}
+                  >
+                    Bills Only
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-md px-2.5 py-1 transition ${statementFilter === 'payments' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                    onClick={() => setStatementFilter('payments')}
+                  >
+                    Payments Only
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Statement Table */}
+            <div className="overflow-x-auto rounded-xl border border-slate-200 no-scrollbar">
+              <table className="w-full min-w-[720px] text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-500 text-xs font-bold uppercase tracking-wider text-left bg-slate-50/50">
+                    <th className="px-3 py-2 text-left font-bold text-slate-600 w-28">Date</th>
+                    <th className="px-3 py-2 text-left font-bold text-slate-600 w-20">Type</th>
+                    <th className="px-3 py-2 text-left font-bold text-slate-600">Details</th>
+                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Debit (Bill)</th>
+                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Credit (Recv)</th>
+                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-32">Running Balance</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {statementQuery.data && filteredEvents.length === 0 && (
-          <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">No statement rows for selected filter.</p>
-        )}
-      </section>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  {statementQuery.isLoading && (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-6 text-center text-slate-400">Loading statement entries...</td>
+                    </tr>
+                  )}
+                  {statementQuery.data && paginatedEvents.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-6 text-center text-slate-400 italic">No matching entries found.</td>
+                    </tr>
+                  )}
+                  {paginatedEvents.map((event, idx) => {
+                    const isBill = event.type === 'Bill'
+                    const isPayment = event.type === 'Payment'
+                    return (
+                      <tr key={idx} className="hover:bg-slate-50/20 transition">
+                        <td className="px-3 py-2.5 text-slate-650">{event.date === '-' ? '—' : formatFullDate(event.date)}</td>
+                        <td className="px-3 py-2.5">
+                          {isBill ? (
+                            <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-700 border border-blue-100">
+                              BILL
+                            </span>
+                          ) : isPayment ? (
+                            <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-bold text-emerald-700 border border-emerald-100">
+                              RECV
+                            </span>
+                          ) : (
+                            <span className="inline-flex rounded-full bg-slate-50 px-2 py-0.5 text-[9px] font-semibold text-slate-600 border border-slate-100">
+                              START
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="font-semibold text-slate-800">{event.details}</div>
+                          {event.compactDetails && (
+                            <div className="text-[10px] text-slate-450 mt-0.5 font-semibold">{event.compactDetails}</div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-800 font-medium">
+                          {event.debit > 0 ? formatInrInteger(event.debit) : '—'}
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-mono tabular-nums text-emerald-600 font-bold">
+                          {event.credit > 0 ? formatInrInteger(event.credit) : '—'}
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-900 font-extrabold">
+                          {formatInrInteger(event.balance)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Table Pagination */}
+            <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 pt-2 border-t border-slate-100">
+              <p className="font-semibold text-[10px] uppercase tracking-wider text-slate-400">
+                Showing {filteredEvents.length === 0 ? 0 : (statementPage - 1) * statementPageSize + 1}-
+                {Math.min(statementPage * statementPageSize, filteredEvents.length)} of {filteredEvents.length} entries
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setStatementPage((current) => Math.max(1, current - 1))}
+                  disabled={statementPage <= 1}
+                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[10px] font-bold uppercase text-slate-700 px-3 py-1.5 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <span className="font-mono text-slate-800 font-bold">
+                  {statementPage} / {totalStatementPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setStatementPage((current) => Math.min(totalStatementPages, current + 1))}
+                  disabled={statementPage >= totalStatementPages}
+                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[10px] font-bold uppercase text-slate-700 px-3 py-1.5 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
@@ -548,44 +730,12 @@ function SummaryLine({ label, value, strong = false }: { label: string; value: s
   )
 }
 
-function StatementFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-      <p className="text-[11px] uppercase tracking-[0.08em] text-slate-500">{label}</p>
-      <p className="mt-0.5 truncate font-mono text-sm font-semibold text-slate-900">{value}</p>
-    </div>
-  )
-}
-
-function TypeBadge({ type }: { type: 'Opening' | 'Bill' | 'Payment' }) {
-  const className =
-    type === 'Bill'
-      ? 'border-rose-200 bg-rose-50 text-rose-700'
-      : type === 'Payment'
-        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-        : 'border-slate-200 bg-slate-100 text-slate-700'
-  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${className}`}>{type}</span>
-}
-
-function formatSignedBalance(balance: number) {
-  if (balance > 0) return `${formatInrInteger(balance)} Due`
-  if (balance < 0) return `${formatInrInteger(Math.abs(balance))} Advance`
-  return formatInrInteger(0)
-}
-
 function daysSinceDate(fromIsoDate: string, toIsoDate: string) {
   if (!fromIsoDate || !toIsoDate) return '-'
   const from = new Date(`${fromIsoDate}T00:00:00`)
   const to = new Date(`${toIsoDate}T00:00:00`)
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return '-'
   return String(Math.max(0, Math.floor((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000))))
-}
-
-function formatShortDate(dateText: string) {
-  if (!dateText) return '-'
-  const date = new Date(`${dateText}T00:00:00`)
-  if (Number.isNaN(date.getTime())) return dateText
-  return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
 }
 
 type PBRecord = Record<string, unknown> & { id: string }

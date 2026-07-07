@@ -1,7 +1,7 @@
 import { FilePenLine, FileText, Landmark, Plus, ReceiptText } from 'lucide-react'
 import type { QuickSearchResult } from '@/data/quick-search'
 import { formatFullDate } from '@/lib/date'
-import { formatInQty, formatInrInteger } from '@/lib/inr-format'
+import { formatInrInteger } from '@/lib/inr-format'
 
 type QuickSearchPreviewProps = {
   result: QuickSearchResult | undefined
@@ -32,7 +32,6 @@ export function QuickSearchPreview({ result, query, onAction }: QuickSearchPrevi
           {result.kind === 'Bill' && result.details?.bill ? <BillPreview result={result} onAction={onAction} /> : null}
           {result.kind === 'Customer' && result.details?.customer ? <CustomerPreview result={result} onAction={onAction} /> : null}
           {result.kind === 'Rate' && result.details?.rate ? <RatePreview result={result} onAction={onAction} /> : null}
-          {result.kind === 'Stock' && result.details?.stock ? <StockPreview result={result} onAction={onAction} /> : null}
           {(!result.details || result.kind === 'Payment') && <FallbackPreview result={result} />}
         </div>
       </div>
@@ -148,28 +147,6 @@ function RatePreview({ result, onAction }: { result: QuickSearchResult; onAction
         <Metric label="LME 3M" value={rate.lme3m ? String(rate.lme3m) : '-'} />
       </div>
       <ActionRow actions={[{ label: 'Use in Bill', icon: FileText, onClick: () => onAction('primary', result) }]} />
-    </div>
-  )
-}
-
-function StockPreview({ result, onAction }: { result: QuickSearchResult; onAction: QuickSearchPreviewProps['onAction'] }) {
-  const stock = result.details?.stock
-  if (!stock) return null
-  return (
-    <div className="space-y-4">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Current quantity</p>
-        <p className="mt-1 text-3xl font-bold text-slate-950">{formatInQty(stock.currentQty, stock.unit)}</p>
-      </div>
-      <Metric label="Item" value={stock.itemName} strong />
-      <Metric label="Party" value={stock.customerName} />
-      <Metric label="Last updated" value={stock.lastUpdatedDate ? formatFullDate(stock.lastUpdatedDate) : '-'} />
-      <ActionRow
-        actions={[
-          { label: 'Adjust Stock', icon: FilePenLine, onClick: () => onAction('primary', result) },
-          { label: 'View Ledger', icon: Landmark, onClick: () => onAction('secondary', result) },
-        ]}
-      />
     </div>
   )
 }

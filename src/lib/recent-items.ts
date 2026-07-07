@@ -10,8 +10,6 @@ export type RecentQuickSearchItem = {
   customerId?: string
   billId?: string
   paymentId?: string
-  stockItemId?: string
-  stockCustomerId?: string
   viewedAt: number
 }
 
@@ -56,15 +54,13 @@ export function getRecentQuickSearchResults(): QuickSearchResult[] {
     customerId: item.customerId,
     billId: item.billId,
     paymentId: item.paymentId,
-    stockItemId: item.stockItemId,
-    stockCustomerId: item.stockCustomerId,
     isRecent: true,
   }))
 }
 
 export function rememberQuickSearchResult(result: QuickSearchResult) {
   if (result.kind === 'Rate') return
-  const stableId = `${result.kind}-${result.billId ?? result.customerId ?? result.paymentId ?? `${result.stockItemId ?? ''}-${result.stockCustomerId ?? ''}`}`
+  const stableId = `${result.kind}-${result.billId ?? result.customerId ?? result.paymentId ?? result.id}`
   const nextItem: RecentQuickSearchItem = {
     id: stableId,
     kind: result.kind,
@@ -73,8 +69,6 @@ export function rememberQuickSearchResult(result: QuickSearchResult) {
     customerId: result.customerId,
     billId: result.billId,
     paymentId: result.paymentId,
-    stockItemId: result.stockItemId,
-    stockCustomerId: result.stockCustomerId,
     viewedAt: Date.now(),
   }
   const existing = readRecentItems().filter((item) => item.id !== stableId)

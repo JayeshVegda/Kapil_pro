@@ -2,12 +2,10 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Activity, ChevronLeft, ChevronRight, CircleDollarSign, PackageCheck, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarDaySidebar, type CalendarDaySidebarData, type CalendarSidebarBill, type CalendarSidebarPayment, type CalendarSidebarStockMovement } from '@/components/calendar/calendar-day-sidebar'
+import { CalendarDaySidebar, type CalendarDaySidebarData, type CalendarSidebarBill, type CalendarSidebarPayment } from '@/components/calendar/calendar-day-sidebar'
 import { CalendarMonthOverview } from '@/components/calendar/calendar-month-overview'
-import { formatBagCount, formatStockQty } from '@/components/stock/stock-inventory-strip'
 import { loadCalendarMonthData } from '@/data/calendar-month'
 import type { PBRecord } from '@/data/dashboard'
-import { loadCurrentStock, loadMonthlyStockReport, type CurrentStockRecord, type MonthlyStockReportRow } from '@/data/stock'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { buildMonthlyItemComparisons, type MonthlyItemComparisons } from '@/domain/monthly-item-rollup'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
@@ -121,9 +119,6 @@ function CalendarPage() {
     staleTime: 5 * 60 * 1000,
     gcTime: 15 * 60 * 1000,
   })
-  const currentStockQuery = useQuery({ queryKey: ['current-stock'], queryFn: loadCurrentStock, staleTime: 5 * 60 * 1000 })
-  const stockMonthQuery = useQuery({ queryKey: ['monthly-stock-report', monthKey], queryFn: () => loadMonthlyStockReport(monthKey), staleTime: 5 * 60 * 1000 })
-
   useEffect(() => {
     setSelectedDay(null)
   }, [monthKey])
@@ -144,8 +139,7 @@ function CalendarPage() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [monthKey, selectedDay])
 
-  const stockOverview = useMemo(() => buildStockOverview(currentStockQuery.data ?? [], stockMonthQuery.data ?? []), [currentStockQuery.data, stockMonthQuery.data])
-  const aggregates = useMemo(() => buildCalendarAggregates(calendarQuery.data, monthKey, today, stockOverview.sample), [calendarQuery.data, monthKey, today, stockOverview.sample])
+  const aggregates = useMemo(() => buildCalendarAggregates(calendarQuery.data, monthKey, today), [calendarQuery.data, monthKey, today])
   const gridWeeks = useMemo(() => {
     const [year, month] = monthKey.split('-').map(Number)
     return chunkWeeks(eachDayInclusive(startOfWeekSunday(new Date(year, month - 1, 1)), endOfWeekSaturday(new Date(year, month, 0))))
@@ -184,9 +178,17 @@ function CalendarPage() {
       icon: Activity,
       chip: aggregates.monthCollections - aggregates.monthSales >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700',
     },
+    {
+      label: 'Sold Bags',
+      value: formatWhole(aggregates.monthSoldBags),
+      helper: `${formatWhole(aggregates.monthSoldKg)} kg sold from bills`,
+      tone: 'text-amber-700',
+      icon: PackageCheck,
+      chip: 'bg-amber-50 text-amber-700',
+    },
   ]
 
-  const selectedSidebarData = selectedDay ? makeDaySidebarData(selectedDay, aggregates, stockOverview.sample) : null
+  const selectedSidebarData = selectedDay ? makeDaySidebarData(selectedDay, aggregates) : null
 
   function selectToday() {
     setMonthKey(today.slice(0, 7))
@@ -198,7 +200,6 @@ function CalendarPage() {
     <div className="w-full px-3 pb-6 pt-3 sm:px-4 lg:px-6">
       <section className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         {topCards.map((card) => <TopKpiCard key={card.label} {...card} />)}
-        <StockMovementKpi stock={stockOverview} />
         <ItemSignalsKpi itemComparisons={aggregates.itemComparisons} />
       </section>
 
@@ -239,11 +240,11 @@ function CalendarPage() {
                     const isToday = iso === today
                     const sales = aggregates.dailySales.get(iso) ?? 0
                     const collections = aggregates.dailyCollections.get(iso) ?? 0
+                    const soldBags = aggregates.dailySoldBags.get(iso) ?? 0
                     const rate = aggregates.rateByDate.get(iso)
-                    const stock = aggregates.dailyStockNet.get(iso) ?? 0
-                    const hasActivity = sales > 0 || collections > 0 || stock !== 0 || !!rate
+                    const hasActivity = sales > 0 || collections > 0 || soldBags > 0 || !!rate
                     const dayBalance = collections - sales
-                    const title = `${formatFullDate(iso)}\nRate: ${rate ? formatInrInteger(rate) : '-'}\nCollections: ${formatInrInteger(collections)}\nSales: ${formatInrInteger(sales)}\nStock: ${stock === 0 ? 'No change' : formatStockQty(stock, stockOverview.sample)}`
+                    const title = `${formatFullDate(iso)}\nRate: ${rate ? formatInrInteger(rate) : '-'}\nCollections: ${formatInrInteger(collections)}\nSales: ${formatInrInteger(sales)}\nSold bags: ${formatWhole(soldBags)}`
                     return (
                       <button
                         key={iso}
@@ -264,7 +265,7 @@ function CalendarPage() {
                           <MetricLine label="Rate" value={rate ? formatInrInteger(rate) : '-'} tone={rate ? 'text-blue-700' : 'text-slate-300'} />
                           <MetricLine label="Coll" value={collections > 0 ? formatInrInteger(collections) : '-'} tone={collections > 0 ? 'text-emerald-700' : 'text-slate-300'} />
                           <MetricLine label="Sales" value={sales > 0 ? formatInrInteger(sales) : '-'} tone={sales > 0 ? 'text-slate-950 font-bold' : 'text-slate-300'} />
-                          <MetricLine label="Stock" value={stock === 0 ? '0' : `${stock > 0 ? '+' : '-'}${formatBagCount(Math.abs(stock), stockOverview.sample)}`} tone={stock > 0 ? 'text-emerald-700' : stock < 0 ? 'text-red-700' : 'text-slate-300'} />
+                          <MetricLine label="Bags" value={soldBags > 0 ? formatWhole(soldBags) : '-'} tone={soldBags > 0 ? 'text-amber-700 font-bold' : 'text-slate-300'} />
                         </div>
                       </button>
                     )
@@ -289,7 +290,8 @@ function CalendarPage() {
                   topCollection={aggregates.topCollection}
                   rateDelta={aggregates.monthAvgMarketRateVsPrev}
                   itemComparisons={aggregates.itemComparisons}
-                  stock={stockOverview}
+                  soldBags={aggregates.monthSoldBags}
+                  soldKg={aggregates.monthSoldKg}
                 />
               )}
             </div>
@@ -380,45 +382,6 @@ function ItemSignalLine({ label, value, detail }: { label: string; value: string
   )
 }
 
-function StockMovementKpi({ stock }: { stock: ReturnType<typeof buildStockOverview> }) {
-  const netPrefix = stock.net > 0 ? '+' : stock.net < 0 ? '-' : '±'
-  const movementTitle = `Opening ${formatBagCount(stock.opening, stock.sample)} -> Closing ${formatBagCount(stock.closing, stock.sample)}`
-
-  return (
-    <div className="min-h-[7rem] rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Stock Movement</p>
-        <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${stock.net >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-          <PackageCheck size={15} />
-        </span>
-      </div>
-
-      <div className="flex items-baseline gap-2">
-        <p className={`truncate font-mono text-lg font-bold leading-tight tabular-nums ${stock.net >= 0 ? 'text-emerald-700' : 'text-red-700'}`} title={movementTitle}>
-          {netPrefix}{formatBagCount(Math.abs(stock.net), stock.sample)}
-        </p>
-        <p className="shrink-0 font-mono text-[11px] font-semibold text-slate-400" title={movementTitle}>
-          {formatBagCount(stock.opening, stock.sample)} {'->'} {formatBagCount(stock.closing, stock.sample)}
-        </p>
-      </div>
-
-      <div className="mt-2 grid grid-cols-2 overflow-hidden rounded-lg border border-slate-100 bg-slate-50 text-[11px]">
-        <StockTotal label="In" value={formatBagCount(stock.received, stock.sample)} tone="text-emerald-700" />
-        <StockTotal label="Sold" value={formatBagCount(stock.sold, stock.sample)} tone="text-red-700" />
-      </div>
-    </div>
-  )
-}
-
-function StockTotal({ label, value, tone }: { label: string; value: string; tone: string }) {
-  return (
-    <div className="min-w-0 border-l border-slate-100 px-2 py-1 first:border-l-0">
-      <p className="text-[9px] font-semibold uppercase tracking-[0.06em] text-slate-400">{label}</p>
-      <p className={`truncate font-mono font-semibold tabular-nums ${tone}`} title={value}>{value}</p>
-    </div>
-  )
-}
-
 function MetricLine({ label, value, tone }: { label: string; value: string; tone: string }) {
   return (
     <p className="flex min-w-0 items-center justify-between gap-1">
@@ -430,18 +393,20 @@ function MetricLine({ label, value, tone }: { label: string; value: string; tone
 
 const navButtonClass = 'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'
 
-function buildCalendarAggregates(data: Awaited<ReturnType<typeof loadCalendarMonthData>> | undefined, monthKey: string, today: string, stockSample?: CurrentStockRecord | MonthlyStockReportRow) {
+function buildCalendarAggregates(data: Awaited<ReturnType<typeof loadCalendarMonthData>> | undefined, monthKey: string, today: string) {
   const empty = {
     dailySales: new Map<string, number>(),
     dailyCollections: new Map<string, number>(),
     dailyBillCount: new Map<string, number>(),
-    dailyStockNet: new Map<string, number>(),
-    dailyStockMovements: new Map<string, CalendarSidebarStockMovement[]>(),
+    dailySoldBags: new Map<string, number>(),
+    dailySoldKg: new Map<string, number>(),
     billsByDate: new Map<string, CalendarSidebarBill[]>(),
     paymentsByDate: new Map<string, CalendarSidebarPayment[]>(),
     rateByDate: new Map<string, number>(),
     monthSales: 0,
     monthCollections: 0,
+    monthSoldBags: 0,
+    monthSoldKg: 0,
     monthAvgMarketRate: null as number | null,
     monthAvgMarketRateVsPrev: null as number | null,
     itemComparisons: {
@@ -465,17 +430,15 @@ function buildCalendarAggregates(data: Awaited<ReturnType<typeof loadCalendarMon
     itemLinesByBill.set(billId, lines)
   }
 
-  const billDateById = new Map<string, string>()
-  const billRefById = new Map<string, string>()
-  const billCustomerById = new Map<string, string>()
   const dailySales = new Map<string, number>()
   const dailyBillCount = new Map<string, number>()
+  const dailySoldBags = new Map<string, number>()
+  const dailySoldKg = new Map<string, number>()
   const billsByDate = new Map<string, CalendarSidebarBill[]>()
   const buyerAgg = new Map<string, { customerName: string; sales: number; bags: number; qty: number }>()
   for (const bill of data.billsRaw as PBRecord[]) {
     const day = str(bill.date).slice(0, 10)
     if (!day || (clipFutureToToday && day > today)) continue
-    billDateById.set(bill.id, day)
     const base = itemSumByBill.get(bill.id) ?? 0
     const total = calculateBillTotalFromBase(base, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount))
     dailySales.set(day, (dailySales.get(day) ?? 0) + total)
@@ -484,13 +447,15 @@ function buildCalendarAggregates(data: Awaited<ReturnType<typeof loadCalendarMon
     const billNo = num(bill.bill_no)
     const customerName = customerDisplayById.get(str(bill.customer)) ?? str(bill.customer_name)
     const billRef = billsRefDisplay(bill.bill_ref, bookNo, billNo)
-    billRefById.set(bill.id, billRef)
-    billCustomerById.set(bill.id, customerName)
     const itemLines = mergeBillItemLines(itemLinesByBill.get(bill.id) ?? [])
+    const billBags = itemLines.reduce((sum, line) => sum + line.bags, 0)
+    const billKg = itemLines.reduce((sum, line) => sum + line.qty, 0)
+    dailySoldBags.set(day, (dailySoldBags.get(day) ?? 0) + billBags)
+    dailySoldKg.set(day, (dailySoldKg.get(day) ?? 0) + billKg)
     const buyer = buyerAgg.get(str(bill.customer)) ?? { customerName, sales: 0, bags: 0, qty: 0 }
     buyer.sales += total
-    buyer.bags += itemLines.reduce((sum, line) => sum + line.bags, 0)
-    buyer.qty += itemLines.reduce((sum, line) => sum + line.qty, 0)
+    buyer.bags += billBags
+    buyer.qty += billKg
     buyerAgg.set(str(bill.customer), buyer)
     const row = {
       id: bill.id,
@@ -534,58 +499,10 @@ function buildCalendarAggregates(data: Awaited<ReturnType<typeof loadCalendarMon
   }
   const prevRates = (data.prevRatesRaw as PBRecord[]).map((rate) => num(rate.vilaity)).filter((value) => value > 0)
 
-  const dailyStockNet = new Map<string, number>()
-  const dailyStockMovements = new Map<string, CalendarSidebarStockMovement[]>()
-  const addStockMovement = (day: string, movement: Omit<CalendarSidebarStockMovement, 'key' | 'count' | 'qty'> & { qty: number }) => {
-    if (!day || movement.qty === 0 || (clipFutureToToday && day > today)) return
-    dailyStockNet.set(day, (dailyStockNet.get(day) ?? 0) + movement.qty)
-    const key = `${movement.action}-${movement.itemName}-${movement.customerName}`
-    const existing = dailyStockMovements.get(day) ?? []
-    const current = existing.find((row) => row.key === key)
-    if (current) {
-      current.qty += movement.qty
-      current.count += 1
-      current.notes = [...new Set([...current.notes, ...movement.notes].filter(Boolean))].slice(0, 4)
-    } else {
-      existing.push({ ...movement, key, count: 1 })
-    }
-    dailyStockMovements.set(day, existing)
-  }
-  for (const row of data.stockInRaw as PBRecord[]) {
-    addStockMovement(str(row.date).slice(0, 10), {
-      action: 'Received',
-      itemName: str(row.item_name) || 'Stock',
-      customerName: customerDisplayById.get(str(row.customer)) ?? str(row.customer_name) ?? 'Stock',
-      qty: num(row.qty),
-      notes: [str(row.note)].filter(Boolean),
-      sample: stockSample,
-    })
-  }
-  for (const row of data.stockAdjustmentsRaw as PBRecord[]) {
-    addStockMovement(str(row.date).slice(0, 10), {
-      action: 'Adjusted',
-      itemName: str(row.item_name) || 'Stock',
-      customerName: customerDisplayById.get(str(row.customer)) ?? str(row.customer_name) ?? 'Stock',
-      qty: num(row.qty),
-      notes: [str(row.note)].filter(Boolean),
-      sample: stockSample,
-    })
-  }
-  for (const item of data.billItemsRaw as PBRecord[]) {
-    const billId = str(item.bill)
-    const day = billDateById.get(billId)
-    addStockMovement(day ?? '', {
-      action: 'Sold',
-      itemName: str(item.item_name) || 'Stock',
-      customerName: billCustomerById.get(billId) ?? 'Customer',
-      qty: -num(item.qty),
-      notes: [`Bill ${billRefById.get(billId) ?? ''}`.trim()],
-      sample: stockSample,
-    })
-  }
-
   const monthSales = [...dailySales.values()].reduce((sum, value) => sum + value, 0)
   const monthCollections = [...dailyCollections.values()].reduce((sum, value) => sum + value, 0)
+  const monthSoldBags = [...dailySoldBags.values()].reduce((sum, value) => sum + value, 0)
+  const monthSoldKg = [...dailySoldKg.values()].reduce((sum, value) => sum + value, 0)
   const rates = [...rateByDate.values()].filter((value) => value > 0)
   const monthAvgMarketRate = rates.length ? rates.reduce((sum, value) => sum + value, 0) / rates.length : null
   const prevAvgMarketRate = prevRates.length ? prevRates.reduce((sum, value) => sum + value, 0) / prevRates.length : null
@@ -604,10 +521,10 @@ function buildCalendarAggregates(data: Awaited<ReturnType<typeof loadCalendarMon
     : null
   const topCollection = [...collectionAgg.values()].sort((a, b) => b.amount - a.amount)[0] ?? null
 
-  return { dailySales, dailyCollections, dailyBillCount, dailyStockNet, dailyStockMovements, billsByDate, paymentsByDate, rateByDate, monthSales, monthCollections, monthAvgMarketRate, monthAvgMarketRateVsPrev: monthAvgMarketRate != null && prevAvgMarketRate != null ? monthAvgMarketRate - prevAvgMarketRate : null, itemComparisons, topBuyer, topCollection }
+  return { dailySales, dailyCollections, dailyBillCount, dailySoldBags, dailySoldKg, billsByDate, paymentsByDate, rateByDate, monthSales, monthCollections, monthSoldBags, monthSoldKg, monthAvgMarketRate, monthAvgMarketRateVsPrev: monthAvgMarketRate != null && prevAvgMarketRate != null ? monthAvgMarketRate - prevAvgMarketRate : null, itemComparisons, topBuyer, topCollection }
 }
 
-function makeDaySidebarData(date: string, aggregates: ReturnType<typeof buildCalendarAggregates>, stockSample?: CurrentStockRecord | MonthlyStockReportRow): CalendarDaySidebarData {
+function makeDaySidebarData(date: string, aggregates: ReturnType<typeof buildCalendarAggregates>): CalendarDaySidebarData {
   const bills = [...(aggregates.billsByDate.get(date) ?? [])].sort((a, b) => a.billRefDisplay.localeCompare(b.billRefDisplay))
   const payments = [...(aggregates.paymentsByDate.get(date) ?? [])].sort((a, b) => a.customerName.localeCompare(b.customerName) || b.amount - a.amount)
   return {
@@ -615,39 +532,9 @@ function makeDaySidebarData(date: string, aggregates: ReturnType<typeof buildCal
     rate: aggregates.rateByDate.get(date),
     sales: aggregates.dailySales.get(date) ?? 0,
     collections: aggregates.dailyCollections.get(date) ?? 0,
-    stockNet: aggregates.dailyStockNet.get(date) ?? 0,
-    stockMovements: aggregates.dailyStockMovements.get(date) ?? [],
+    soldBags: aggregates.dailySoldBags.get(date) ?? 0,
+    soldKg: aggregates.dailySoldKg.get(date) ?? 0,
     bills,
     payments,
-    stockSample,
   }
-}
-
-function buildStockOverview(currentRows: CurrentStockRecord[], monthRows: MonthlyStockReportRow[]) {
-  const sample = currentRows[0] ?? monthRows[0]
-  const opening = monthRows.reduce((sum, row) => sum + row.opening, 0)
-  const received = monthRows.reduce((sum, row) => sum + row.stockIn, 0)
-  const sold = monthRows.reduce((sum, row) => sum + row.sold, 0)
-  const adjustment = monthRows.reduce((sum, row) => sum + row.adjustment, 0)
-  const closing = monthRows.reduce((sum, row) => sum + row.closing, 0)
-  const groupedLines = new Map<string, MonthlyStockReportRow & { received: number }>()
-  for (const row of monthRows) {
-    if (row.opening === 0 && row.stockIn === 0 && row.sold === 0 && row.adjustment === 0 && row.closing === 0) continue
-    const itemName = row.itemName.trim() || row.name.trim() || 'Stock'
-    const key = `${itemName.toLowerCase()}::${row.type}::${row.unit}::${row.bagWeight}`
-    const current = groupedLines.get(key)
-    if (current) {
-      current.opening += row.opening
-      current.received += row.stockIn
-      current.stockIn += row.stockIn
-      current.sold += row.sold
-      current.adjustment += row.adjustment
-      current.closing += row.closing
-    } else {
-      groupedLines.set(key, { ...row, itemName, received: row.stockIn })
-    }
-  }
-  const itemLines = [...groupedLines.values()]
-    .sort((a, b) => Math.abs(b.received - b.sold) - Math.abs(a.received - a.sold))
-  return { opening, received, sold, adjustment, closing, net: closing - opening, sample, itemLines }
 }

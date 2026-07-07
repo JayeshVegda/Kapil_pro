@@ -1,9 +1,8 @@
 import { pb } from '@/data/pocketbase'
-import { loadCurrentStock, type CurrentStockRecord } from '@/data/stock'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
-import { formatInQty, formatInrInteger } from '@/lib/inr-format'
+import { formatInrInteger } from '@/lib/inr-format'
 import { getRecentQuickSearchResults } from '@/lib/recent-items'
 import { matchesAnyRankedQuery } from '@/lib/search'
 
@@ -11,7 +10,7 @@ type PBRecord = Record<string, unknown> & { id: string }
 
 export type QuickSearchResult = {
   id: string
-  kind: 'Customer' | 'Bill' | 'Payment' | 'Rate' | 'Stock'
+  kind: 'Customer' | 'Bill' | 'Payment' | 'Rate'
   title: string
   subtitle: string
   previewTitle?: string
@@ -20,8 +19,6 @@ export type QuickSearchResult = {
   customerId?: string
   billId?: string
   paymentId?: string
-  stockItemId?: string
-  stockCustomerId?: string
   isRecent?: boolean
   details?: {
     bill?: {
@@ -51,13 +48,6 @@ export type QuickSearchResult = {
       lme3m: number
       change?: number
     }
-    stock?: {
-      itemName: string
-      customerName: string
-      currentQty: number
-      unit: string
-      lastUpdatedDate: string
-    }
   }
 }
 
@@ -71,9 +61,6 @@ const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
 const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 let customerCache: Array<{ id: string; name: string; rawName: string; companyName: string; openingBalance: number }> | null = null
 let customerCacheAt = 0
-let stockCache: CurrentStockRecord[] | null = null
-let stockCacheAt = 0
-let stockCachePromise: Promise<CurrentStockRecord[]> | null = null
 
 function escapeFilterValue(value: string) {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
@@ -106,21 +93,6 @@ async function loadCustomersCached() {
   }))
   customerCacheAt = Date.now()
   return customerCache
-}
-
-async function loadCurrentStockCached() {
-  if (stockCache && Date.now() - stockCacheAt < 60_000) return stockCache
-  if (stockCachePromise) return stockCachePromise
-  stockCachePromise = loadCurrentStock()
-    .then((rows) => {
-      stockCache = rows
-      stockCacheAt = Date.now()
-      return rows
-    })
-    .finally(() => {
-      stockCachePromise = null
-    })
-  return stockCachePromise
 }
 
 function nextIsoDate(dateIso: string) {
@@ -384,7 +356,7 @@ export async function loadQuickSearchResults(query: string): Promise<QuickSearch
   const dayMatch = /^(\d{1,2})$/.exec(cleaned)
   const dayRange = dayMatch ? currentMonthDayRange(Number(dayMatch[1])) : null
 
-  const [customersRaw, billsPage, paymentsPage, stockRows] = await Promise.all([
+  const [customersRaw, billsPage, paymentsPage] = await Promise.all([
     isBillCommand || isPaymentCommand
       ? Promise.resolve({ items: [] })
       : isCustomerCommand || cleaned.length > 0
@@ -410,7 +382,6 @@ export async function loadQuickSearchResults(query: string): Promise<QuickSearch
           filter: `customer_name ~ "${cleaned}" || mode ~ "${cleaned}" || amount ~ "${cleaned}" || note ~ "${cleaned}"`,
           sort: '-date',
         }).catch(() => ({ items: [] })),
-    loadCurrentStockCached().catch(() => []),
   ])
 
   const searchedCustomers = ((customersRaw.items ?? []) as PBRecord[]).map((row) => ({
@@ -509,33 +480,5 @@ export async function loadQuickSearchResults(query: string): Promise<QuickSearch
     .filter((row) => row.customerId && matchesAnyRankedQuery(row.searchable, q))
     .map(({ searchable: _searchable, ...row }) => row)
 
-  const stockResults = stockRows
-    .filter((row) => matchesAnyRankedQuery([row.itemName, row.customerName, row.name, row.type, 'stock inventory current closing'], q))
-    .map((row): QuickSearchResult => ({
-      id: `stock-${row.itemId}-${row.customerId}`,
-      kind: 'Stock',
-      title: row.itemName,
-      subtitle: `${row.customerName} · ${formatInQty(row.currentStock, row.unit || 'kg')} current`,
-      previewTitle: `${row.itemName} stock`,
-      previewLines: [
-        { label: 'Party', value: row.customerName },
-        { label: 'Current', value: formatInQty(row.currentStock, row.unit || 'kg') },
-        { label: 'In month', value: formatInQty(row.stockInThisMonth, row.unit || 'kg') },
-        { label: 'Sold month', value: formatInQty(row.soldThisMonth, row.unit || 'kg') },
-      ],
-      actionLabel: 'Open stock',
-      stockItemId: row.itemId,
-      stockCustomerId: row.customerId,
-      details: {
-        stock: {
-          itemName: row.itemName,
-          customerName: row.customerName,
-          currentQty: row.currentStock,
-          unit: row.unit || 'kg',
-          lastUpdatedDate: row.openingStockDate,
-        },
-      },
-    }))
-
-  return [...billResults, ...customerResults, ...paymentResults, ...rateResults, ...stockResults]
+  return [...billResults, ...customerResults, ...paymentResults, ...rateResults]
 }

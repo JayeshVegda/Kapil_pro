@@ -1,10 +1,7 @@
 import { formatMonthYear } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
-import { formatBagCount } from '@/components/stock/stock-inventory-strip'
-import { Activity, CircleDollarSign, PackageCheck, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
+import { Activity, CircleDollarSign, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
 import type { MonthlyItemComparisons } from '@/domain/monthly-item-rollup'
-
-export type CalendarStockSample = { type?: string; unit?: string; bagWeight?: number } | null | undefined
 
 export type CalendarMonthOverviewProps = {
   monthKey: string
@@ -16,19 +13,11 @@ export type CalendarMonthOverviewProps = {
   topCollection: { customerName: string; amount: number } | null
   rateDelta: number | null
   itemComparisons: MonthlyItemComparisons
-  stock: {
-    opening: number
-    received: number
-    sold: number
-    adjustment: number
-    closing: number
-    net: number
-    sample?: CalendarStockSample
-    itemLines: Array<{ itemName: string; received: number; sold: number; adjustment: number; closing: number; bagWeight?: number; type?: string; unit?: string }>
-  }
+  soldBags: number
+  soldKg: number
 }
 
-export function CalendarMonthOverview({ monthKey, sales, collections, avgRate, netPosition, topBuyer, topCollection, rateDelta, itemComparisons, stock }: CalendarMonthOverviewProps) {
+export function CalendarMonthOverview({ monthKey, sales, collections, avgRate, netPosition, topBuyer, topCollection, rateDelta, itemComparisons, soldBags, soldKg }: CalendarMonthOverviewProps) {
   return (
     <div className="space-y-5">
       <div className="rounded-xl bg-blue-700 p-4 text-white">
@@ -46,35 +35,10 @@ export function CalendarMonthOverview({ monthKey, sales, collections, avgRate, n
         <OverviewLine icon={CircleDollarSign} label="Top collection" value={topCollection ? topCollection.customerName : '-'} detail={topCollection ? formatInrInteger(topCollection.amount) : 'No collection yet'} tone="text-emerald-800" iconTone="bg-emerald-50 text-emerald-700" />
         <OverviewLine icon={TrendingUp} label="Rate movement" value={avgRate != null ? formatInrInteger(Math.round(avgRate)) : '-'} detail={rateDelta == null ? 'No last-month rate' : `${rateDelta >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(rateDelta))} vs last month`} tone="text-sky-800" iconTone="bg-sky-50 text-sky-700" />
         <OverviewLine icon={Activity} label="Collection cover" value={sales > 0 ? `${Math.round((collections / sales) * 100)}%` : '-'} detail={netPosition >= 0 ? `${formatInrInteger(netPosition)} surplus` : `${formatInrInteger(Math.abs(netPosition))} gap`} tone={netPosition >= 0 ? 'text-emerald-800' : 'text-red-700'} iconTone={netPosition >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'} />
+        <OverviewLine icon={ReceiptText} label="Sold volume" value={`${formatNumber(soldBags)} bags`} detail={`${formatNumber(soldKg)} kg from bills`} tone="text-amber-800" iconTone="bg-amber-50 text-amber-700" />
       </div>
 
       <Divider />
-
-      <div>
-        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-          <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
-            <PackageCheck size={15} />
-          </span>
-          Stock movement
-        </div>
-        <div className="mt-3 space-y-2 text-sm">
-          {stock.itemLines.slice(0, 5).map((row) => (
-            <OverviewLine
-              key={`${row.itemName}-${row.received}-${row.sold}`}
-              label={row.itemName}
-              value={formatBagCount(row.closing, row)}
-              detail={`In ${formatBagCount(row.received, row)} · Sold ${formatBagCount(row.sold, row)}${row.adjustment ? ` · Adj ${formatBagCount(row.adjustment, row)}` : ''}`}
-            />
-          ))}
-          {stock.itemLines.length === 0 ? <OverviewLine label="No stock movement" value="-" /> : null}
-          <OverviewLine
-            label="Total net"
-            value={`${stock.net > 0 ? '+' : stock.net < 0 ? '-' : '±'}${formatBagCount(Math.abs(stock.net), stock.sample)}`}
-            tone={stock.net >= 0 ? 'text-emerald-800' : 'text-red-700'}
-            detail={`Opening ${formatBagCount(stock.opening, stock.sample)} · Closing ${formatBagCount(stock.closing, stock.sample)}`}
-          />
-        </div>
-      </div>
     </div>
   )
 }

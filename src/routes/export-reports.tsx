@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { BookOpen, Download, FileArchive, FileText, PackageCheck, ReceiptText } from 'lucide-react'
+import { BookOpen, Download, FileArchive, FileText, ReceiptText } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import type { Root } from 'react-dom/client'
 import type { jsPDF } from 'jspdf'
@@ -11,7 +11,6 @@ import { ExportSurface } from '@/components/exports/export-surface'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
 import { buildBackupSnapshot, type BackupSnapshot } from '@/data/backup'
 import { pb } from '@/data/pocketbase'
-import { loadMonthlyStockReport } from '@/data/stock'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { BILL_PREVIEW_CARD_CLASS, BILL_PRINT_JPEG_QUALITY_DOWNLOAD } from '@/lib/bill-print-export'
@@ -29,7 +28,7 @@ export const Route = createFileRoute('/export-reports')({
 
 type CsvFile = { filename: string; content: string }
 type PBRecord = Record<string, unknown> & { id: string }
-type ReportKind = 'party' | 'sales' | 'stock' | 'book'
+type ReportKind = 'party' | 'sales' | 'book'
 type DatePreset = 'thisMonth' | 'lastMonth' | 'thisFy' | 'custom'
 type ReportPreview = {
   title: string
@@ -45,7 +44,6 @@ type ReportPreview = {
 const SECONDARY_EXPORTS: Array<{ id: Exclude<ReportKind, 'party'>; title: string; subtitle: string; icon: ReactNode }> = [
   { id: 'book', title: 'Book Download', subtitle: 'Download one whole bill book as a ZIP of PDFs.', icon: <BookOpen size={16} /> },
   { id: 'sales', title: 'Sales Register', subtitle: 'Bill-wise sales for a month or date range.', icon: <ReceiptText size={16} /> },
-  { id: 'stock', title: 'Gas Stock Report', subtitle: 'Gas-part stock movement and closing for selected month.', icon: <PackageCheck size={16} /> },
 ]
 
 const EXPORTS_PAGE_SECTIONS = ['party-statement-generator', 'statement-preview', 'more-exports'] as const
@@ -111,26 +109,18 @@ function ExportReportsPage() {
     queryFn: buildBackupSnapshot,
     enabled: needsSnapshot,
   })
-  const monthlyStockQuery = useQuery({
-    queryKey: ['export-reports-monthly-stock', month],
-    queryFn: () => loadMonthlyStockReport(month),
-    enabled: reportKind === 'stock',
-  })
-
   const snapshot = snapshotQuery.data
-  const monthlyStock = monthlyStockQuery.data ?? []
   const customers = useMemo(() => (optionsQuery.data?.customers ?? []).filter((row) => row.active !== false).sort((a, b) => displayCustomer(a).localeCompare(displayCustomer(b))), [optionsQuery.data?.customers])
   const bookOptions = useMemo(() => buildBookOptions(optionsQuery.data?.bills), [optionsQuery.data?.bills])
   const selectedParty = customers.find((row) => row.id === partyId)
   const dateRange = useMemo(() => resolveDateRange(datePreset, month, fromDate, toDate, today), [datePreset, month, fromDate, toDate, today])
-  const partyPreview = useMemo<ReportPreview | null>(() => (snapshot && partyId ? buildPreview(snapshot, 'party', { partyId, bookNo: bookNoInput, dateRange, includeBillItems }, monthlyStock) : null), [snapshot, partyId, bookNoInput, dateRange, includeBillItems, monthlyStock])
+  const partyPreview = useMemo<ReportPreview | null>(() => (snapshot && partyId ? buildPreview(snapshot, 'party', { partyId, bookNo: bookNoInput, dateRange, includeBillItems }) : null), [snapshot, partyId, bookNoInput, dateRange, includeBillItems])
   const activePreview = useMemo<ReportPreview | null>(() => {
-    if (reportKind === 'stock') return buildStockReport(monthlyStock, dateRange.label)
-    return snapshot ? buildPreview(snapshot, reportKind, { partyId, bookNo: bookNoInput, dateRange, includeBillItems }, monthlyStock) : null
-  }, [snapshot, reportKind, partyId, bookNoInput, dateRange, includeBillItems, monthlyStock])
+    return snapshot ? buildPreview(snapshot, reportKind, { partyId, bookNo: bookNoInput, dateRange, includeBillItems }) : null
+  }, [snapshot, reportKind, partyId, bookNoInput, dateRange, includeBillItems])
   const isInitialLoading = optionsQuery.isLoading
-  const isReportLoading = (needsSnapshot && snapshotQuery.isLoading) || (reportKind === 'stock' && monthlyStockQuery.isLoading)
-  const isReportError = optionsQuery.isError || snapshotQuery.isError || monthlyStockQuery.isError
+  const isReportLoading = needsSnapshot && snapshotQuery.isLoading
+  const isReportError = optionsQuery.isError || snapshotQuery.isError
 
   function downloadCsvReport(targetPreview = activePreview) {
     const preview = targetPreview
@@ -349,25 +339,6 @@ function ExportReportsPage() {
                 )}
               </CompactExportCard>
             }
-            stockBlock={
-              <CompactExportCard title="Stock Report" subtitle="Selected month stock movement export.">
-                <Field label="Stock Month">
-                  <input className={inputClass} type="month" value={month} onChange={(event) => {
-                    setMonth(event.target.value)
-                    setReportKind('stock')
-                  }} />
-                </Field>
-                {reportKind === 'stock' && activePreview && (
-                  <div className="mt-3 space-y-3">
-                    <PreviewTable columns={activePreview.columns} rows={activePreview.rows} />
-                    <div className="flex flex-wrap gap-2">
-                      <button type="button" className={primaryButtonClass} onClick={() => downloadPdfReport()} disabled={isReportLoading || activePreview.rows.length === 0}><FileText size={14} /> Download PDF</button>
-                      <button type="button" className={secondaryButtonClass} onClick={() => downloadCsvReport()} disabled={isReportLoading || activePreview.rows.length === 0}><Download size={14} /> Download CSV</button>
-                    </div>
-                  </div>
-                )}
-              </CompactExportCard>
-            }
           />
         </>
       )}
@@ -379,27 +350,10 @@ function buildPreview(
   snapshot: BackupSnapshot,
   kind: ReportKind,
   options: { partyId: string; bookNo: string; dateRange: { start: string; end: string; label: string }; includeBillItems: boolean },
-  monthlyStock: Awaited<ReturnType<typeof loadMonthlyStockReport>>,
 ): ReportPreview {
   if (kind === 'party') return buildPartyStatement(snapshot, options.partyId, options.dateRange, options.includeBillItems)
   if (kind === 'sales') return buildSalesRegister(snapshot, options.dateRange, options.includeBillItems)
-  if (kind === 'stock') return buildStockReport(monthlyStock, options.dateRange.label)
   if (kind === 'book') return buildBookSummary(snapshot, options.bookNo)
-  if (kind === 'backup') return {
-    title: 'Technical Backup',
-    subtitle: 'Raw data exports for migration and safety.',
-    slug: `kapil-technical-backup-${dateStamp()}`,
-    columns: ['Collection', 'Records'],
-    rows: [
-      ['Customers', String(snapshot.counts.customers)],
-      ['Items', String(snapshot.counts.items)],
-      ['Bills', String(snapshot.counts.bills)],
-      ['Bill Items', String(snapshot.counts.billItems)],
-      ['Payments', String(snapshot.counts.payments)],
-      ['Gas Stock Items', String(monthlyStock.length)],
-    ],
-    summary: [],
-  }
 
   return buildBookSummary(snapshot, options.bookNo)
 }
@@ -462,20 +416,6 @@ function buildSalesRegister(snapshot: BackupSnapshot, range: { start: string; en
     summary: [
       { label: 'Bills', value: String(bills.length) },
       { label: 'Sales', value: formatInrInteger(total) },
-    ],
-  }
-}
-
-function buildStockReport(rows: Awaited<ReturnType<typeof loadMonthlyStockReport>>, label: string) {
-  return {
-    title: 'Gas Stock Report',
-    subtitle: label,
-    slug: `gas-stock-report-${safeFilename(label)}`,
-    columns: ['Item', 'Party', 'Opening', 'Stock In', 'Sold', 'Adjustment', 'Closing'],
-    rows: rows.map((row) => [row.itemName, row.customerName, formatStockQty(row.opening, row), formatStockQty(row.stockIn, row), formatStockQty(row.sold, row), formatStockQty(row.adjustment, row), formatStockQty(row.closing, row)]),
-    summary: [
-      { label: 'Stock Buckets', value: String(rows.length) },
-      { label: 'Closing Kg', value: formatInQty(rows.reduce((sum, row) => sum + row.closing, 0), 'kg') },
     ],
   }
 }
@@ -802,7 +742,7 @@ function lastAutoTableY(doc: jsPDF) {
 function reportColumnStyles(columns: string[]) {
   const styles: Record<number, { halign?: 'left' | 'center' | 'right'; cellWidth?: number }> = {}
   columns.forEach((column, index) => {
-    if (['Debit', 'Credit', 'Balance', 'Items', 'Transport', 'GST', 'Total', 'Opening', 'Stock In', 'Sold', 'Adjustment', 'Closing', 'Receivable', 'Advance', 'Net'].includes(column)) {
+    if (['Debit', 'Credit', 'Balance', 'Items', 'Transport', 'GST', 'Total', 'Opening', 'Sold', 'Receivable', 'Advance', 'Net'].includes(column)) {
       styles[index] = { halign: 'right' }
     }
     if (column === 'Details') styles[index] = { ...(styles[index] ?? {}), cellWidth: 170 }
@@ -1246,7 +1186,7 @@ function displayCustomer(row: PBRecord) {
   const company = String(row.company_name ?? '').trim()
   const name = String(row.name ?? '').trim()
   const display = formatCustomerDisplayName(company, name)
-  if (display === 'General / Regular Stock') return display
+  if (display === 'General / Regular') return display
   return company && company !== name ? `${company} (${name})` : name || company || row.id
 }
 
@@ -1265,10 +1205,6 @@ function datePart(value: unknown) {
 function num(value: unknown) {
   const parsed = Number(value ?? 0)
   return Number.isFinite(parsed) ? parsed : 0
-}
-
-function dateStamp() {
-  return new Date().toISOString().slice(0, 10)
 }
 
 function monthBounds(monthKey: string) {
@@ -1316,15 +1252,6 @@ function groupBy<T>(rows: T[], getKey: (row: T) => string) {
     map.set(key, list)
   }
   return map
-}
-
-function formatStockQty(value: number, item: { unit: string; bagWeight?: number }) {
-  if (item.unit === 'kg') {
-    const bagWeight = Number(item.bagWeight ?? 50) || 50
-    const bags = value / bagWeight
-    return `${formatInQty(value, 'kg')} / ${bags.toFixed(bags % 1 === 0 ? 0 : 1)} bags`
-  }
-  return formatInQty(value, item.unit || 'piece')
 }
 
 function billTotal(snapshot: BackupSnapshot, bill: PBRecord) {

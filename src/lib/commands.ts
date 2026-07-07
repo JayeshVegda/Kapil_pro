@@ -2,10 +2,10 @@ import { getLocalIsoDate } from '@/lib/date'
 import { findBestNameMatch } from '@/lib/search'
 import { getAdminControlSettings } from '@/lib/admin-control'
 
-export type CommandKind = 'bill' | 'payment' | 'stock' | 'print'
+export type CommandKind = 'bill' | 'payment' | 'print'
 export const PENDING_COMMAND_STORAGE_KEY = 'kapil-pending-command-v1'
 
-export type CommandRouteContext = 'bill' | 'payment' | 'stock' | 'print' | 'neutral'
+export type CommandRouteContext = 'bill' | 'payment' | 'print' | 'neutral'
 
 export const commandRegistry = {
   bill: {
@@ -16,10 +16,6 @@ export const commandRegistry = {
   payment: {
     aliases: ['p', 'pay', 'payment'],
     pageContexts: ['/new-payment'],
-  },
-  stock: {
-    aliases: ['s', 'stock', 'stockin', 'in'],
-    pageContexts: ['/stock', '/stock-in'],
   },
   print: {
     aliases: ['pr', 'print'],
@@ -38,10 +34,6 @@ export function getCommandRegistry() {
     payment: {
       ...commandRegistry.payment,
       aliases: settings.commandAliases.payment,
-    },
-    stock: {
-      ...commandRegistry.stock,
-      aliases: settings.commandAliases.stock,
     },
     print: {
       ...commandRegistry.print,
@@ -103,21 +95,12 @@ export type ParsedPaymentCommand = {
   note: string
 }
 
-export type ParsedStockCommand = {
-  kind: 'stock'
-  item: CommandItem
-  qty: number
-  displayQty: string
-  date: string
-  note: string
-}
-
 export type ParsedPrintCommand = {
   kind: 'print'
   billRef: string
 }
 
-export type ParsedCommand = ParsedBillCommand | ParsedPaymentCommand | ParsedStockCommand | ParsedPrintCommand
+export type ParsedCommand = ParsedBillCommand | ParsedPaymentCommand | ParsedPrintCommand
 
 export type CommandParseResult<T extends ParsedCommand = ParsedCommand> = { ok: true; command: T } | { ok: false; error: string }
 
@@ -130,7 +113,6 @@ function getCommandAliasToKind() {
 export function inferCommandKind(pathname: string): CommandRouteContext {
   if (pathname === '/new-bill') return 'bill'
   if (pathname === '/new-payment') return 'payment'
-  if (pathname === '/stock' || pathname === '/stock-in') return 'stock'
   if (pathname === '/print-bill') return 'print'
   return 'neutral'
 }
@@ -153,10 +135,9 @@ export function parseContextCommand(input: string, context: CommandRouteContext,
   const raw = input.trim()
   if (!raw) return { ok: false, error: 'Type a command first.' }
   const resolved = splitCommandPrefix(raw, context)
-  if (!resolved.kind) return { ok: false, error: 'Add a prefix: b for bill, p for payment, s for stock, or pr for print.' }
+  if (!resolved.kind) return { ok: false, error: 'Add a prefix: b for bill, p for payment, or pr for print.' }
   if (resolved.kind === 'bill') return parseBillCommand(resolved.body, deps.customers ?? [], deps.items ?? [], deps.today, deps.mktRate ?? 0)
   if (resolved.kind === 'payment') return parsePaymentCommand(resolved.body, deps.customers ?? [], deps.today)
-  if (resolved.kind === 'stock') return parseStockCommand(resolved.body, deps.items ?? [], deps.today)
   return parsePrintCommand(resolved.body)
 }
 
@@ -313,28 +294,6 @@ export function parsePaymentCommand(input: string, customers: CommandCustomer[],
     }
   }
   return { ok: true, command: { kind: 'payment', customer, amount: parseAmountToken(tokens[amountIndex]), mode, date, note } }
-}
-
-export function parseStockCommand(input: string, items: CommandItem[], today: string): CommandParseResult<ParsedStockCommand> {
-  const noteMatch = input.match(/"([^"]*)"/)
-  const note = noteMatch?.[1]?.trim() ?? ''
-  const withoutNote = noteMatch ? input.replace(noteMatch[0], '').trim() : input.trim()
-  const tokens = withoutNote.split(/\s+/).filter(Boolean)
-  const qtyIndex = findFirstQuantityIndex(tokens, 0)
-  if (qtyIndex <= 0) return { ok: false, error: 'Use: item qty [date] ["note"]' }
-  const itemQuery = tokens.slice(0, qtyIndex).join(' ')
-  const item = findBestNameMatch(items, itemQuery, (row) => row.name)
-  if (!item) return { ok: false, error: `Item not found: ${itemQuery}` }
-  if (String(item.type ?? '').toLowerCase() !== 'gas') return { ok: false, error: 'Stock commands are only for gas part items.' }
-  const qtyInfo = parseItemQuantity(tokens[qtyIndex], item, true)
-  let date = today
-  for (const token of tokens.slice(qtyIndex + 1)) {
-    const lower = token.toLowerCase()
-    if (lower === 'on' || lower === 'date') continue
-    const maybeDate = parseDateToken(lower, today)
-    if (isParsedDateToken(lower, maybeDate)) date = maybeDate
-  }
-  return { ok: true, command: { kind: 'stock', item, qty: qtyInfo.qty, displayQty: qtyInfo.display, date, note } }
 }
 
 export function parsePrintCommand(input: string): CommandParseResult<ParsedPrintCommand> {
@@ -494,13 +453,6 @@ function normalizeYear(input: string) {
 
 function isParsedDateToken(token: string, parsed: string) {
   return parsed !== token || /^\d{4}-\d{2}-\d{2}$/.test(parsed)
-}
-
-function findFirstQuantityIndex(tokens: string[], start: number) {
-  for (let i = start; i < tokens.length; i += 1) {
-    if (parseAmountToken(tokens[i]) > 0) return i
-  }
-  return -1
 }
 
 function parseItemQuantity(token: string, item: CommandItem, preferBagsForGas: boolean) {

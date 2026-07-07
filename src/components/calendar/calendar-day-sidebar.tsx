@@ -2,9 +2,6 @@ import { CalendarDays, ChevronRight } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
-import { formatBagCount, formatStockQty } from '@/components/stock/stock-inventory-strip'
-
-type StockLike = { type?: string; unit?: string; bagWeight?: number }
 
 export type CalendarSidebarBill = {
   id: string
@@ -24,27 +21,15 @@ export type CalendarSidebarPayment = {
   note: string
 }
 
-export type CalendarSidebarStockMovement = {
-  key: string
-  action: 'Received' | 'Adjusted' | 'Sold'
-  itemName: string
-  customerName: string
-  qty: number
-  count: number
-  notes: string[]
-  sample?: StockLike
-}
-
 export type CalendarDaySidebarData = {
   date: string
   rate?: number
   sales: number
   collections: number
-  stockNet: number
-  stockMovements: CalendarSidebarStockMovement[]
+  soldBags: number
+  soldKg: number
   bills: CalendarSidebarBill[]
   payments: CalendarSidebarPayment[]
-  stockSample?: StockLike
 }
 
 export function CalendarDaySidebar({ data }: { data: CalendarDaySidebarData }) {
@@ -64,12 +49,7 @@ export function CalendarDaySidebar({ data }: { data: CalendarDaySidebarData }) {
           <DayMetric label="Market" value={data.rate ? formatInrInteger(data.rate) : '-'} tone="text-blue-700" surface="bg-blue-50/70 border-blue-100" />
           <DayMetric label="Collections" value={formatInrInteger(data.collections)} tone="text-emerald-700" surface="bg-emerald-50/70 border-emerald-100" />
           <DayMetric label="Sales" value={`${formatInrInteger(data.sales)} (${data.bills.length})`} tone="text-slate-950" surface="bg-slate-50 border-slate-100" />
-          <DayMetric
-            label="Stock"
-            value={data.stockNet === 0 ? 'No changes' : `${data.stockNet > 0 ? '+' : '-'}${formatBagCount(Math.abs(data.stockNet), data.stockSample)}`}
-            tone={data.stockNet >= 0 ? 'text-emerald-700' : 'text-red-700'}
-            surface={data.stockNet >= 0 ? 'bg-emerald-50/70 border-emerald-100' : 'bg-red-50/70 border-red-100'}
-          />
+          <DayMetric label="Sold" value={`${formatNumber(data.soldBags)} bags`} tone="text-amber-700" surface="bg-amber-50/70 border-amber-100" />
         </div>
       </div>
 
@@ -97,28 +77,6 @@ export function CalendarDaySidebar({ data }: { data: CalendarDaySidebarData }) {
 
       <Collapsible title={`Payments (${data.payments.length})`} defaultOpen>
         <PaymentGroups payments={data.payments} total={data.collections} />
-      </Collapsible>
-
-      <Collapsible title="Stock" defaultOpen={data.stockMovements.length > 0}>
-        {data.stockMovements.length === 0 ? <EmptyState>No changes.</EmptyState> : null}
-        <div className="space-y-1.5">
-          {data.stockMovements.map((row) => (
-            <div key={row.key} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 shadow-sm">
-              <div className="flex min-w-0 items-center justify-between gap-3">
-                <p className="min-w-0 truncate text-sm font-semibold text-slate-900">{row.itemName}</p>
-                <span className={`shrink-0 text-right font-mono text-sm font-bold ${row.qty >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                  {row.qty >= 0 ? '+' : '-'}{formatBagCount(Math.abs(row.qty), row.sample)} / {formatStockQty(Math.abs(row.qty), row.sample)}
-                </span>
-              </div>
-              <p className="mt-1 truncate text-[11px] text-slate-500">
-                {row.action}
-                {row.customerName ? ` · ${row.customerName}` : ''}
-                {row.count > 1 ? ` · ${row.count} entries` : ''}
-                {row.notes.length > 0 ? ` · ${row.notes.join(' · ')}` : ''}
-              </p>
-            </div>
-          ))}
-        </div>
       </Collapsible>
     </div>
   )

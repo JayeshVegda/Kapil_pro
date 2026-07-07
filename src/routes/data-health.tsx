@@ -35,7 +35,6 @@ function DataHealthPage() {
       setFixPreview(null)
       setStatusText('Fix applied. Health checks refreshed.')
       await queryClient.invalidateQueries({ queryKey: ['data-health'] })
-      await queryClient.invalidateQueries({ queryKey: ['current-stock'] })
     },
     onError: (error) => setStatusText(toUserMessage(error)),
   })
@@ -46,7 +45,7 @@ function DataHealthPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-slate-900">Data Health</h2>
-            <p className="mt-1 text-xs text-slate-500">Checks stock setup, bill item links, negative stock, and duplicate bills.</p>
+            <p className="mt-1 text-xs text-slate-500">Checks bill item links, customer links, and duplicate bills.</p>
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
             <Metric label="High" value={high} tone="red" />
@@ -169,6 +168,5 @@ function PreviewBlock({ label, value }: { label: string; value: string }) {
 
 function fixLink(issue: DataHealthIssue) {
   if (issue.area === 'Items') return <Link to="/items" className="font-medium text-blue-700 hover:underline">Open Items</Link>
-  if (issue.area === 'Stock') return <span className="font-medium text-slate-500">Stock module removed</span>
   return <Link to="/transactions" search={{ focusKind: '', focusId: '' }} className="font-medium text-blue-700 hover:underline">Open Logs</Link>
 }

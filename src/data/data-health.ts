@@ -1,4 +1,3 @@
-import { loadCurrentStock } from '@/data/stock'
 import { pb } from '@/data/pocketbase'
 
 type PBRecord = Record<string, unknown> & { id: string }
@@ -27,11 +26,10 @@ const num = (value: unknown) => {
 const key = (value: unknown) => String(value ?? '').trim().toLowerCase()
 
 export async function loadDataHealthIssues(): Promise<DataHealthIssue[]> {
-  const [itemsRaw, billItemsRaw, billsRaw, currentStock] = await Promise.all([
+  const [itemsRaw, billItemsRaw, billsRaw] = await Promise.all([
     pb.collection('items').getFullList({ sort: 'name' }),
     pb.collection('bill_items').getFullList(),
     pb.collection('bills').getFullList({ sort: '-date,-bill_no' }),
-    loadCurrentStock(),
   ])
 
   const issues: DataHealthIssue[] = []
@@ -45,30 +43,10 @@ export async function loadDataHealthIssues(): Promise<DataHealthIssue[]> {
         id: `item-type-${item.id}`,
         severity: 'Medium',
         area: 'Items',
-        title: 'Item has no stock type',
-        detail: `${String(item.name ?? 'Unknown item')} is missing electronic/gas type.`,
+        title: 'Item has no category',
+        detail: `${String(item.name ?? 'Unknown item')} is missing electronic/gas category.`,
       })
     }
-    if (type && !String(item.opening_stock_date ?? '')) {
-      issues.push({
-        id: `item-opening-date-${item.id}`,
-        severity: 'Medium',
-        area: 'Items',
-        title: 'Item has no opening stock date',
-        detail: `${String(item.name ?? 'Unknown item')} will count all historical movements until an opening date is set.`,
-      })
-    }
-  }
-
-  for (const item of currentStock) {
-    if (!item.type || item.currentStock >= 0) continue
-    issues.push({
-      id: `negative-stock-${item.id}`,
-      severity: 'High',
-      area: 'Stock',
-      title: 'Negative stock',
-      detail: `${item.itemName} / ${item.customerName} is ${Math.abs(item.currentStock)} ${item.unit === 'piece' ? 'pieces' : item.unit} short.`,
-    })
   }
 
   for (const row of billItemsRaw as PBRecord[]) {

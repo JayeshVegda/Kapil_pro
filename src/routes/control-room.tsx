@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, Command, Database, Lock, RefreshCw, RotateCcw, Save, Shield, Unlock, Upload } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { pb } from '@/data/pocketbase'
-import { loadCurrentStock } from '@/data/stock'
 import { loadDataHealthIssues } from '@/data/data-health'
 import { loadItems } from '@/data/items'
 import {
@@ -323,10 +322,10 @@ function ControlRoomPage() {
               `Payments: ${formatInrInteger(systemQuery.data.totals.paymentAmount)}`,
               `Net billed: ${formatInrInteger(systemQuery.data.totals.billAmount - systemQuery.data.totals.paymentAmount)}`,
             ]} />
-            <SnapshotBlock title="Stock" lines={[
-              `Buckets: ${systemQuery.data.counts.stockBuckets}`,
-              `Negative buckets: ${systemQuery.data.counts.negativeStockBuckets}`,
+            <SnapshotBlock title="Data Health" lines={[
               `Health issues: ${systemQuery.data.counts.healthIssues}`,
+              `Bill item rows: ${systemQuery.data.counts.billItems}`,
+              `Payment rows: ${systemQuery.data.counts.payments}`,
             ]} />
           </div>
         )}
@@ -336,13 +335,12 @@ function ControlRoomPage() {
 }
 
 async function loadSystemSnapshot() {
-  const [customers, items, bills, billItems, payments, stock, healthIssues] = await Promise.all([
+  const [customers, items, bills, billItems, payments, healthIssues] = await Promise.all([
     pb.collection('customers').getList(1, 1),
     pb.collection('items').getList(1, 1),
     pb.collection('bills').getFullList(),
     pb.collection('bill_items').getFullList(),
     pb.collection('payments').getFullList(),
-    loadCurrentStock(),
     loadDataHealthIssues(),
   ])
   const billAmountById = new Map<string, number>()
@@ -357,9 +355,8 @@ async function loadSystemSnapshot() {
       customers: customers.totalItems,
       items: items.totalItems,
       bills: bills.length,
+      billItems: billItems.length,
       payments: payments.length,
-      stockBuckets: stock.length,
-      negativeStockBuckets: stock.filter((row) => row.currentStock < 0).length,
       healthIssues: healthIssues.length,
     },
     totals: { billAmount, paymentAmount },

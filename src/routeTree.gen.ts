@@ -28,6 +28,7 @@ import { Route as CastingIndexRouteImport } from './routes/casting/index'
 import { Route as CastingNewSessionRouteImport } from './routes/casting/new-session'
 import { Route as CastingMaterialsRouteImport } from './routes/casting/materials'
 import { Route as CastingLogRouteImport } from './routes/casting/log'
+import { Route as CastingBillRouteImport } from './routes/casting/bill'
 
 const TransactionsRoute = TransactionsRouteImport.update({
   id: '/transactions',
@@ -124,6 +125,11 @@ const CastingLogRoute = CastingLogRouteImport.update({
   path: '/log',
   getParentRoute: () => CastingRoute,
 } as any)
+const CastingBillRoute = CastingBillRouteImport.update({
+  id: '/bill',
+  path: '/bill',
+  getParentRoute: () => CastingRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -141,6 +147,7 @@ export interface FileRoutesByFullPath {
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
   '/transactions': typeof TransactionsRoute
+  '/casting/bill': typeof CastingBillRoute
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
@@ -161,6 +168,7 @@ export interface FileRoutesByTo {
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
   '/transactions': typeof TransactionsRoute
+  '/casting/bill': typeof CastingBillRoute
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
@@ -183,6 +191,7 @@ export interface FileRoutesById {
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
   '/transactions': typeof TransactionsRoute
+  '/casting/bill': typeof CastingBillRoute
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
@@ -206,6 +215,7 @@ export interface FileRouteTypes {
     | '/new-payment'
     | '/print-bill'
     | '/transactions'
+    | '/casting/bill'
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
@@ -226,6 +236,7 @@ export interface FileRouteTypes {
     | '/new-payment'
     | '/print-bill'
     | '/transactions'
+    | '/casting/bill'
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
@@ -247,6 +258,7 @@ export interface FileRouteTypes {
     | '/new-payment'
     | '/print-bill'
     | '/transactions'
+    | '/casting/bill'
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
@@ -406,10 +418,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CastingLogRouteImport
       parentRoute: typeof CastingRoute
     }
+    '/casting/bill': {
+      id: '/casting/bill'
+      path: '/bill'
+      fullPath: '/casting/bill'
+      preLoaderRoute: typeof CastingBillRouteImport
+      parentRoute: typeof CastingRoute
+    }
   }
 }
 
 interface CastingRouteChildren {
+  CastingBillRoute: typeof CastingBillRoute
   CastingLogRoute: typeof CastingLogRoute
   CastingMaterialsRoute: typeof CastingMaterialsRoute
   CastingNewSessionRoute: typeof CastingNewSessionRoute
@@ -417,6 +437,7 @@ interface CastingRouteChildren {
 }
 
 const CastingRouteChildren: CastingRouteChildren = {
+  CastingBillRoute: CastingBillRoute,
   CastingLogRoute: CastingLogRoute,
   CastingMaterialsRoute: CastingMaterialsRoute,
   CastingNewSessionRoute: CastingNewSessionRoute,

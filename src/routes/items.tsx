@@ -53,11 +53,10 @@ function ItemsPage() {
         bagWeight: type === 'gas' ? parseNonNegativeNumber(bagWeightInput || '50') : 0,
       })
       if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid item')
-      const itemPayload = { ...parsed.data, openingStock: 0, openingStockDate: '' }
       if (editingId) {
-        await updateItem(editingId, itemPayload)
+        await updateItem(editingId, parsed.data)
       } else {
-        await createItem(itemPayload)
+        await createItem(parsed.data)
       }
     },
     onSuccess: async () => {
@@ -65,7 +64,6 @@ function ItemsPage() {
       resetForm()
       await queryClient.invalidateQueries({ queryKey: ITEMS_QUERY_KEY })
       await queryClient.invalidateQueries({ queryKey: ['items-options'] })
-      await queryClient.invalidateQueries({ queryKey: ['current-stock'] })
     },
     onError: (error) => {
       setStatusText(toUserMessage(error))
@@ -80,7 +78,6 @@ function ItemsPage() {
       setStatusText('Item deleted.')
       await queryClient.invalidateQueries({ queryKey: ITEMS_QUERY_KEY })
       await queryClient.invalidateQueries({ queryKey: ['items-options'] })
-      await queryClient.invalidateQueries({ queryKey: ['current-stock'] })
     },
     onError: (error) => {
       setStatusText(toUserMessage(error))

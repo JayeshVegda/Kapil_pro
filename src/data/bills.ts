@@ -1,7 +1,6 @@
 import { recalculateAndPersistBillStatusesForCustomer } from '@/data/bill-statuses'
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
-import { invalidateStockDataCache } from '@/data/stock'
 import { calculateBillTotals, type BillItemInput } from '@/domain/billing-calculations'
 import { BAGS_PER_KG } from '@/shared/constants'
 
@@ -106,7 +105,6 @@ export async function saveBillWithItems(input: SaveBillInput) {
         cause: error,
       })
     }
-    invalidateStockDataCache()
     await recalculateAndPersistBillStatusesForCustomer(input.customerId)
   })
 }

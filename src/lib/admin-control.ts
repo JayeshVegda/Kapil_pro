@@ -19,7 +19,6 @@ export const defaultAdminControlSettings: AdminControlSettings = {
   commandAliases: {
     bill: ['b', 'bill', 'sale'],
     payment: ['p', 'pay', 'payment'],
-    stock: [],
     print: ['pr', 'print'],
   },
   pinnedRoutes: [
@@ -60,7 +59,6 @@ export function normalizeAdminControlSettings(input: unknown): AdminControlSetti
     commandAliases: {
       bill: cleanAliases(raw.commandAliases?.bill, defaultAdminControlSettings.commandAliases.bill),
       payment: cleanAliases(raw.commandAliases?.payment, defaultAdminControlSettings.commandAliases.payment),
-      stock: cleanAliases(raw.commandAliases?.stock, defaultAdminControlSettings.commandAliases.stock),
       print: cleanAliases(raw.commandAliases?.print, defaultAdminControlSettings.commandAliases.print),
     },
     pinnedRoutes: cleanPinnedRoutes(raw.pinnedRoutes),

@@ -1,9 +1,8 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { useQueries, useQuery } from '@tanstack/react-query'
-import { IndianRupee, Receipt, Users } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { IndianRupee, Receipt, Users, Flame, Activity } from 'lucide-react'
 import { useMemo, type ReactNode } from 'react'
-import { buildStockInventorySummary, formatBagCount, formatPercent, formatStockQty, kgToBags, type StockInventorySummary } from '@/components/stock/stock-inventory-strip'
-import { loadCurrentStock, loadMonthlyStockReport, type CurrentStockRecord } from '@/data/stock'
+import { loadCastingSessions } from '@/data/casting'
 import { useDashboardData } from '@/domain/dashboard'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 
@@ -15,40 +14,42 @@ function DashboardPage() {
   const { data, isPending, isError, error } = useDashboardData()
   const navigate = useNavigate()
   const today = useMemo(() => getLocalIsoDate(), [])
-  const currentMonth = today.slice(0, 7)
-  const previousMonth = previousMonthKey(currentMonth)
-  const financialYearMonths = useMemo(() => fiscalYearMonthKeys(today), [today])
-  const currentStockQuery = useQuery({ queryKey: ['current-stock'], queryFn: loadCurrentStock })
-  const currentMonthStockQuery = useQuery({
-    queryKey: ['monthly-stock-report', currentMonth],
-    queryFn: () => loadMonthlyStockReport(currentMonth),
+
+  const castingSessionsQuery = useQuery({
+    queryKey: ['casting-sessions', today.slice(0, 4) + '-01-01', today],
+    queryFn: () => loadCastingSessions({ from: today.slice(0, 4) + '-01-01', to: today }),
   })
-  const previousMonthStockQuery = useQuery({
-    queryKey: ['monthly-stock-report', previousMonth],
-    queryFn: () => loadMonthlyStockReport(previousMonth),
-  })
-  const financialYearStockQueries = useQueries({
-    queries: financialYearMonths.map((month) => ({
-      queryKey: ['monthly-stock-report', month],
-      queryFn: () => loadMonthlyStockReport(month),
-    })),
-  })
-  const stockRows = useMemo(
-    () => [...(currentStockQuery.data ?? [])].sort((a, b) => a.itemName.localeCompare(b.itemName) || a.customerName.localeCompare(b.customerName)),
-    [currentStockQuery.data],
-  )
-  const stockFiscalRows = financialYearStockQueries.flatMap((query) => query.data ?? [])
-  const stockSummary = useMemo(
-    () =>
-      buildStockInventorySummary({
-        stockItems: stockRows,
-        currentRows: currentMonthStockQuery.data ?? [],
-        previousRows: previousMonthStockQuery.data ?? [],
-        fiscalRows: stockFiscalRows,
-      }),
-    [currentMonthStockQuery.data, previousMonthStockQuery.data, stockFiscalRows, stockRows],
-  )
-  void stockSummary
+
+  const castingStats = useMemo(() => {
+    const list = castingSessionsQuery.data ?? []
+    const currentMonthPrefix = today.slice(0, 7)
+    
+    let monthInputKg = 0
+    let monthWireOut = 0
+    let monthInputCost = 0
+    let monthSessions = 0
+
+    for (const session of list) {
+      if (session.date.startsWith(currentMonthPrefix)) {
+        monthInputKg += session.totalInputKg
+        monthWireOut += session.totalWireOut
+        monthInputCost += session.totalInputCost
+        monthSessions++
+      }
+    }
+
+    const avgMetalCost = monthInputKg > 0 ? monthInputCost / monthInputKg : 0
+    const yieldPct = monthInputKg > 0 ? (monthWireOut / monthInputKg) * 100 : 0
+
+    return {
+      inputKg: monthInputKg,
+      wireOut: monthWireOut,
+      avgMetalCost,
+      yieldPct,
+      sessions: monthSessions,
+    }
+  }, [castingSessionsQuery.data, today])
+
 
   if (isPending) {
     return (
@@ -188,6 +189,61 @@ function DashboardPage() {
 
       <section className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-sm font-semibold text-slate-900">Casting Summary</h2>
+            <span className="text-xs text-slate-500 font-medium">· Month Aggregate</span>
+          </div>
+          <Link to="/casting" className="text-xs font-semibold text-blue-600 hover:text-blue-750">
+            Open Casting Workspace &rarr;
+          </Link>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
+          <MiniMetric
+            label="Metal Intake"
+            value={`${formatWhole(castingStats.inputKg)} kg`}
+            trend="Total raw materials melted"
+            icon={<Flame size={12} className="shrink-0 text-amber-500" />}
+            to="/casting"
+          />
+          <MiniMetric
+            label="Wire/Rod Output"
+            value={`${formatWhole(castingStats.wireOut)} kg`}
+            trend={`Yield: ${castingStats.yieldPct > 0 ? castingStats.yieldPct.toFixed(1) : '0.0'}% of intake`}
+            icon={<Activity size={12} className="shrink-0 text-emerald-500" />}
+            to="/casting"
+          />
+          <MiniMetric
+            label="Avg Metal Cost"
+            value={castingStats.avgMetalCost > 0 ? `₹${castingStats.avgMetalCost.toFixed(2)}/kg` : '—'}
+            trend="★ Most Important Metric"
+            icon={<IndianRupee size={12} className="shrink-0 text-blue-500" />}
+            to="/casting"
+          />
+          <MiniMetric
+            label="Furnace Activity"
+            value={`${castingStats.sessions} runs`}
+            trend="Total casting runs this month"
+            icon={<Flame size={12} className="shrink-0 text-rose-500" />}
+            to="/casting"
+          />
+          <Link to="/casting" className="block min-h-[5.5rem] min-w-[10rem] rounded-lg border border-slate-200 bg-slate-50/50 p-3 hover:border-blue-300 hover:bg-blue-50/50 transition">
+            <span className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+              <Activity size={12} className="shrink-0 text-indigo-500" />
+              <span>Metal Share</span>
+            </span>
+            {castingStats.inputKg > 0 ? (
+              <p className="mt-1.5 text-xs text-slate-655 font-medium leading-normal line-clamp-2">
+                Brass & Pata make up the primary furnace mix. View share details.
+              </p>
+            ) : (
+              <p className="mt-1.5 text-xs text-slate-400 italic">No furnace runs recorded this month.</p>
+            )}
+          </Link>
+        </div>
+      </section>
+
+      <section className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-slate-900">Sales vs Collection Trend</h2>
           <span className="text-xs text-slate-500">Recent months</span>
         </div>
@@ -296,8 +352,8 @@ function MiniMetric({
   valueDetail?: string
   trend: string
   icon: ReactNode
-  /** When set, the whole tile is clickable (e.g. Sales → Print bill). */
-  to?: '/print-bill'
+  /** When set, the whole tile is clickable. */
+  to?: '/print-bill' | '/casting'
 }) {
   const body = (
     <>
@@ -321,7 +377,7 @@ function MiniMetric({
 
   if (to != null) {
     return (
-      <Link to={to} search={{ billId: '', billRef: '' }} className={tileClass} aria-label={`${label}: open print bill`}
+      <Link to={to} search={to === '/print-bill' ? { billId: '', billRef: '' } : undefined} className={tileClass} aria-label={`${label}: open link`}
       >
         {body}
       </Link>
@@ -329,86 +385,6 @@ function MiniMetric({
   }
 
   return <div className={tileClass}>{body}</div>
-}
-
-function DashboardStockPanel({
-  rows,
-  summary,
-  item,
-  onSelect,
-}: {
-  rows: CurrentStockRecord[]
-  summary: StockInventorySummary
-  item?: CurrentStockRecord
-  onSelect: (item: CurrentStockRecord) => void
-}) {
-  return (
-    <div className="grid grid-cols-1 gap-4 xl:flex xl:items-stretch">
-      <DashboardInventoryTile summary={summary} item={item} />
-      <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:min-w-0 xl:flex-1">
-        <div className="grid h-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {rows.length === 0 && <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500 md:col-span-2 xl:col-span-3">No stock buckets found.</p>}
-        {rows.map((row) => (
-          <DashboardStockBucket key={row.id} item={row} onClick={() => onSelect(row)} />
-        ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function DashboardInventoryTile({ summary, item }: { summary: StockInventorySummary; item?: CurrentStockRecord }) {
-  const changeBags = Math.abs(kgToBags(summary.netChange, item))
-
-  return (
-    <div className="rounded-xl bg-blue-700 p-5 text-left text-white shadow-sm xl:w-fit xl:min-w-[25rem] xl:flex-none">
-      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-blue-100/85">Total Inventory</p>
-      <div className="mt-3 flex flex-wrap items-baseline gap-x-3">
-        <p className="font-mono text-4xl font-bold leading-tight tracking-tight">{formatBagCount(summary.stock, item)}</p>
-        <p className="font-mono text-sm font-semibold text-blue-100/85">{formatStockQty(summary.stock, item)}</p>
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-white/15 pt-3 text-xs leading-snug text-blue-100/90">
-        <p>In <span className="font-mono font-semibold text-white">{formatBagCount(summary.currentReceived, item)}</span></p>
-        <p>Sold <span className="font-mono font-semibold text-white">{formatBagCount(summary.currentSold, item)}</span></p>
-        <p className="col-span-2 truncate">{changeBags.toFixed(changeBags >= 10 ? 0 : 1)} bags vs last month ({formatPercent(summary.percentage)})</p>
-      </div>
-    </div>
-  )
-}
-
-function DashboardStockBucket({ item, onClick }: { item: CurrentStockRecord; onClick: () => void }) {
-  const net = item.stockInThisMonth + item.adjustmentThisMonth - item.soldThisMonth
-
-  return (
-    <button
-      type="button"
-      className="min-h-[7.75rem] min-w-0 rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-blue-300 hover:bg-blue-50/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
-      onClick={onClick}
-    >
-      <div className="min-w-0">
-        <p className="truncate text-xs font-semibold uppercase tracking-[0.06em] text-slate-500" title={item.itemName}>{item.itemName}</p>
-        <p className="truncate text-xs text-slate-500" title={item.customerName}>{item.customerName}</p>
-      </div>
-      <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
-        <p className={`font-mono text-xl font-bold leading-tight tracking-tight ${item.currentStock < 0 ? 'text-red-700' : 'text-slate-900'}`}>{formatBagCount(item.currentStock, item)}</p>
-        <p className="font-mono text-xs text-slate-500">{formatStockQty(item.currentStock, item)}</p>
-      </div>
-      <div className="mt-2 grid grid-cols-3 gap-1 border-t border-slate-100 pt-2 text-[10px] uppercase tracking-[0.06em] text-slate-500">
-        <DashboardStockMove label="In" value={formatBagCount(item.stockInThisMonth, item)} tone="green" />
-        <DashboardStockMove label="Sold" value={formatBagCount(item.soldThisMonth, item)} tone="red" />
-        <DashboardStockMove label="Net" value={formatBagCount(net, item)} tone={net < 0 ? 'red' : 'green'} />
-      </div>
-    </button>
-  )
-}
-
-function DashboardStockMove({ label, value, tone }: { label: string; value: string; tone: 'green' | 'red' }) {
-  return (
-    <div className="min-w-0 border-l border-slate-100 px-1 first:border-l-0 first:pl-0">
-      <p>{label}</p>
-      <p className={`mt-0.5 truncate font-mono font-semibold tracking-normal ${tone === 'green' ? 'text-emerald-700' : 'text-red-700'}`}>{value}</p>
-    </div>
-  )
 }
 
 function TrendChart({ months }: { months: Array<{ month: string; sales: number; collection: number }> }) {
@@ -446,22 +422,3 @@ function formatBagVsLastMonth(current: number, previous: number) {
   const sign = delta > 0 ? '+' : delta < 0 ? '-' : '±'
   return `vs ${sign}${formatWhole(Math.abs(delta))} bags (${formatWhole(previous)} last month)`
 }
-
-function fiscalYearMonthKeys(today: string) {
-  const [yearRaw, monthRaw] = today.slice(0, 7).split('-')
-  const year = Number(yearRaw)
-  const month = Number(monthRaw)
-  const startYear = month >= 4 ? year : year - 1
-  return Array.from({ length: 12 }, (_, index) => {
-    const date = new Date(startYear, 3 + index, 1)
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-  })
-}
-
-function previousMonthKey(monthKey: string) {
-  const [yearRaw, monthRaw] = monthKey.split('-')
-  const date = new Date(Number(yearRaw), Number(monthRaw) - 2, 1)
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-}
-
-void DashboardStockPanel

@@ -23,6 +23,6 @@ describe('exports page redesign model', () => {
   })
 
   it('keeps only compact business exports as secondary options', () => {
-    expect(getSecondaryExportIdsForTest()).toEqual(['book', 'sales', 'stock'])
+    expect(getSecondaryExportIdsForTest()).toEqual(['book', 'sales'])
   })
 })

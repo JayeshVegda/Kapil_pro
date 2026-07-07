@@ -47,10 +47,16 @@ fi
 
 if [[ -n "${PB_DATA_DIR}" ]]; then
   BACKUP_DIR="${BACKUP_DIR:-${APP_DIR}/logs/deploy-backups}"
-  BACKUP_FILE="${BACKUP_DIR}/${PB_DATA_DIR}_$(date -u +%Y%m%dT%H%M%SZ).zip"
   mkdir -p "${BACKUP_DIR}"
-  echo "==> Creating local PocketBase backup: ${BACKUP_FILE}"
-  zip -qr "${BACKUP_FILE}" "${PB_DATA_DIR}"
+  if command -v zip >/dev/null 2>&1; then
+    BACKUP_FILE="${BACKUP_DIR}/${PB_DATA_DIR}_$(date -u +%Y%m%dT%H%M%SZ).zip"
+    echo "==> Creating local PocketBase backup: ${BACKUP_FILE}"
+    zip -qr "${BACKUP_FILE}" "${PB_DATA_DIR}"
+  else
+    BACKUP_FILE="${BACKUP_DIR}/${PB_DATA_DIR}_$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+    echo "==> Creating local PocketBase backup: ${BACKUP_FILE}"
+    tar -czf "${BACKUP_FILE}" "${PB_DATA_DIR}"
+  fi
 fi
 
 echo "==> Removing old compose containers"

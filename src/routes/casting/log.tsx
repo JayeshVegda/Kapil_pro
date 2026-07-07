@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, Edit3, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
+import { Edit3, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
@@ -10,7 +10,7 @@ import type { CastingInputRow } from '@/domain/casting-calculations'
 import type { CastingSessionTrashSnapshot, CastingSessionWithInputs, CastingTrashEntry } from '@/domain/casting-types'
 import { cleanupExpiredCastingTrash } from '@/domain/casting-trash'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
-import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
+import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/casting/log')({
   component: CastingLogPage,
@@ -21,8 +21,7 @@ const CASTING_SESSIONS_KEY = ['casting-sessions'] as const
 const CASTING_LOG_KEY = ['casting-log'] as const
 const CASTING_MATERIALS_KEY = ['casting-materials'] as const
 const pollMs = 60_000
-
-const STANDARD_MATERIALS = ['Brass', 'Chol', 'Plate', 'Zinc', 'Lead'] as const
+const STANDARD_MATERIALS = ['Brass', 'Pata', 'Aux Chol', 'Merobal', 'Lead'] as const
 
 type UiRow = CastingInputRow & { clientId: string }
 
@@ -73,33 +72,57 @@ function matchesSearch(session: CastingSessionWithInputs, q: string) {
   return session.inputs.some((i) => i.materialName.toLowerCase().includes(needle))
 }
 
-function weekBucketLabel(iso: string) {
-  const parts = iso.split('-').map(Number)
-  const y = parts[0] ?? 1970
-  const m = parts[1] ?? 1
-  const d = parts[2] ?? 1
-  const dt = new Date(y, m - 1, d)
-  const start = new Date(y, 0, 0)
-  const dayOfYear = Math.floor((dt.getTime() - start.getTime()) / 86400000)
-  const w = Math.ceil(dayOfYear / 7)
-  return `${y} · Week ${String(w).padStart(2, '0')}`
+// Utility to parse arithmetic expressions like "20+20"
+function parseExpression(val: string | number): number {
+  if (typeof val === 'number') return val
+  const clean = String(val ?? '').replace(/\s+/g, '')
+  if (!clean) return 0
+  try {
+    if (/^[0-9.+\-*\/()]+$/.test(clean)) {
+      const fn = new Function(`return (${clean})`)
+      const result = Number(fn())
+      return Number.isFinite(result) && result >= 0 ? result : 0
+    }
+  } catch {}
+  const parsed = Number(clean)
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
-function csvEscape(value: string) {
-  if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`
-  return value
+type MathInputProps = {
+  value: number
+  onChange: (val: number) => void
+  className?: string
+  placeholder?: string
 }
 
-function stdRow(inputs: CastingSessionWithInputs['inputs'], std: string) {
-  const key = std.toLowerCase()
-  const hit = inputs.find((i) => i.materialName.trim().toLowerCase() === key)
-  return { qty: hit?.qty ?? 0, rate: hit?.rate ?? 0 }
-}
+function MathInput({ value, onChange, className, placeholder }: MathInputProps) {
+  const [tempValue, setTempValue] = useState<string>('')
+  const [isFocused, setIsFocused] = useState(false)
 
-function otherMaterialsCol(inputs: CastingSessionWithInputs['inputs']) {
-  const stdSet = new Set(STANDARD_MATERIALS.map((s) => s.toLowerCase()))
-  const extras = inputs.filter((i) => !stdSet.has(i.materialName.trim().toLowerCase()))
-  return extras.map((i) => `${i.materialName}:${i.qty}:${i.rate}`).join(';')
+  useEffect(() => {
+    if (!isFocused) {
+      setTempValue(value ? String(value) : '')
+    }
+  }, [value, isFocused])
+
+  const handleBlur = () => {
+    setIsFocused(false)
+    const evaluated = parseExpression(tempValue)
+    onChange(evaluated)
+    setTempValue(evaluated ? String(evaluated) : '')
+  }
+
+  return (
+    <input
+      type="text"
+      className={className}
+      value={tempValue}
+      onChange={(e) => setTempValue(e.target.value)}
+      onFocus={() => setIsFocused(true)}
+      onBlur={handleBlur}
+      placeholder={placeholder}
+    />
+  )
 }
 
 const editSchema = z
@@ -129,6 +152,7 @@ function CastingLogPage() {
   const [trashEntries, setTrashEntries] = useState<CastingTrashEntry[]>(() => readTrash())
   const [statusText, setStatusText] = useState('')
   const [editing, setEditing] = useState<CastingSessionWithInputs | null>(null)
+  const [deletingSession, setDeletingSession] = useState<CastingSessionWithInputs | null>(null)
   const [editDate, setEditDate] = useState('')
   const [editUnit, setEditUnit] = useState(0)
   const [editWire, setEditWire] = useState(0)
@@ -381,171 +405,60 @@ function CastingLogPage() {
     }
   }, [visibleRows])
 
-  const costKgStats = useMemo(() => {
-    let latest: { date: string; value: number } | null = null
-    let min = Number.POSITIVE_INFINITY
-    let max = 0
-    for (const s of visibleRows) {
-      if (!(s.costPerKg > 0)) continue
-      if (!latest || s.date > latest.date) latest = { date: s.date, value: s.costPerKg }
-      if (s.costPerKg < min) min = s.costPerKg
-      if (s.costPerKg > max) max = s.costPerKg
-    }
-    return {
-      latest,
-      min: Number.isFinite(min) ? min : 0,
-      max,
-    }
-  }, [visibleRows])
-
-  const weekly = useMemo(() => {
-    const map = new Map<string, { sessions: number; kg: number; cost: number; wire: number }>()
-    for (const s of visibleRows) {
-      const wk = weekBucketLabel(s.date)
-      const cur = map.get(wk) ?? { sessions: 0, kg: 0, cost: 0, wire: 0 }
-      cur.sessions += 1
-      cur.kg += s.totalInputKg
-      cur.cost += s.totalInputCost
-      cur.wire += s.wireOut
-      map.set(wk, cur)
-    }
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
-  }, [visibleRows])
-
-  const perMaterial = useMemo(() => {
-    const acc = new Map<string, { kg: number; cost: number }>()
-    for (const s of visibleRows) {
-      for (const i of s.inputs) {
-        const key = i.materialName.trim() || 'Unknown'
-        const cur = acc.get(key) ?? { kg: 0, cost: 0 }
-        cur.kg += i.qty
-        cur.cost += i.amount
-        acc.set(key, cur)
-      }
-    }
-    return [...acc.entries()]
-      .map(([name, v]) => ({
-        name,
-        kg: v.kg,
-        cost: v.cost,
-        avgRate: v.kg > 0 ? v.cost / v.kg : 0,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-  }, [visibleRows])
-
-  const trend6w = useMemo(() => {
-    const labels: string[] = []
-    const d = new Date()
-    for (let i = 5; i >= 0; i -= 1) {
-      const x = new Date(d)
-      x.setDate(x.getDate() - i * 7)
-      labels.push(weekBucketLabel(getLocalIsoDateFromDate(x)))
-    }
-    const uniq = [...new Set(labels)]
-    return uniq.map((label) => {
-      let kg = 0
-      let cost = 0
-      for (const s of visibleRows) {
-        if (weekBucketLabel(s.date) === label) {
-          kg += s.totalInputKg
-          cost += s.totalInputCost
-        }
-      }
-      const ckg = kg > 0 ? cost / kg : 0
-      return { label, kg, cost, ckg }
-    })
-  }, [visibleRows])
-
-  const maxTrend = useMemo(() => Math.max(1e-9, ...trend6w.map((t) => t.ckg)), [trend6w])
-
-  function exportCsv() {
-    const header = [
-      'Date',
-      'Batches',
-      'Brass Qty',
-      'Brass Rate',
-      'Chol Qty',
-      'Chol Rate',
-      'Plate Qty',
-      'Plate Rate',
-      'Zinc Qty',
-      'Zinc Rate',
-      'Lead Qty',
-      'Lead Rate',
-      'Other Materials',
-      'Total Input Kg',
-      'Total Input Cost',
-      'Casting Cost/kg',
-      'Final Product Cost/kg',
-      'Wire Out',
-      'Wastage',
-      'Note',
-    ]
-    const lines = [header.join(',')]
-    for (const s of visibleRows) {
-      const brass = stdRow(s.inputs, 'Brass')
-      const chol = stdRow(s.inputs, 'Chol')
-      const plate = stdRow(s.inputs, 'Plate')
-      const zinc = stdRow(s.inputs, 'Zinc')
-      const lead = stdRow(s.inputs, 'Lead')
-      const row = [
-        s.date,
-        String(s.unit),
-        String(brass.qty),
-        String(brass.rate),
-        String(chol.qty),
-        String(chol.rate),
-        String(plate.qty),
-        String(plate.rate),
-        String(zinc.qty),
-        String(zinc.rate),
-        String(lead.qty),
-        String(lead.rate),
-        otherMaterialsCol(s.inputs),
-        String(s.totalInputKg),
-        String(s.totalInputCost),
-        String(s.costPerKg),
-        String(s.finalProductCostPerKg),
-        String(s.wireOut),
-        String(s.wastage),
-        s.note,
-      ].map((c) => csvEscape(String(c)))
-      lines.push(row.join(','))
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `casting-export-${getLocalIsoDate()}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-    setStatusText('CSV exported.')
-  }
+  const helperStatus = statusText || (deleteMutation.isPending ? 'Deleting...' : '')
 
   return (
-    <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-3 text-sm font-semibold text-slate-900">Filters & Actions</h3>
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[200px] flex-1">
-            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              className={inputClass}
-              placeholder="Search date, note, material..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+    <div className="w-full space-y-5 px-3 pb-8 pt-3 sm:px-4 lg:px-6">
+      {helperStatus ? (
+        <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-2.5 text-xs font-semibold text-blue-700 animate-fade-in" role="status" aria-live="polite">
+          {helperStatus}
+        </div>
+      ) : null}
+
+      {/* Section 1: Dashboard Header & Filter Panel */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">Casting Session Logs</h3>
+            <p className="mt-0.5 text-xs text-slate-500">Search, filter, and manage historical furnace session outputs.</p>
           </div>
-          <Field label="From">
-            <input className={inputClass} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-          </Field>
-          <Field label="To">
-            <input className={inputClass} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-          </Field>
-          <div className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white p-1">
+          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold shadow-sm">
+            <button type="button" className={`rounded-md px-3 py-1.5 transition ${viewMode === 'active' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`} onClick={() => setViewMode('active')}>
+              Active Logs
+            </button>
+            <button type="button" className={`rounded-md px-3 py-1.5 transition ${viewMode === 'deleted' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`} onClick={() => setViewMode('deleted')}>
+              Temporary Trash
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-12 items-end">
+          <div className="lg:col-span-4 relative">
+            <span className="text-xs font-semibold text-slate-500 tracking-wide block mb-1.5">Search Logs</span>
+            <div className="relative">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                className={`${inputClass} pl-8`}
+                placeholder="Search date, note, material..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="lg:col-span-2">
+            <Field label="From Date">
+              <input className={inputClass} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            </Field>
+          </div>
+          <div className="lg:col-span-2">
+            <Field label="To Date">
+              <input className={inputClass} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            </Field>
+          </div>
+          <div className="lg:col-span-4 flex justify-end gap-1.5 h-10 items-center">
             <button
               type="button"
-              className="rounded px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+              className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-3 py-2 transition shadow-sm"
               onClick={() => {
                 setDateFrom(firstOfCurrentMonthIso())
                 setDateTo(getLocalIsoDate())
@@ -555,7 +468,7 @@ function CastingLogPage() {
             </button>
             <button
               type="button"
-              className="rounded px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+              className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-3 py-2 transition shadow-sm"
               onClick={() => {
                 setDateFrom(subtractMonthsIso(2))
                 setDateTo(getLocalIsoDate())
@@ -565,51 +478,40 @@ function CastingLogPage() {
             </button>
             <button
               type="button"
-              className="rounded px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+              className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-3 py-2 transition shadow-sm"
               onClick={() => {
                 setDateFrom('')
                 setDateTo('')
               }}
             >
-              All Time
+              Clear Filters
             </button>
           </div>
-          <div className="inline-flex rounded-md border border-slate-300 bg-slate-50 p-0.5 text-xs">
-            <button type="button" className={`rounded px-3 py-1.5 ${viewMode === 'active' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`} onClick={() => setViewMode('active')}>
-              Active
-            </button>
-            <button type="button" className={`rounded px-3 py-1.5 ${viewMode === 'deleted' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`} onClick={() => setViewMode('deleted')}>
-              Deleted
-            </button>
-          </div>
-          <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50" onClick={exportCsv}>
-            <Download size={14} /> Export CSV
-          </button>
         </div>
-        {statusText ? <p className="text-xs text-slate-500">{statusText}</p> : null}
       </section>
 
-      <section className="rounded-xl border border-blue-200 bg-blue-50/40 p-5 shadow-sm">
-        <h3 className="mb-3 text-sm font-semibold text-slate-900">Session Table</h3>
-        {sessionsQuery.isLoading && <p className="text-sm text-slate-500">Loading sessions...</p>}
-        {sessionsQuery.isError && <p className="text-sm text-red-600">Unable to load casting sessions.</p>}
+      {/* Section 2: Session Data Grid */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="text-sm font-bold text-slate-900 mb-4">Session Log Records</h3>
+        {sessionsQuery.isLoading && <p className="text-sm text-slate-550 py-4">Loading casting sessions...</p>}
+        {sessionsQuery.isError && <p className="text-sm text-rose-600 py-4 font-semibold">Unable to load casting sessions.</p>}
         {!sessionsQuery.isLoading && !sessionsQuery.isError && (
-          <div className="overflow-x-auto no-scrollbar">
+          <div className="overflow-x-auto rounded-lg">
             <table className="w-full min-w-[1100px] text-sm">
               <thead>
-                <tr className="bg-slate-50">
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Date</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Batches</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Input kg</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Input cost</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Casting cost/kg</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Product cost/kg</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Wire out</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Wastage</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Actions</th>
+                <tr className="border-b border-slate-200 text-slate-500 text-xs font-bold uppercase tracking-wider text-left bg-slate-50/50">
+                  <th className="px-3 py-2.5 text-left font-bold text-slate-600">Date</th>
+                  <th className="px-3 py-2.5 text-center font-bold text-slate-600 w-24">Batches</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-slate-600 w-32">Input kg</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-slate-600 w-36">Input cost</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-slate-600 w-40">Casting cost/kg</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-slate-600 w-44">Product cost/kg</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-slate-600 w-32">Wire out</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-slate-600 w-32">Wastage</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-slate-600 w-48">Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100">
                 {visibleRows.length === 0 && (
                   <tr>
                     <td colSpan={9} className="px-3 py-8 text-center text-sm text-slate-500">
@@ -618,31 +520,32 @@ function CastingLogPage() {
                   </tr>
                 )}
                 {visibleRows.map((row, index) => (
-                  <tr key={`${row.id}-${index}`} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-                    <td className="px-3 py-3 font-medium text-slate-800">{formatFullDate(row.date)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">{row.unit}</td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums">{row.totalInputKg.toFixed(3)}</td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums">{formatInrInteger(row.totalInputCost)}</td>
+                  <tr key={`${row.id}-${index}`} className="hover:bg-slate-50/30 transition text-slate-800">
+                    <td className="px-3 py-3 font-semibold text-slate-800">{formatFullDate(row.date)}</td>
+                    <td className="px-3 py-3 text-center font-mono tabular-nums text-slate-700">{row.unit}</td>
+                    <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-700">{row.totalInputKg.toFixed(3)}</td>
+                    <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-750">{formatInrInteger(row.totalInputCost)}</td>
                     <td className="px-3 py-3 text-right font-mono tabular-nums">
-                      <span className={`rounded px-1.5 py-0.5 ${row.costPerKg > totals.avgCostKg ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                      <span className={`inline-block rounded-md px-2 py-0.5 font-semibold text-xs border ${row.costPerKg > totals.avgCostKg ? 'bg-rose-50/60 text-rose-700 border-rose-100/50' : 'bg-emerald-50/60 text-emerald-700 border-emerald-100/50'}`}>
                         {row.costPerKg > 0 ? `₹${row.costPerKg.toFixed(2)}` : '—'}
                       </span>
                     </td>
-                    <td className="px-3 py-3 text-right font-mono font-semibold tabular-nums text-slate-950">{row.finalProductCostPerKg > 0 ? `₹${row.finalProductCostPerKg.toFixed(2)}` : '—'}</td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums">{row.wireOut.toFixed(3)}</td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums">{row.wastage.toFixed(3)}</td>
+                    <td className="px-3 py-3 text-right font-mono font-bold tabular-nums text-blue-700">
+                      {row.finalProductCostPerKg > 0 ? `₹${row.finalProductCostPerKg.toFixed(2)}` : '—'}
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-700">{row.wireOut.toFixed(3)}</td>
+                    <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-700">{row.wastage.toFixed(3)}</td>
                     <td className="px-3 py-3 text-right">
-                      <div className="inline-flex flex-wrap justify-end gap-2">
+                      <div className="inline-flex justify-end gap-2">
                         {viewMode === 'active' && (
                           <>
-                            <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => openEdit(row)}>
+                            <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-3 py-1.5 transition shadow-sm" onClick={() => openEdit(row)}>
                               <Edit3 size={12} /> Edit
                             </button>
                             <button
                               type="button"
-                              className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                              onClick={() => void deleteMutation.mutateAsync(row)}
-                              disabled={deleteMutation.isPending}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-100 bg-white hover:bg-rose-50 text-xs font-semibold text-rose-600 px-3 py-1.5 transition shadow-sm"
+                              onClick={() => setDeletingSession(row)}
                             >
                               <Trash2 size={12} /> Delete
                             </button>
@@ -650,12 +553,12 @@ function CastingLogPage() {
                         )}
                         {viewMode === 'deleted' && (
                           <>
-                            <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+                            <span className="inline-flex items-center rounded-lg bg-amber-50/60 text-amber-700 px-2 py-1 text-[11px] font-semibold border border-amber-100/50">
                               {formatTimeLeft(trashMap.get(`casting:${row.id}`)?.deletedAt ?? Date.now())}
                             </span>
                             <button
                               type="button"
-                              className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-white hover:bg-emerald-50 text-xs font-semibold text-emerald-700 px-3 py-1.5 transition shadow-sm"
                               onClick={() => {
                                 const entry = trashMap.get(`casting:${row.id}`)
                                 if (entry) void restoreMutation.mutateAsync(entry)
@@ -676,176 +579,135 @@ function CastingLogPage() {
         )}
       </section>
 
-      <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-5 shadow-sm">
-        <h3 className="mb-3 text-sm font-semibold text-slate-900">Summary and Analytics</h3>
-        <div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-5">
-          <SummaryTile label="Sessions" value={String(totals.sessions)} />
-          <SummaryTile label="Total input kg" value={totals.inputKg.toFixed(3)} />
-          <SummaryTile label="Total input cost" value={formatInrInteger(totals.inputCost)} />
-          <SummaryTile label="Total wire out" value={totals.wire.toFixed(3)} />
-          <SummaryTile label="Primary KPI · Avg cost/kg (weighted)" value={totals.avgCostKg > 0 ? `₹${totals.avgCostKg.toFixed(2)}` : '—'} emphasized />
-        </div>
-        <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-3">
-          <SummaryTile label="Latest cost/kg" value={costKgStats.latest ? `₹${costKgStats.latest.value.toFixed(2)} (${formatFullDate(costKgStats.latest.date)})` : '—'} />
-          <SummaryTile label="Min cost/kg" value={costKgStats.min > 0 ? `₹${costKgStats.min.toFixed(2)}` : '—'} />
-          <SummaryTile label="Max cost/kg" value={costKgStats.max > 0 ? `₹${costKgStats.max.toFixed(2)}` : '—'} />
-        </div>
-
-        <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Weekly breakdown</h4>
-        <div className="mb-4 overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead>
-              <tr className="bg-slate-50">
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">Week</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600">Sessions</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600">Input kg</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600">Input cost</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600">Wire out</th>
-              </tr>
-            </thead>
-            <tbody>
-              {weekly.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
-                    No weekly groups.
-                  </td>
-                </tr>
-              ) : (
-                weekly.map(([label, v]) => (
-                  <tr key={label} className="border-t border-slate-100">
-                    <td className="px-3 py-2 font-medium text-slate-800">{label}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{v.sessions}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums">{v.kg.toFixed(3)}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums">{formatInrInteger(v.cost)}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums">{v.wire.toFixed(3)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Per-material (visible sessions)</h4>
-        <div className="mb-4 overflow-x-auto">
-          <table className="w-full min-w-[520px] text-sm">
-            <thead>
-              <tr className="bg-slate-50">
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">Material</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600">Total kg</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600">Avg rate</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600">Total cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {perMaterial.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="px-3 py-4 text-center text-slate-500">
-                    No materials.
-                  </td>
-                </tr>
-              ) : (
-                perMaterial.map((m) => (
-                  <tr key={m.name} className="border-t border-slate-100">
-                    <td className="px-3 py-2 font-medium text-slate-800">{m.name}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums">{m.kg.toFixed(3)}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums">{m.avgRate > 0 ? `₹${m.avgRate.toFixed(2)}` : '—'}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums">{formatInrInteger(m.cost)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Cost/kg trend (rolling weeks)</h4>
-        <ul className="space-y-2">
-          {trend6w.map((t) => (
-            <li key={t.label} className="flex items-center gap-3 text-sm">
-              <span className="w-36 shrink-0 truncate text-slate-600" title={t.label}>
-                {t.label}
-              </span>
-              <div className="h-2 flex-1 rounded-full bg-slate-100">
-                <div className="h-2 rounded-full bg-blue-600" style={{ width: `${Math.min(100, (t.ckg / maxTrend) * 100)}%` }} />
-              </div>
-              <span className="w-24 shrink-0 text-right font-mono text-xs text-slate-800">{t.ckg > 0 ? `₹${t.ckg.toFixed(2)}` : '—'}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      {editing && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="max-h-[92vh] w-full max-w-4xl overflow-auto rounded-xl border border-slate-200 bg-white shadow-2xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-              <h3 className="text-base font-semibold text-slate-900">Edit casting session</h3>
-              <button type="button" className="rounded-md p-1 text-slate-500 hover:bg-slate-100" onClick={closeEdit}>
+      {/* Delete Confirmation Modal */}
+      {deletingSession && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl animate-scale-up">
+            <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/50 px-4 py-3">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-700">Delete Casting Session</h3>
+              <button type="button" className="rounded-md p-1 text-slate-400 hover:bg-slate-150 transition" onClick={() => setDeletingSession(null)}>
                 <X size={16} />
               </button>
             </div>
-            <div className="space-y-4 p-4">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-slate-650 leading-relaxed">
+                Are you sure you want to delete this casting session? This will move it to the temporary trash for 3 hours.
+              </p>
+              <div className="rounded-lg bg-slate-50 border border-slate-150 p-3 space-y-2 text-xs">
+                <div className="flex justify-between items-center py-0.5 border-b border-dashed border-slate-200">
+                  <span className="text-slate-500 font-semibold">Date</span>
+                  <span className="font-mono text-slate-800 font-bold">{formatFullDate(deletingSession.date)}</span>
+                </div>
+                <div className="flex justify-between items-center py-0.5 border-b border-dashed border-slate-200">
+                  <span className="text-slate-500 font-semibold">Batches</span>
+                  <span className="font-mono text-slate-800 font-bold">{deletingSession.unit} runs</span>
+                </div>
+                <div className="flex justify-between items-center py-0.5 border-b border-dashed border-slate-200">
+                  <span className="text-slate-500 font-semibold">Wire Out</span>
+                  <span className="font-mono text-slate-850 font-bold">{deletingSession.wireOut.toFixed(3)} kg</span>
+                </div>
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-slate-500 font-semibold">Material Value</span>
+                  <span className="font-mono text-slate-900 font-bold">{formatInrInteger(deletingSession.totalInputCost)}</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/50 px-4 py-3">
+              <button type="button" className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-4 py-2 transition shadow-sm" onClick={() => setDeletingSession(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-rose-600 hover:bg-rose-700 text-xs font-semibold text-white px-4 py-2 transition shadow-sm disabled:opacity-60"
+                onClick={async () => {
+                  await deleteMutation.mutateAsync(deletingSession)
+                  setDeletingSession(null)
+                }}
+                disabled={deleteMutation.isPending}
+              >
+                {deleteMutation.isPending ? 'Deleting...' : 'Confirm Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Casting Session Modal */}
+      {editing && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+          <div className="max-h-[92vh] w-full max-w-4xl overflow-auto rounded-xl border border-slate-200 bg-white shadow-2xl animate-scale-up">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-700">Edit Casting Session</h3>
+              <button type="button" className="rounded-md p-1 text-slate-400 hover:bg-slate-150 transition" onClick={closeEdit}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="space-y-5 p-5">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-6">
                 <Field label="Date *">
                   <input className={inputClass} type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
                 </Field>
                 <Field label="Unit (batches)">
-                  <input className={inputClass} type="number" min={0} value={editUnit || ''} onChange={(e) => setEditUnit(parseNonNegativeNumber(e.target.value))} />
+                  <MathInput className={inputClass} placeholder="0" value={editUnit} onChange={setEditUnit} />
                 </Field>
                 <Field label="Wire out (kg)">
-                  <input className={inputClass} type="number" min={0} value={editWire || ''} onChange={(e) => setEditWire(parseNonNegativeNumber(e.target.value))} />
+                  <MathInput className={inputClass} placeholder="0.00" value={editWire} onChange={setEditWire} />
                 </Field>
                 <Field label="Wastage (kg)">
-                  <input className={inputClass} type="number" min={0} value={editWastage || ''} onChange={(e) => setEditWastage(parseNonNegativeNumber(e.target.value))} />
+                  <MathInput className={inputClass} placeholder="0.00" value={editWastage} onChange={setEditWastage} />
                 </Field>
                 <Field label="Chol IN (kg)">
-                  <input className={inputClass} type="number" min={0} value={editChol || ''} onChange={(e) => setEditChol(parseNonNegativeNumber(e.target.value))} />
+                  <MathInput className={inputClass} placeholder="0.00" value={editChol} onChange={setEditChol} />
                 </Field>
-                <Field label="Note">
-                  <input className={inputClass} value={editNote} onChange={(e) => setEditNote(e.target.value)} />
+                <Field label="Remarks / Note">
+                  <input className={inputClass} value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="Remarks" />
                 </Field>
               </div>
-              <div className="rounded-md border border-slate-200 p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <h4 className="text-sm font-semibold text-slate-900">Materials</h4>
-                  <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50" onClick={addEditRow}>
-                    <Plus size={12} /> Add row
+
+              {/* Nested Materials Table */}
+              <div className="rounded-xl border border-slate-200 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Materials Consumed</h4>
+                  <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 px-3 py-1.5 transition shadow-sm" onClick={addEditRow}>
+                    <Plus size={12} /> Add Material row
                   </button>
                 </div>
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto rounded-lg">
                   <table className="w-full min-w-[640px] text-sm">
                     <thead>
-                      <tr className="bg-slate-50">
-                        <th className="px-2 py-2 text-left text-xs font-semibold text-slate-600">Material</th>
-                        <th className="px-2 py-2 text-right text-xs font-semibold text-slate-600">Qty</th>
-                        <th className="px-2 py-2 text-right text-xs font-semibold text-slate-600">Rate</th>
-                        <th className="px-2 py-2 text-right text-xs font-semibold text-slate-600">Amount</th>
-                        <th className="px-2 py-2 text-right text-xs font-semibold text-slate-600"> </th>
+                      <tr className="border-b border-slate-200 text-slate-500 text-xs font-bold uppercase tracking-wider text-left bg-slate-50/50">
+                        <th className="px-3 py-2 text-left font-bold text-slate-600">Material</th>
+                        <th className="px-3 py-2 text-center font-bold text-slate-600 w-32">Qty (kg)</th>
+                        <th className="px-3 py-2 text-center font-bold text-slate-600 w-32">Rate / kg</th>
+                        <th className="px-3 py-2 text-right font-bold text-slate-600 w-36">Amount</th>
+                        <th className="px-3 py-2 text-right font-bold text-slate-600 w-24"> </th>
                       </tr>
                     </thead>
-                    <tbody>
+                    <tbody className="divide-y divide-slate-100">
                       {editRows.map((r) => {
                         const amt = r.qty * r.rate
                         return (
-                          <tr key={r.clientId} className="border-t border-slate-100">
-                            <td className="px-2 py-1">
+                          <tr key={r.clientId} className="hover:bg-slate-50/30 transition">
+                            <td className="p-1.5 align-middle">
                               <SearchableCombobox
                                 options={materialOptions}
                                 value={r.materialName}
                                 onChange={(nextId) => updateEditRow(r.clientId, { materialName: nextId })}
-                                inputClassName={inputClass}
+                                inputClassName="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
                                 placeholder="Select material"
                                 emptyText="No matching material."
                               />
                             </td>
-                            <td className="px-2 py-1">
-                              <input className={`${inputClass} text-right tabular-nums`} type="number" min={0} value={r.qty || ''} onChange={(e) => updateEditRow(r.clientId, { qty: parseNonNegativeNumber(e.target.value) })} />
+                            <td className="p-0 align-middle text-center w-32">
+                              <MathInput className="w-full h-9 bg-transparent text-center font-mono px-1 outline-none transition focus:bg-slate-50" value={r.qty} onChange={(val) => updateEditRow(r.clientId, { qty: val })} placeholder="0.00" />
                             </td>
-                            <td className="px-2 py-1">
-                              <input className={`${inputClass} text-right tabular-nums`} type="number" min={0} value={r.rate || ''} onChange={(e) => updateEditRow(r.clientId, { rate: parseNonNegativeNumber(e.target.value) })} />
+                            <td className="p-0 align-middle text-center w-32">
+                              <MathInput className="w-full h-9 bg-transparent text-center font-mono px-1 outline-none transition focus:bg-slate-50" value={r.rate} onChange={(val) => updateEditRow(r.clientId, { rate: val })} placeholder="0.00" />
                             </td>
-                            <td className="px-2 py-2 text-right font-mono">{formatInrInteger(amt)}</td>
-                            <td className="px-2 py-1 text-right">
-                              <button type="button" className="text-xs text-rose-600 hover:underline disabled:opacity-50" onClick={() => removeEditRow(r.clientId)} disabled={editRows.length <= 1}>
-                                Remove
+                            <td className="px-3 py-2 align-middle text-right font-mono font-semibold text-slate-850 w-36">{formatInrInteger(amt)}</td>
+                            <td className="px-3 py-2 align-middle text-right w-24">
+                              <button type="button" className="text-xs font-semibold text-rose-600 hover:text-rose-700 disabled:opacity-30 transition" onClick={() => removeEditRow(r.clientId)} disabled={editRows.length <= 1}>
+                                <Trash2 size={13} className="inline mr-1" /> Remove
                               </button>
                             </td>
                           </tr>
@@ -856,11 +718,11 @@ function CastingLogPage() {
                 </div>
               </div>
             </div>
-            <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-slate-200 bg-white px-4 py-3">
-              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={closeEdit}>
+            <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-slate-200 bg-white px-4 py-3.5">
+              <button type="button" className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-4 py-2 transition shadow-sm" onClick={closeEdit}>
                 Cancel
               </button>
-              <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60" onClick={() => void updateMutation.mutateAsync()} disabled={updateMutation.isPending}>
+              <button type="button" className="rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white px-5 py-2 transition shadow-sm disabled:opacity-60" onClick={() => void updateMutation.mutateAsync()} disabled={updateMutation.isPending}>
                 {updateMutation.isPending ? 'Saving...' : 'Save changes'}
               </button>
             </div>
@@ -869,10 +731,6 @@ function CastingLogPage() {
       )}
     </div>
   )
-}
-
-function getLocalIsoDateFromDate(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 function firstOfCurrentMonthIso() {
@@ -888,21 +746,12 @@ function subtractMonthsIso(monthsBack: number) {
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="flex min-w-[140px] flex-col gap-1.5">
-      <span className="text-xs font-medium text-slate-600">{label}</span>
+    <label className="flex flex-col gap-1.5 w-full">
+      <span className="text-xs font-semibold text-slate-500 tracking-wide">{label}</span>
       {children}
     </label>
   )
 }
 
-function SummaryTile({ label, value, emphasized = false }: { label: string; value: string; emphasized?: boolean }) {
-  return (
-    <div className={`rounded-md border p-2.5 ${emphasized ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
-      <p className="text-[11px] uppercase tracking-[0.08em] text-slate-500">{label}</p>
-      <p className={`mt-0.5 font-mono tabular-nums ${emphasized ? 'text-lg font-bold text-amber-800' : 'text-base font-semibold text-slate-900'}`}>{value}</p>
-    </div>
-  )
-}
-
 const inputClass =
-  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+  'h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'

@@ -7,9 +7,10 @@ import { toUserMessage } from '@/app/errors'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
 import { DateInput } from '@/components/ui/date-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
+import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
 import { assertBillNumberAvailable, getNextBillNoForBook, saveBillWithItems } from '@/data/bills'
+import { savePayment } from '@/data/payments'
 import { pb } from '@/data/pocketbase'
-import { loadCurrentStock } from '@/data/stock'
 import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billing-calculations'
 import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
 import { loadSavedMarketRateForDate, useMarketRate } from '@/domain/market-rate'
@@ -23,17 +24,18 @@ import {
   printBillLayoutFromElement,
   shareBillLayoutImageWithWhatsAppFallback,
 } from '@/lib/bill-print-export'
-import { formatInQty, formatInrInteger, parseNonNegativeNumber, parsePositiveIntInput } from '@/lib/inr-format'
+import { formatInQty, formatInrInteger, parseBillQuickPaymentAmountInput, parseNonNegativeNumber, parsePositiveIntInput } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/new-bill')({
   component: NewBillPage,
 })
 
 type CustomerOption = { id: string; name: string; companyName: string; customerName: string }
-type ItemOption = { id: string; name: string; defaultRate: number; type: string; unit: string; bagWeight: number; openingStock: number }
+type ItemOption = { id: string; name: string; defaultRate: number; type: string; unit: string; bagWeight: number }
 type BillItemRow = { itemId: string; itemName: string; qty: number; defaultRate: number; rate: number; manualRateEdited: boolean }
 type GstMode = 'none' | 'percent18' | 'manual'
 type CreditAdjustment = { date: string; amount: number }
+type QuickPaymentRow = { id: string; date: string; amount: number; amountInput: string; mode: 'Cash' | 'Bank'; note: string }
 type AutoBalanceContext = { previousBalanceDate: string; previousBalanceAmount: number; credits: CreditAdjustment[] }
 type PBRecord = Record<string, unknown> & { id: string }
 const num = (v: unknown) => (Number.isFinite(Number(v ?? 0)) ? Number(v) : 0)
@@ -62,6 +64,24 @@ const submitBillSchema = z.object({
   items: z.array(submitRowSchema).min(1, 'Add at least one valid item row'),
 })
 
+const quickPaymentSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid payment date'),
+  amount: z.number().positive('Payment amount must be greater than zero'),
+  mode: z.enum(['Cash', 'Bank']),
+  note: z.string().optional(),
+})
+
+function newQuickPaymentRow(date: string): QuickPaymentRow {
+  return {
+    id: `quick-payment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    date,
+    amount: 0,
+    amountInput: '',
+    mode: 'Cash',
+    note: '',
+  }
+}
+
 function NewBillPage() {
   const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
@@ -80,6 +100,8 @@ function NewBillPage() {
   const [statusText, setStatusText] = useState('')
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
+  const [marketPillOpen, setMarketPillOpen] = useState(false)
+  const [quickPayments, setQuickPayments] = useState<QuickPaymentRow[]>([])
   const [quickCommandInput, setQuickCommandInput] = useState('')
   const [pendingCommandPreview, setPendingCommandPreview] = useState(false)
   const { marketRate, refreshMarketRate } = useMarketRate(date)
@@ -115,12 +137,9 @@ function NewBillPage() {
         type: String(r.type ?? ''),
         unit: String(r.unit ?? ''),
         bagWeight: Number(r.bag_weight ?? 50),
-        openingStock: Number(r.opening_stock ?? 0),
       }))
     },
   })
-  const currentStockQuery = useQuery({ queryKey: ['current-stock'], queryFn: loadCurrentStock, refetchOnMount: 'always' })
-
   const nextBillNoQuery = useQuery({
     queryKey: ['next-bill-no', bookNo],
     queryFn: () => getNextBillNoForBook(bookNo),
@@ -218,6 +237,7 @@ function NewBillPage() {
       const customer = (customersQuery.data ?? []).find((c) => c.id === customerId)
       if (!customer) throw new Error('Please select a customer')
       const validRows = rows.filter((r) => r.itemName.trim() && r.qty > 0 && r.rate > 0)
+      const validQuickPayments = quickPayments.filter((payment) => payment.amount > 0)
       const parsed = submitBillSchema.safeParse({
         customerId,
         bookNo,
@@ -227,6 +247,12 @@ function NewBillPage() {
       })
       if (!parsed.success) {
         throw new Error(parsed.error.issues[0]?.message ?? 'Bill validation failed')
+      }
+      for (const payment of validQuickPayments) {
+        const parsedPayment = quickPaymentSchema.safeParse(payment)
+        if (!parsedPayment.success) {
+          throw new Error(parsedPayment.error.issues[0]?.message ?? 'Quick payment validation failed')
+        }
       }
 
       await saveBillWithItems({
@@ -242,6 +268,16 @@ function NewBillPage() {
         lrList,
         items: validRows,
       })
+      for (const payment of validQuickPayments) {
+        await savePayment({
+          customerId: customer.id,
+          customerName: customer.companyName,
+          date: payment.date,
+          amount: payment.amount,
+          mode: payment.mode,
+          note: payment.note || `Quick payment with bill ${bookNo}/${billNo}`,
+        })
+      }
     },
     onSuccess: async () => {
       await Promise.all([
@@ -250,10 +286,10 @@ function NewBillPage() {
         queryClient.invalidateQueries({ queryKey: ['payment-ledger-context'] }),
         queryClient.invalidateQueries({ queryKey: ['next-bill-no'] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard-data'] }),
-        queryClient.invalidateQueries({ queryKey: ['current-stock'] }),
-        queryClient.invalidateQueries({ queryKey: ['stock-ledger'] }),
+        customerId ? invalidateAfterPaymentWrite(queryClient, customerId) : Promise.resolve(),
       ])
-      setStatusText('Bill saved successfully')
+      const savedQuickPaymentCount = quickPayments.filter((payment) => payment.amount > 0).length
+      setStatusText(savedQuickPaymentCount > 0 ? `Bill saved with ${savedQuickPaymentCount} quick payment${savedQuickPaymentCount === 1 ? '' : 's'}` : 'Bill saved successfully')
       resetForm()
     },
     onError: (err) => {
@@ -277,39 +313,19 @@ function NewBillPage() {
   }, [statusText, customerId, rows])
   const selectedCustomerName = (customersQuery.data ?? []).find((c) => c.id === customerId)?.companyName ?? 'Unknown'
   const validRows = rows.filter((r) => r.itemName.trim() && r.qty > 0 && r.rate > 0)
-  const stockWarnings = useMemo(() => {
-    if (!currentStockQuery.isSuccess || currentStockQuery.isFetching) return []
-    const stockRows = currentStockQuery.data ?? []
-    return validRows
-      .map((row) => {
-        const matchesItem = (entry: (typeof stockRows)[number]) => entry.itemId === row.itemId || entry.itemName === row.itemName
-        const buyerStock = stockRows.find((entry) => entry.customerId === customerId && matchesItem(entry))
-        const generalStock = stockRows.find((entry) => entry.customerName.toLowerCase().includes('general') && matchesItem(entry))
-        const stock = buyerStock ?? generalStock
-        const item = (itemsQuery.data ?? []).find((entry) => entry.id === row.itemId || entry.name === row.itemName)
-        if (!stock || String(item?.type ?? '').toLowerCase() !== 'gas') return null
-        const available = stock?.currentStock ?? 0
-        const after = available - row.qty
-        if (after >= 0) return null
-        return {
-          itemName: row.itemName,
-          customerName: stock.customerName || selectedCustomerName,
-          unit: stock?.unit || item?.unit || 'kg',
-          type: stock?.type || item?.type || '',
-          bagWeight: stock?.bagWeight || item?.bagWeight || 50,
-          available,
-          outgoing: row.qty,
-          after,
-        }
-      })
-      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-  }, [currentStockQuery.data, currentStockQuery.isFetching, currentStockQuery.isSuccess, customerId, itemsQuery.data, validRows])
   const previousBalanceDate = autoBalanceQuery.data?.previousBalanceDate ?? date
   const previousBalanceAmount = autoBalanceQuery.data?.previousBalanceAmount ?? 0
   const validCredits = (autoBalanceQuery.data?.credits ?? []).filter((entry) => entry.amount > 0)
   const totalCredits = validCredits.reduce((sum, entry) => sum + entry.amount, 0)
+  const validQuickPayments = quickPayments.filter((payment) => payment.amount > 0)
+  const quickPaymentTotal = validQuickPayments.reduce((sum, entry) => sum + entry.amount, 0)
   const subTotalBeforeCredits = grandTotal + previousBalanceAmount
-  const payableAfterAdjustments = grandTotal + previousBalanceAmount - totalCredits
+  const payableAfterAdjustments = grandTotal + previousBalanceAmount - totalCredits - quickPaymentTotal
+  const marketPillTitle = [
+    marketRate.rateDate ? `Rate date: ${formatFullDate(marketRate.rateDate)}` : '',
+    marketRate.previousRate != null ? `Previous: ${formatInrInteger(marketRate.previousRate)}` : '',
+    marketRate.change != null ? `Change: ${marketRate.change === 0 ? 'stable' : `${marketRate.change > 0 ? '+' : '-'}${formatInrInteger(Math.abs(marketRate.change))}`}` : '',
+  ].filter(Boolean).join(' | ')
 
   const previewItemRows = validRows.map((r) => ({
     itemName: r.itemName,
@@ -333,7 +349,10 @@ function NewBillPage() {
           currentBillTotal: grandTotal,
           previousBalance: previousBalanceAmount,
           previousBillDate: previousBalanceDate,
-          periodCreditEntries: validCredits.map((c) => ({ date: c.date, amount: c.amount })),
+          periodCreditEntries: [
+            ...validCredits.map((c) => ({ date: c.date, amount: c.amount })),
+            ...validQuickPayments.map((payment) => ({ date: payment.date, amount: payment.amount })),
+          ],
           subtotal: subTotalBeforeCredits,
           finalTotal: payableAfterAdjustments,
           totalQty,
@@ -350,6 +369,7 @@ function NewBillPage() {
     setGstMode('none')
     setManualGstAmount(0)
     setRows([{ itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
+    setQuickPayments([])
     setLrInput('')
     setLrList([])
     manualBillNoRef.current = false
@@ -366,6 +386,34 @@ function NewBillPage() {
     setLrInput('')
   }
 
+  function addQuickPaymentRow() {
+    setQuickPayments((prev) => [...prev, newQuickPaymentRow(date)])
+  }
+
+  function updateQuickPaymentRow(id: string, patch: Partial<QuickPaymentRow>) {
+    setQuickPayments((prev) => prev.map((payment) => (payment.id === id ? { ...payment, ...patch } : payment)))
+  }
+
+  function updateQuickPaymentAmount(id: string, amountInput: string) {
+    updateQuickPaymentRow(id, {
+      amountInput,
+      amount: parseBillQuickPaymentAmountInput(amountInput),
+    })
+  }
+
+  function normalizeQuickPaymentAmount(id: string) {
+    setQuickPayments((prev) =>
+      prev.map((payment) =>
+        payment.id === id && payment.amount > 0
+          ? { ...payment, amountInput: formatInrInteger(payment.amount).replace('₹', '') }
+          : payment,
+      ),
+    )
+  }
+
+  function removeQuickPaymentRow(id: string) {
+    setQuickPayments((prev) => prev.filter((payment) => payment.id !== id))
+  }
 
   function addItemRow() {
     setRows((prev) => [...prev, { itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
@@ -575,6 +623,7 @@ function NewBillPage() {
       `Current Bill: ${formatInrInteger(grandTotal)}`,
       `${previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'}: ${formatInrInteger(Math.abs(previousBalanceAmount))} (${previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)})`,
       ...validCredits.map((entry) => `Credited on ${formatFullDate(entry.date)}: ${formatInrInteger(entry.amount)}`),
+      ...validQuickPayments.map((entry) => `Quick payment on ${formatFullDate(entry.date)}: ${formatInrInteger(entry.amount)} (${entry.mode})`),
       `${payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}: ${formatInrInteger(Math.abs(payableAfterAdjustments))}`,
     ].join('\n')
 
@@ -632,48 +681,54 @@ function NewBillPage() {
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Jamnagar Local Rate</p>
-            <p className="mt-1 flex items-baseline gap-2 font-mono text-2xl font-bold text-slate-900 tabular-nums">
-              <span>{formatInrInteger(marketRate.rate)}</span>
-              <span className="text-xs font-semibold text-slate-500">{marketRate.rateDate}</span>
-            </p>
-            {marketRate.change != null && marketRate.previousRate != null ? (
-              <p
-                className={`mt-2 inline-flex rounded-md px-2 py-1 text-xs font-semibold ${
-                  marketRate.change > 0
-                    ? 'bg-emerald-50 text-emerald-700'
-                    : marketRate.change < 0
-                      ? 'bg-red-50 text-red-700'
-                      : 'bg-amber-50 text-amber-800'
-                }`}
-              >
-                Today rate {marketRate.change === 0 ? 'stable' : `${marketRate.change > 0 ? '+' : '-'}${formatInrInteger(Math.abs(marketRate.change))}`} vs previous {formatInrInteger(marketRate.previousRate)}
-              </p>
-            ) : null}
+            <h3 className="text-sm font-semibold text-slate-900">Bill Details</h3>
+            <p className="mt-1 text-xs text-slate-500">Customer, bill number, market rate, dispatch, and balance context.</p>
           </div>
-          <button
-            type="button"
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-            onClick={() => {
-              void refreshMarketRate({ targetDate: date }).then((ok) => {
-                if (ok) {
-                  setStatusText('Market rate updated from RSS')
-                } else {
-                  setStatusText('Could not fetch RSS rate')
-                }
-              })
-            }}
-          >
-            <RefreshCw size={14} />
-            Refresh Rate
-          </button>
+          <div className="relative flex items-center gap-2">
+            <button
+              type="button"
+              title={marketPillTitle || 'Market rate'}
+              className="inline-flex h-9 items-center rounded-full border border-blue-200 bg-blue-50 px-3 font-mono text-sm font-bold tabular-nums text-blue-800 transition hover:border-blue-300 hover:bg-blue-100"
+              onClick={() => setMarketPillOpen((prev) => !prev)}
+              onBlur={() => window.setTimeout(() => setMarketPillOpen(false), 120)}
+            >
+              MKT {Math.round(mktRate || marketRate.rate || 0)}
+            </button>
+            {marketPillOpen && (
+              <div className="absolute right-0 top-11 z-30 w-64 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600 shadow-lg">
+                <p className="font-semibold text-slate-900">Jamnagar Local Rate</p>
+                <p className="mt-1">Date: {marketRate.rateDate ? formatFullDate(marketRate.rateDate) : '-'}</p>
+                <p>Previous: {marketRate.previousRate != null ? formatInrInteger(marketRate.previousRate) : '-'}</p>
+                <p>
+                  Change:{' '}
+                  {marketRate.change == null
+                    ? '-'
+                    : marketRate.change === 0
+                      ? 'Stable'
+                      : `${marketRate.change > 0 ? '+' : '-'}${formatInrInteger(Math.abs(marketRate.change))}`}
+                </p>
+              </div>
+            )}
+            <button
+              type="button"
+              aria-label="Refresh market rate"
+              className="inline-grid h-9 w-9 place-items-center rounded-full border border-slate-300 bg-slate-50 text-slate-700 transition hover:bg-slate-100"
+              onClick={() => {
+                void refreshMarketRate({ targetDate: date }).then((ok) => {
+                  if (ok) {
+                    setStatusText('Market rate updated from RSS')
+                  } else {
+                    setStatusText('Could not fetch RSS rate')
+                  }
+                })
+              }}
+            >
+              <RefreshCw size={14} />
+            </button>
+          </div>
         </div>
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-4 text-sm font-semibold text-slate-900">Bill Details</h3>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Book No">
             <input
@@ -816,6 +871,104 @@ function NewBillPage() {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">Quick Payment</h3>
+            <p className="mt-1 text-xs text-slate-500">Optional payments saved with this bill after confirmation.</p>
+          </div>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
+            onClick={addQuickPaymentRow}
+          >
+            <Plus size={14} /> Add Payment
+          </button>
+        </div>
+        {quickPayments.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+            No quick payments added. Add one if the party pays while making this bill.
+          </div>
+        ) : (
+          <div className="overflow-x-auto no-scrollbar">
+            <table className="w-full min-w-[820px] table-fixed border-separate border-spacing-x-2 border-spacing-y-0">
+              <colgroup>
+                <col className="w-[18%]" />
+                <col className="w-[18%]" />
+                <col className="w-[15%]" />
+                <col className="w-[39%]" />
+                <col className="w-[72px]" />
+              </colgroup>
+              <thead>
+                <tr className="bg-slate-50">
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Date</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Mode</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Note</th>
+                  <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quickPayments.map((payment, index) => (
+                  <tr key={payment.id} className="border-t border-slate-100">
+                    <td className="px-3 py-2.5 align-middle">
+                      <DateInput className={inputClass} value={payment.date} onChange={(nextDate) => updateQuickPaymentRow(payment.id, { date: nextDate })} />
+                    </td>
+                    <td className="px-3 py-2.5 align-middle">
+                      <input
+                        className={`${inputClass} text-right tabular-nums`}
+                        type="text"
+                        inputMode="decimal"
+                        value={payment.amountInput}
+                        onChange={(event) => updateQuickPaymentAmount(payment.id, event.target.value)}
+                        onBlur={() => normalizeQuickPaymentAmount(payment.id)}
+                        placeholder="190, 1.9l, 50k"
+                      />
+                    </td>
+                    <td className="px-3 py-2.5 align-middle">
+                      <select
+                        className={inputClass}
+                        value={payment.mode}
+                        onChange={(event) => updateQuickPaymentRow(payment.id, { mode: event.target.value as 'Cash' | 'Bank' })}
+                      >
+                        <option value="Cash">Cash</option>
+                        <option value="Bank">Bank</option>
+                      </select>
+                    </td>
+                    <td className="px-3 py-2.5 align-middle">
+                      <input
+                        className={inputClass}
+                        value={payment.note}
+                        onChange={(event) => updateQuickPaymentRow(payment.id, { note: event.target.value })}
+                        placeholder={`Quick payment ${index + 1}`}
+                      />
+                    </td>
+                    <td className="px-3 py-2.5 align-middle text-center">
+                      <button
+                        type="button"
+                        className="rounded-md p-1 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                        onClick={() => removeQuickPaymentRow(payment.id)}
+                        aria-label={`Remove quick payment ${index + 1}`}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {quickPaymentTotal > 0 && (
+          <div className="mt-4 flex justify-end">
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-right">
+              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700">Quick payment total</p>
+              <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-emerald-900">{formatInrInteger(quickPaymentTotal)}</p>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-slate-900">Items</h3>
           <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700" onClick={addItemRow}>
@@ -955,28 +1108,38 @@ function NewBillPage() {
           </table>
         </div>
 
-        <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-5">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <div className="grid grid-cols-2 gap-x-8 gap-y-4 sm:flex sm:flex-wrap sm:items-end sm:gap-8">
-              <Metric label="Total Qty" value={formatInQty(totalQty, 'kg')} />
-              <Metric label="Line items" value={formatInrInteger(itemsTotal)} />
+        <div className="mt-5 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch">
+            <div className="grid flex-1 grid-cols-2 gap-2 md:grid-cols-4">
+              <Metric label="Qty" value={formatInQty(totalQty, 'kg')} />
+              <Metric label="Items" value={formatInrInteger(itemsTotal)} />
               <Metric label="Transport" value={formatInrInteger(transport)} />
               <Metric label="GST" value={formatInrInteger(gstAmount)} />
-              {previousBalanceAmount !== 0 && (
-                <Metric label={previousBalanceAmount >= 0 ? 'Previous Balance' : 'Previous Advance'} value={formatInrInteger(Math.abs(previousBalanceAmount))} />
-              )}
-              <Metric label="Sub Total" value={formatInrInteger(subTotalBeforeCredits)} />
-              <Metric label="Credited Entries" value={String(validCredits.length)} />
             </div>
-            <div className="text-left lg:text-right">
-              <p className="text-xs text-slate-400">{payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance Balance'}</p>
-              <p className="mt-1 font-mono text-3xl font-bold tabular-nums text-slate-900">{formatInrInteger(Math.abs(payableAfterAdjustments))}</p>
+            <div className="grid min-w-0 flex-[1.35] grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2 md:grid-cols-5">
+              <CalcMetric label="Current" value={formatInrInteger(grandTotal)} />
+              <CalcMetric
+                label={previousBalanceAmount >= 0 ? 'Prev Bal' : 'Prev Adv'}
+                value={`${previousBalanceAmount >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(previousBalanceAmount))}`}
+              />
+              <CalcMetric label={`Credits (${validCredits.length})`} value={`-${formatInrInteger(totalCredits)}`} />
+              <CalcMetric label={`Quick Pay (${validQuickPayments.length})`} value={`-${formatInrInteger(quickPaymentTotal)}`} />
+              <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-blue-900 md:text-right">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-blue-600">
+                  {payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance'}
+                </p>
+                <p className="mt-0.5 truncate font-mono text-base font-bold tabular-nums" title={formatInrInteger(Math.abs(payableAfterAdjustments))}>
+                  {formatInrInteger(Math.abs(payableAfterAdjustments))}
+                </p>
+              </div>
             </div>
           </div>
         </div>
 
         <div className="sticky bottom-[calc(3.85rem+env(safe-area-inset-bottom))] z-20 -mx-5 mt-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur lg:static lg:mx-0 lg:border-t-0 lg:bg-transparent lg:p-0">
-          <span className="text-xs text-slate-500">{helperStatusText}</span>
+          <span className="text-xs text-slate-500">
+            {helperStatusText} · Bill {formatInrInteger(grandTotal)} · Quick pay {formatInrInteger(quickPaymentTotal)} · {payableAfterAdjustments >= 0 ? 'Due' : 'Advance'} {formatInrInteger(Math.abs(payableAfterAdjustments))}
+          </span>
           <div className="flex-1" />
           <button type="button" className="px-1 py-1 text-sm font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline" onClick={resetForm}>
             Clear
@@ -1005,21 +1168,6 @@ function NewBillPage() {
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto bg-slate-50 px-3 py-4 sm:px-4">
-              {stockWarnings.length > 0 && (
-                <div className="mx-auto mb-3 max-w-[14cm] rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 shadow-sm">
-                  <p className="font-semibold">Stock warning</p>
-                  <div className="mt-2 space-y-1">
-                    {stockWarnings.map((warning) => (
-                      <p key={warning.itemName}>
-                        {warning.itemName} / {warning.customerName}: available {formatStockQty(warning.available, warning.unit, warning.type, warning.bagWeight)}, this bill{' '}
-                        {formatStockQty(warning.outgoing, warning.unit, warning.type, warning.bagWeight)}, after bill{' '}
-                        {formatStockQty(warning.after, warning.unit, warning.type, warning.bagWeight)}.
-                      </p>
-                    ))}
-                  </div>
-                  <p className="mt-2 text-xs text-amber-800">Saving is allowed after review.</p>
-                </div>
-              )}
               <div className="mx-auto flex w-full max-w-[14cm] justify-center">
                 <div
                   ref={previewRef}
@@ -1114,19 +1262,20 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-[112px]">
-      <p className="text-xs text-slate-400">{label}</p>
-      <p className="font-mono text-sm font-medium tabular-nums text-slate-800">{value}</p>
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+      <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+      <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-slate-900" title={value}>{value}</p>
     </div>
   )
 }
 
-function formatStockQty(qty: number, unit: string, type: string, bagWeight: number) {
-  if (type === 'gas') {
-    const bags = qty / (bagWeight || 50)
-    return `${formatInQty(qty, 'kg')} / ${bags.toFixed(Number.isInteger(bags) ? 0 : 1)} bags`
-  }
-  return formatInQty(qty, unit || 'piece')
+function CalcMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-slate-200 bg-white px-2.5 py-2">
+      <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+      <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-slate-900" title={value}>{value}</p>
+    </div>
+  )
 }
 
 const inputClass =

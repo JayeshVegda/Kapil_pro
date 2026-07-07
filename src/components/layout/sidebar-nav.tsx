@@ -1,9 +1,10 @@
 import { Link } from '@tanstack/react-router'
-import type { ComponentType } from 'react'
-import { BookOpen, Boxes, Calendar, CalendarDays, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Printer, ScrollText, Users, X } from 'lucide-react'
+import { useState, type ComponentType } from 'react'
+import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Printer, ReceiptText, ScrollText, Users, X } from 'lucide-react'
 
 type NavGroup = {
   label: string
+  collapsible?: boolean
   items: Array<{ to: string; title: string; icon: ComponentType<{ size?: number; className?: string }> }>
 }
 
@@ -26,14 +27,6 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    label: 'Casting',
-    items: [
-      { to: '/casting/new-session', title: 'New Session', icon: Flame },
-      { to: '/casting/log', title: 'Casting Log', icon: ClipboardList },
-      { to: '/casting/materials', title: 'Materials', icon: Boxes },
-    ],
-  },
-  {
     label: 'Reports',
     items: [
       { to: '/calendar', title: 'Calendar', icon: Calendar },
@@ -47,6 +40,17 @@ const navGroups: NavGroup[] = [
       { to: '/items', title: 'Items', icon: Boxes },
       { to: '/data-health', title: 'Data Health', icon: HeartPulse },
       { to: '/backup', title: 'Backup', icon: Database },
+    ],
+  },
+  {
+    label: 'Casting',
+    collapsible: true,
+    items: [
+      { to: '/casting', title: 'Dashboard', icon: LayoutDashboard },
+      { to: '/casting/new-session', title: 'New Session', icon: Flame },
+      { to: '/casting/log', title: 'Casting Log', icon: ClipboardList },
+      { to: '/casting/materials', title: 'Materials', icon: Boxes },
+      { to: '/casting/bill', title: 'Casting Bill', icon: ReceiptText },
     ],
   },
 ]
@@ -63,12 +67,25 @@ export function SidebarNav() {
 }
 
 function NavGroupsList({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?: () => void }) {
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({ Casting: false })
+
   return (
     <>
       {groups.map((group) => (
         <div key={group.label} className="mb-3">
-          <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{group.label}</p>
-          {group.items.map((item) => {
+          {group.collapsible ? (
+            <button
+              type="button"
+              className="mb-1 flex w-full items-center justify-between rounded-md px-3 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 hover:bg-white/5 hover:text-slate-300"
+              onClick={() => setCollapsedGroups((prev) => ({ ...prev, [group.label]: !prev[group.label] }))}
+            >
+              <span>{group.label}</span>
+              {collapsedGroups[group.label] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+            </button>
+          ) : (
+            <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{group.label}</p>
+          )}
+          {!collapsedGroups[group.label] && group.items.map((item) => {
             const Icon = item.icon
             return (
               <Link
