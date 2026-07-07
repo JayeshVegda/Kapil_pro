@@ -2,12 +2,8 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
-  AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
   Flame,
   IndianRupee,
-  PackageCheck,
   Receipt,
   TrendingUp,
   Users,
@@ -16,7 +12,7 @@ import { useMemo, type ReactNode } from 'react'
 import { loadCastingSessions } from '@/data/casting'
 import { useDashboardData } from '@/domain/dashboard'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
-import { KpiTile, RankedBarList, SplitProgress, StatusPill } from '@/components/ui/business-dashboard'
+import { RankedBarList, SplitProgress, StatusPill } from '@/components/ui/business-dashboard'
 
 export const Route = createFileRoute('/')({
   component: DashboardPage,
@@ -99,108 +95,43 @@ function DashboardPage() {
     data.thisMonthSummary.sales > 0 ? (data.thisMonthSummary.collection / data.thisMonthSummary.sales) * 100 : 0
   const totalSoldBags = data.itemComparisons.spindle.bags + data.itemComparisons.tapperPlug.bags
   const totalSoldKg = data.itemComparisons.spindle.kg + data.itemComparisons.tapperPlug.kg
-  const riskRows = data.actionRequired.riskRows.slice(0, 5)
   const topSoldRows = data.thisMonthItemBags.slice(0, 5).map((row) => ({
     id: row.itemName,
     label: row.itemName,
     value: row.bags,
     subLabel: `${formatWhole(row.kg)} kg sold this month`,
   }))
-  const highestPending = data.actionRequired.highestPending
 
   return (
     <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
-      <section className="mb-4 grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1.45fr)_minmax(22rem,0.55fr)]">
-        <div className="rounded-lg border border-blue-200 bg-blue-700 p-4 text-white shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase text-blue-100">Today Snapshot</p>
-              <h1 className="mt-2 font-mono text-4xl font-bold leading-none tracking-tight sm:text-5xl">
-                {fmtMoneyCompact(data.kpis.outstanding)}
-              </h1>
-              <p className="mt-2 text-sm text-blue-50">
-                Receivable across {data.actionRequired.pendingParties} parties. Collection cover this month is{' '}
-                <span className="font-semibold text-white">{collectionCoverPct.toFixed(0)}%</span>.
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:w-[31rem]">
-              <HeroStat label="Sales" value={fmtMoneyCompact(data.thisMonthSummary.sales)} />
-              <HeroStat label="Collection" value={fmtMoneyCompact(data.thisMonthSummary.collection)} />
-              <HeroStat label="Sold" value={`${formatWhole(totalSoldBags)} bags`} detail={`${formatWhole(totalSoldKg)} kg`} />
-              <HeroStat label="Metal" value={castingStats.avgMetalCost > 0 ? `₹${castingStats.avgMetalCost.toFixed(0)}` : '—'} detail="per kg" />
-            </div>
+      <section className="mb-4 rounded-lg border border-blue-200 bg-blue-700 p-4 text-white shadow-sm">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase text-blue-100">Today Snapshot</p>
+            <h1 className="mt-2 font-mono text-4xl font-bold leading-none tracking-tight sm:text-5xl">
+              {fmtMoneyCompact(data.kpis.outstanding)}
+            </h1>
+            <p className="mt-2 text-sm text-blue-50">
+              Total receivable. {data.actionRequired.pendingParties} parties pending. Month collection cover {collectionCoverPct.toFixed(0)}%.
+            </p>
           </div>
-        </div>
-
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase text-slate-500">Needs Action</p>
-              <h2 className="mt-1 text-base font-semibold text-slate-950">Party follow-up</h2>
-            </div>
-            <StatusPill tone={data.actionRequired.highRiskParties > 0 ? 'rose' : 'emerald'}>
-              {data.actionRequired.highRiskParties} high risk
-            </StatusPill>
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:w-[42rem]">
+            <HeroStat label="Sales" value={fmtMoneyCompact(data.thisMonthSummary.sales)} detail="this month" />
+            <HeroStat label="Collection" value={fmtMoneyCompact(data.thisMonthSummary.collection)} detail="this month" />
+            <HeroStat label="Sold" value={`${formatWhole(totalSoldBags)} bags`} detail={`${formatWhole(totalSoldKg)} kg`} />
+            <HeroStat label="Metal" value={castingStats.avgMetalCost > 0 ? `₹${castingStats.avgMetalCost.toFixed(0)}` : '—'} detail="per kg" />
           </div>
-          {highestPending ? (
-            <Link
-              to="/ledger"
-              search={{ customerId: highestPending.customerId, focus: '' }}
-              className="mt-3 block rounded-lg border border-slate-100 bg-slate-50 p-3 transition hover:border-blue-200 hover:bg-blue-50/60"
-            >
-              <p className="truncate text-sm font-semibold text-slate-950">{highestPending.customerName}</p>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="font-mono text-xl font-bold text-slate-950">{fmtMoneyCompact(highestPending.amount)}</span>
-                <StatusPill tone={riskTone(highestPending.level)}>{formatDueDays(highestPending.dueDays)}</StatusPill>
-              </div>
-            </Link>
-          ) : (
-            <p className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm font-medium text-emerald-700">No party is pending right now.</p>
-          )}
         </div>
       </section>
 
-      <section className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <KpiTile
-          label="Receivable Risk"
-          value={fmtMoneyCompact(data.actionRequired.pendingAmount)}
-          detail={`${data.actionRequired.pendingParties} parties pending. Biggest follow-up is shown above.`}
-          icon={<AlertTriangle size={17} />}
-          tone={data.actionRequired.highRiskParties > 0 ? 'rose' : 'blue'}
-          footer={<span className="font-medium text-slate-600">All-time collection rate: {data.kpis.collectionRate.toFixed(0)}%</span>}
-        />
-        <KpiTile
-          label="Month Sales"
-          value={fmtMoneyCompact(data.thisMonthSummary.sales)}
-          detail={data.thisMonthSummary.lastSale ? `Last bill: ${formatFullDate(data.thisMonthSummary.lastSale.date)} to ${data.thisMonthSummary.lastSale.customerName}` : 'No bill created this month.'}
-          icon={<IndianRupee size={17} />}
-          tone="blue"
-          footer={<TrendNote value={data.kpis.salesVsLastMonth} label="vs last month" />}
-        />
-        <KpiTile
-          label="Month Collection"
-          value={fmtMoneyCompact(data.thisMonthSummary.collection)}
-          detail={collectionGap > 0 ? `${fmtMoneyCompact(collectionGap)} still uncovered this month.` : 'Collection is equal or ahead of month sales.'}
-          icon={<Receipt size={17} />}
-          tone={collectionGap > 0 ? 'amber' : 'emerald'}
-          footer={<span className="font-medium text-slate-600">{collectionCoverPct.toFixed(0)}% of month sales collected</span>}
-        />
-        <KpiTile
-          label="Sold Movement"
-          value={`${formatWhole(totalSoldBags)} bags`}
-          detail={`${formatWhole(totalSoldKg)} kg sold. Spindle ${formatWhole(data.itemComparisons.spindle.bags)} bags, Tapper ${formatWhole(data.itemComparisons.tapperPlug.bags)} bags.`}
-          icon={<PackageCheck size={17} />}
-          tone="emerald"
-          footer={<span className="font-medium text-slate-600">{formatBagVsLastMonth(totalSoldBags, data.itemComparisons.spindle.previousBags + data.itemComparisons.tapperPlug.previousBags)}</span>}
-        />
-      </section>
-
-      <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(22rem,0.9fr)]">
+      <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.85fr)]">
         <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-slate-950">Sales vs Collection</h2>
-              <p className="text-xs text-slate-500">Recent months, built for quick comparison</p>
+              <p className="text-xs text-slate-500">
+                This month gap {collectionGap > 0 ? fmtMoneyCompact(collectionGap) : 'covered'} · {collectionCoverPct.toFixed(0)}% collected
+              </p>
             </div>
             <StatusPill tone={collectionGap > 0 ? 'amber' : 'emerald'}>
               {collectionGap > 0 ? `${fmtMoneyCompact(collectionGap)} gap` : 'covered'}
@@ -222,40 +153,21 @@ function DashboardPage() {
         <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-slate-950">Parties Needing Action</h2>
-              <p className="text-xs text-slate-500">Sorted by oldest bill first, then amount</p>
-            </div>
-            <Link to="/ledger" search={{ customerId: '', focus: '' }} className="text-xs font-semibold text-blue-700 hover:text-blue-800">
-              Ledger
-            </Link>
-          </div>
-          <RankedBarList
-            rows={riskRows.map((row) => ({
-              id: row.customerId,
-              label: row.customerName,
-              value: row.amount,
-              subLabel: `${formatDueDays(row.dueDays)}${row.lastBillDate ? ` · Last bill ${formatFullDate(row.lastBillDate)}` : ''}`,
-              href: { to: '/ledger', search: { customerId: row.customerId, focus: '' } },
-            }))}
-            valueLabel={fmtMoneyCompact}
-            emptyText="No pending parties. Clean board."
-            tone="rose"
-          />
-        </div>
-      </section>
-
-      <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
               <h2 className="text-sm font-semibold text-slate-950">Sold Bags / Kg</h2>
               <p className="text-xs text-slate-500">Selling movement only, no stock-in management</p>
             </div>
             <StatusPill tone="emerald">{formatWhole(totalSoldKg)} kg</StatusPill>
           </div>
-          <RankedBarList rows={topSoldRows} valueLabel={(value) => `${formatWhole(value)} bags`} emptyText="No sold item rows this month." tone="emerald" />
+          <RankedBarList
+            rows={topSoldRows}
+            valueLabel={(value) => `${formatWhole(value)} bags`}
+            emptyText="No sold item rows this month."
+            tone="emerald"
+          />
         </div>
+      </section>
 
+      <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(24rem,0.72fr)_minmax(0,1.28fr)]">
         <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
@@ -284,6 +196,28 @@ function DashboardPage() {
             </p>
           </div>
         </div>
+
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <InfoMetric label="Active parties" value={formatWhole(data.kpis.activeCustomers)} />
+            <InfoMetric label="Bills made" value={formatWhole(data.kpis.totalBills)} />
+            <InfoMetric label="Avg bill value" value={fmtMoneyCompact(data.kpis.averageBillValue)} />
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <SmallActivity
+              title="Last bill"
+              value={data.thisMonthSummary.lastSale ? fmtMoneyCompact(data.thisMonthSummary.lastSale.amount) : '—'}
+              detail={data.thisMonthSummary.lastSale ? `${formatFullDate(data.thisMonthSummary.lastSale.date)} · ${data.thisMonthSummary.lastSale.customerName}` : 'No bill this month'}
+              icon={<IndianRupee size={15} />}
+            />
+            <SmallActivity
+              title="Last payment"
+              value={data.thisMonthSummary.lastCollection ? fmtMoneyCompact(data.thisMonthSummary.lastCollection.amount) : '—'}
+              detail={data.thisMonthSummary.lastCollection ? `${formatFullDate(data.thisMonthSummary.lastCollection.date)} · ${data.thisMonthSummary.lastCollection.customerName}` : 'No payment this month'}
+              icon={<Receipt size={15} />}
+            />
+          </div>
+        </div>
       </section>
 
       <section className="grid min-h-[42vh] grid-cols-1 gap-4 xl:grid-cols-2">
@@ -304,14 +238,25 @@ function HeroStat({ label, value, detail }: { label: string; value: string; deta
   )
 }
 
-function TrendNote({ value, label }: { value: number; label: string }) {
-  const positive = value >= 0
+function InfoMetric({ label, value }: { label: string; value: string }) {
   return (
-    <span className={`inline-flex items-center gap-1 font-medium ${positive ? 'text-emerald-700' : 'text-rose-700'}`}>
-      {positive ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-      {positive ? '+' : '-'}
-      {fmtMoneyCompact(Math.abs(value))} {label}
-    </span>
+    <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+      <p className="text-[11px] font-semibold uppercase text-slate-500">{label}</p>
+      <p className="mt-1 font-mono text-xl font-bold leading-tight text-slate-950">{value}</p>
+    </div>
+  )
+}
+
+function SmallActivity({ title, value, detail, icon }: { title: string; value: string; detail: string; icon: ReactNode }) {
+  return (
+    <div className="rounded-lg border border-slate-100 bg-white p-3">
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase text-slate-500">
+        {icon}
+        <span>{title}</span>
+      </div>
+      <p className="mt-1 font-mono text-lg font-bold leading-tight text-slate-950">{value}</p>
+      <p className="mt-1 line-clamp-1 text-xs text-slate-500">{detail}</p>
+    </div>
   )
 }
 
@@ -502,20 +447,3 @@ function StatusBadge({ status }: { status: string }) {
 const fmtMoney = (v: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v)
 const fmtMoneyCompact = (v: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', notation: 'compact', maximumFractionDigits: 1 }).format(v)
 const formatWhole = (v: number) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(v))
-
-function riskTone(level: 'watch' | 'due' | 'overdue') {
-  if (level === 'overdue') return 'rose'
-  if (level === 'due') return 'amber'
-  return 'blue'
-}
-
-function formatDueDays(days: number) {
-  if (days <= 0) return 'new'
-  return `${days}d due`
-}
-
-function formatBagVsLastMonth(current: number, previous: number) {
-  const delta = Math.round(current - previous)
-  const sign = delta > 0 ? '+' : delta < 0 ? '-' : '±'
-  return `vs ${sign}${formatWhole(Math.abs(delta))} bags (${formatWhole(previous)} last month)`
-}
