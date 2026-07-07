@@ -35,6 +35,15 @@ export type ThisMonthItemBagsRow = {
   kg: number
 }
 
+export type ReceivableRiskRow = {
+  customerId: string
+  customerName: string
+  amount: number
+  dueDays: number
+  lastBillDate: string | null
+  level: 'watch' | 'due' | 'overdue'
+}
+
 export type DashboardData = {
   /** Bill lines in the current calendar month: bags primary, kg for context. */
   thisMonthItemBags: ThisMonthItemBagsRow[]
@@ -94,7 +103,11 @@ export type DashboardData = {
       customerId: string
       customerName: string
       amount: number
+      dueDays: number
+      lastBillDate: string | null
+      level: 'watch' | 'due' | 'overdue'
     } | null
+    riskRows: ReceivableRiskRow[]
   }
   monthlyTrend: Array<{ month: string; sales: number; collection: number }>
 }
@@ -115,6 +128,37 @@ const shiftMonthKey = (key: string, delta: number) => {
 }
 const monthLabel = (m: string) => {
   return formatMonthYear(m)
+}
+
+const diffDays = (fromDate: string | null, toDate: string) => {
+  if (!fromDate) return 0
+  const from = new Date(`${fromDate}T00:00:00Z`).getTime()
+  const to = new Date(`${toDate}T00:00:00Z`).getTime()
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0
+  return Math.max(0, Math.floor((to - from) / 86_400_000))
+}
+
+export function buildReceivableRiskRows({
+  pendingRows,
+  latestBillDateByCustomer,
+  asOfDate,
+}: {
+  pendingRows: Array<{ customerId: string; customerName: string; amount: number }>
+  latestBillDateByCustomer: Map<string, string>
+  asOfDate: string
+}): ReceivableRiskRow[] {
+  return pendingRows
+    .map((row) => {
+      const lastBillDate = latestBillDateByCustomer.get(row.customerId) ?? null
+      const dueDays = diffDays(lastBillDate, asOfDate)
+      return {
+        ...row,
+        dueDays,
+        lastBillDate,
+        level: dueDays >= 45 ? 'overdue' : dueDays >= 21 ? 'due' : 'watch',
+      } satisfies ReceivableRiskRow
+    })
+    .sort((a, b) => b.dueDays - a.dueDays || b.amount - a.amount || a.customerName.localeCompare(b.customerName))
 }
 
 export async function fetchDashboardData(): Promise<DashboardData> {
@@ -278,8 +322,13 @@ export async function fetchDashboardData(): Promise<DashboardData> {
         }
 
   const outstandingByParty = new Map<string, number>()
+  const latestBillDateByCustomer = new Map<string, string>()
   let totalSales = 0
   let totalCollection = 0
+  for (const bill of bills) {
+    const current = latestBillDateByCustomer.get(bill.customerId)
+    if (!current || bill.businessDate > current) latestBillDateByCustomer.set(bill.customerId, bill.businessDate)
+  }
   for (const customer of customers) {
     const customerBills = bills.filter((bill) => bill.customerId === customer.customerId)
     const customerPayments = payments.filter((payment) => payment.customerId === customer.customerId)
@@ -312,6 +361,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
   const pendingAmount = pendingRows.reduce((s, row) => s + row.amount, 0)
   const avgPartyPending = pendingParties > 0 ? pendingAmount / pendingParties : 0
   const highRiskParties = pendingRows.filter((row) => row.amount > avgPartyPending * 1.5).length
+  const riskRows = buildReceivableRiskRows({ pendingRows, latestBillDateByCustomer, asOfDate })
 
   const allMonths = new Set<string>()
   bills.forEach((b) => allMonths.add(monthKey(b.businessDate)))
@@ -361,7 +411,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     },
     recentBills: bills.sort(compareBusinessDateThenCreatedDesc).slice(0, 8),
     recentPayments: payments.sort(compareBusinessDateThenCreatedDesc).slice(0, 8),
-    actionRequired: { pendingAmount, pendingParties, highRiskParties, highestPending: pendingRows[0] ?? null },
+    actionRequired: { pendingAmount, pendingParties, highRiskParties, highestPending: riskRows[0] ?? null, riskRows },
     monthlyTrend,
   }
 }
