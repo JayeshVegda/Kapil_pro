@@ -1,6 +1,7 @@
 import { pb } from '@/data/pocketbase'
 import { buildPartyEvents, buildPartyKpis, buildPartyRows, type LedgerBill, type LedgerBillItem, type LedgerCustomer, type LedgerPayment } from '@/domain/ledger'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { getBillingUnit, isGasBillingItem } from '@/domain/billing-modes'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
 
 type PBRecord = Record<string, unknown> & { id: string }
@@ -13,12 +14,15 @@ const num = (value: unknown) => {
 const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
 
 export async function loadPartyDashboard(asOfDate: string, overdueDaysThreshold = 30) {
-  const [customersRaw, billsRaw, billItemsRaw, paymentsRaw] = await Promise.all([
+  const [customersRaw, billsRaw, billItemsRaw, paymentsRaw, itemsRaw] = await Promise.all([
     pb.collection('customers').getFullList({ sort: 'company_name,name' }),
     pb.collection('bills').getFullList({ sort: 'date,bill_no' }),
     pb.collection('bill_items').getFullList(),
     pb.collection('payments').getFullList({ sort: 'date' }),
+    pb.collection('items').getFullList({ sort: 'name' }),
   ])
+  const itemById = new Map((itemsRaw as PBRecord[]).map((row) => [row.id, row]))
+  const itemByName = new Map((itemsRaw as PBRecord[]).map((row) => [String(row.name ?? '').trim().toLowerCase(), row]))
 
   const customers: LedgerCustomer[] = (customersRaw as PBRecord[]).map((row) => ({
     id: row.id,
@@ -42,12 +46,18 @@ export async function loadPartyDashboard(asOfDate: string, overdueDaysThreshold 
     mktRate: num(row.mkt),
     lrNo: String(row.lr_no ?? ''),
   }))
-  const billItems: LedgerBillItem[] = (billItemsRaw as PBRecord[]).map((row) => ({
-    billId: String(row.bill ?? ''),
-    amount: num(row.amount),
-    qty: num(row.qty),
-    bags: num(row.bags),
-  }))
+  const billItems: LedgerBillItem[] = (billItemsRaw as PBRecord[]).map((row) => {
+    const master = itemById.get(String(row.item ?? '')) ?? itemByName.get(String(row.item_name ?? '').trim().toLowerCase())
+    return {
+      billId: String(row.bill ?? ''),
+      amount: num(row.amount),
+      qty: num(row.qty),
+      bags: num(row.bags),
+      type: String(master?.type ?? ''),
+      unit: String(master?.unit ?? ''),
+      bagWeight: num(master?.bag_weight) || 50,
+    }
+  })
   const payments: LedgerPayment[] = (paymentsRaw as PBRecord[]).map((row) => ({
     id: row.id,
     customerId: String(row.customer ?? ''),
@@ -65,7 +75,7 @@ export async function loadPartyDashboard(asOfDate: string, overdueDaysThreshold 
 }
 
 export async function loadPartyStatement(customerId: string, asOfDate: string) {
-  const [customerRaw, billsRaw, billItemsRaw, paymentsRaw] = await Promise.all([
+  const [customerRaw, billsRaw, billItemsRaw, paymentsRaw, itemsRaw] = await Promise.all([
     pb.collection('customers').getOne(customerId),
     pb.collection('bills').getFullList({
       sort: 'date,bill_no',
@@ -76,7 +86,10 @@ export async function loadPartyStatement(customerId: string, asOfDate: string) {
       sort: 'date',
       filter: `customer = "${customerId}"`,
     }),
+    pb.collection('items').getFullList({ sort: 'name' }),
   ])
+  const itemById = new Map((itemsRaw as PBRecord[]).map((row) => [row.id, row]))
+  const itemByName = new Map((itemsRaw as PBRecord[]).map((row) => [String(row.name ?? '').trim().toLowerCase(), row]))
 
   const billsRawTyped = (billsRaw as PBRecord[]).filter((bill) => datePart(bill.date) <= asOfDate)
   const billItemsRawTyped = billItemsRaw as PBRecord[]
@@ -88,9 +101,11 @@ export async function loadPartyStatement(customerId: string, asOfDate: string) {
     const billId = String(row.bill ?? '')
     itemSumByBill.set(billId, (itemSumByBill.get(billId) ?? 0) + num(row.amount))
     const itemName = String(row.item_name ?? '').trim() || 'Item'
+    const itemMeta = itemById.get(String(row.item ?? '')) ?? itemByName.get(itemName.toLowerCase())
     const qty = num(row.qty)
     const rate = num(row.rate)
-    const line = `${itemName} ${Math.round(qty)}kg @ ${Math.round(rate)}`
+    const unit = getBillingUnit({ type: String(itemMeta?.type ?? ''), unit: String(itemMeta?.unit ?? '') })
+    const line = `${itemName} ${Math.round(qty)}${unit === 'piece' ? 'pcs' : unit} @ ${Math.round(rate)}`
     const prev = itemDetailByBill.get(billId)
     if (!prev) {
       itemDetailByBill.set(billId, line)
@@ -141,6 +156,8 @@ export async function loadPartyStatement(customerId: string, asOfDate: string) {
     const billId = String(row.bill ?? '')
     if (!billDateById.has(billId)) continue
     const itemName = String(row.item_name ?? '').trim() || 'Unknown Item'
+    const itemMeta = itemById.get(String(row.item ?? '')) ?? itemByName.get(itemName.toLowerCase())
+    const isGas = isGasBillingItem({ type: String(itemMeta?.type ?? '') })
     const entry = itemSummaryMap.get(itemName) ?? {
       itemName,
       totalQty: 0,
@@ -150,7 +167,7 @@ export async function loadPartyStatement(customerId: string, asOfDate: string) {
       lastDate: '',
     }
     entry.totalQty += num(row.qty)
-    entry.totalBags += num(row.bags)
+    entry.totalBags += isGas ? num(row.bags) : 0
     entry.totalAmount += num(row.amount)
     const billDate = billDateById.get(billId) ?? ''
     if (billDate > entry.lastDate) entry.lastDate = billDate

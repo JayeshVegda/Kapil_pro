@@ -12,6 +12,16 @@ import { assertBillNumberAvailable, getNextBillNoForBook, saveBillWithItems } fr
 import { savePayment } from '@/data/payments'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billing-calculations'
+import {
+  calculateBillingLineBags,
+  calculateGasDefaultRateFromFinal,
+  calculateGasFinalRate,
+  getBillingItemType,
+  getBillingUnit,
+  isGasBillingItem,
+  suggestBillingRate,
+  type BillingGstMode,
+} from '@/domain/billing-modes'
 import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
 import { loadSavedMarketRateForDate, useMarketRate } from '@/domain/market-rate'
 import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
@@ -32,11 +42,22 @@ export const Route = createFileRoute('/new-bill')({
 
 type CustomerOption = { id: string; name: string; companyName: string; customerName: string }
 type ItemOption = { id: string; name: string; defaultRate: number; type: string; unit: string; bagWeight: number }
-type BillItemRow = { itemId: string; itemName: string; qty: number; defaultRate: number; rate: number; manualRateEdited: boolean }
+type BillItemRow = {
+  itemId: string
+  itemName: string
+  qty: number
+  defaultRate: number
+  rate: number
+  manualRateEdited: boolean
+  type: string
+  unit: string
+  bagWeight: number
+}
 type GstMode = 'none' | 'percent18' | 'manual'
 type CreditAdjustment = { date: string; amount: number }
 type QuickPaymentRow = { id: string; date: string; amount: number; amountInput: string; mode: 'Cash' | 'Bank'; note: string }
 type AutoBalanceContext = { previousBalanceDate: string; previousBalanceAmount: number; credits: CreditAdjustment[] }
+type LastCustomerItemRate = { rate: number; mktRate: number; gstRate: number; date: string; billRef: string }
 type PBRecord = Record<string, unknown> & { id: string }
 const num = (v: unknown) => (Number.isFinite(Number(v ?? 0)) ? Number(v) : 0)
 const datePart = (v: unknown) => String(v ?? '').slice(0, 10)
@@ -44,12 +65,7 @@ const toTs = (v: unknown) => {
   const ts = new Date(String(v ?? '')).getTime()
   return Number.isFinite(ts) ? ts : 0
 }
-const bagsFromQtyKg = (qtyKg: number) => {
-  if (!(qtyKg > 0)) return 0
-  return Math.round(qtyKg / 50)
-}
 const COMPANY_NAME = 'Kapil Products'
-const GST_RATE_DISCOUNT = 30
 const submitRowSchema = z.object({
   itemName: z.string().trim().min(1),
   qty: z.number().positive(),
@@ -82,6 +98,62 @@ function newQuickPaymentRow(date: string): QuickPaymentRow {
   }
 }
 
+function newBillItemRow(): BillItemRow {
+  return { itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false, type: '', unit: '', bagWeight: 50 }
+}
+
+const itemKey = (value: unknown) => String(value ?? '').trim().toLowerCase()
+
+function rateMapKeys(item: Pick<ItemOption, 'id' | 'name'>) {
+  return [item.id, itemKey(item.name)].filter(Boolean)
+}
+
+function formatBillQtySummary(gasQty: number, electronicQty: number) {
+  if (gasQty > 0 && electronicQty > 0) return `${formatInQty(gasQty, 'kg')} / ${Math.round(electronicQty)} pcs`
+  if (electronicQty > 0) return `${Math.round(electronicQty)} pcs`
+  return formatInQty(gasQty, 'kg')
+}
+
+async function loadCustomerLastItemRates(customerId: string): Promise<Record<string, LastCustomerItemRate>> {
+  const [billsRaw, billItemsRaw] = await Promise.all([
+    pb.collection('bills').getFullList({
+      sort: 'date,created,bill_no',
+      filter: `customer = "${customerId}"`,
+    }),
+    pb.collection('bill_items').getFullList({ filter: `bill.customer = "${customerId}"` }),
+  ])
+  const billById = new Map((billsRaw as PBRecord[]).map((bill) => [bill.id, bill]))
+  const out: Record<string, LastCustomerItemRate> = {}
+
+  for (const row of billItemsRaw as PBRecord[]) {
+    const billId = String(row.bill ?? '')
+    const bill = billById.get(billId)
+    if (!bill) continue
+    const next: LastCustomerItemRate = {
+      rate: num(row.rate),
+      mktRate: num(bill.mkt),
+      gstRate: num(bill.gst_rate),
+      date: datePart(bill.date),
+      billRef: String(bill.bill_ref ?? `${num(bill.book_no)}/${num(bill.bill_no)}`),
+    }
+    const keys = [String(row.item ?? ''), itemKey(row.item_name)].filter(Boolean)
+    for (const key of keys) {
+      const current = out[key]
+      if (!current || next.date > current.date) out[key] = next
+    }
+  }
+
+  return out
+}
+
+function findLastRateForItem(rateMap: Record<string, LastCustomerItemRate>, item: Pick<ItemOption, 'id' | 'name'>) {
+  for (const key of rateMapKeys(item)) {
+    const found = rateMap[key]
+    if (found) return found
+  }
+  return null
+}
+
 function NewBillPage() {
   const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
@@ -96,7 +168,7 @@ function NewBillPage() {
   const gstRate = gstMode === 'percent18' ? 18 : 0
   const [lrInput, setLrInput] = useState('')
   const [lrList, setLrList] = useState<string[]>([])
-  const [rows, setRows] = useState<BillItemRow[]>([{ itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
+  const [rows, setRows] = useState<BillItemRow[]>([newBillItemRow()])
   const [statusText, setStatusText] = useState('')
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
@@ -232,6 +304,12 @@ function NewBillPage() {
     },
   })
 
+  const customerLastRatesQuery = useQuery({
+    queryKey: ['customer-last-item-rates', customerId],
+    enabled: Boolean(customerId),
+    queryFn: () => loadCustomerLastItemRates(customerId),
+  })
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       const customer = (customersQuery.data ?? []).find((c) => c.id === customerId)
@@ -312,7 +390,31 @@ function NewBillPage() {
     return hasCustomer && hasValidRow ? 'Ready to save' : 'Fill required fields to save'
   }, [statusText, customerId, rows])
   const selectedCustomerName = (customersQuery.data ?? []).find((c) => c.id === customerId)?.companyName ?? 'Unknown'
+  const customerBillingType = useMemo(() => {
+    if (!customerId) return 'mixed' as const
+    const rateMap = customerLastRatesQuery.data ?? {}
+    const items = itemsQuery.data ?? []
+    let gas = 0
+    let electronic = 0
+    for (const item of items) {
+      const hasHistory = rateMapKeys(item).some((key) => Boolean(rateMap[key]))
+      if (!hasHistory) continue
+      if (getBillingItemType(item) === 'electronic') electronic += 1
+      else gas += 1
+    }
+    if (gas > 0 && electronic === 0) return 'gas' as const
+    if (electronic > 0 && gas === 0) return 'electronic' as const
+    return 'mixed' as const
+  }, [customerId, customerLastRatesQuery.data, itemsQuery.data])
+  const availableItems = useMemo(() => {
+    const items = itemsQuery.data ?? []
+    if (customerBillingType === 'mixed') return items
+    return items.filter((item) => getBillingItemType(item) === customerBillingType)
+  }, [customerBillingType, itemsQuery.data])
   const validRows = rows.filter((r) => r.itemName.trim() && r.qty > 0 && r.rate > 0)
+  const gasQty = validRows.filter(isGasBillingItem).reduce((sum, row) => sum + row.qty, 0)
+  const electronicQty = validRows.filter((row) => !isGasBillingItem(row)).reduce((sum, row) => sum + row.qty, 0)
+  const qtySummary = formatBillQtySummary(gasQty, electronicQty)
   const previousBalanceDate = autoBalanceQuery.data?.previousBalanceDate ?? date
   const previousBalanceAmount = autoBalanceQuery.data?.previousBalanceAmount ?? 0
   const validCredits = (autoBalanceQuery.data?.credits ?? []).filter((entry) => entry.amount > 0)
@@ -332,7 +434,9 @@ function NewBillPage() {
     qty: r.qty,
     rate: r.rate,
     amount: r.qty * r.rate,
-    bags: bagsFromQtyKg(r.qty),
+    bags: calculateBillingLineBags({ qty: r.qty, item: r }),
+    type: getBillingItemType(r),
+    unit: getBillingUnit(r),
   }))
   const draftPrintProps: BillPrintLayoutProps | null =
     customerId && validRows.length > 0
@@ -368,7 +472,7 @@ function NewBillPage() {
     setTransport(0)
     setGstMode('none')
     setManualGstAmount(0)
-    setRows([{ itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
+    setRows([newBillItemRow()])
     setQuickPayments([])
     setLrInput('')
     setLrList([])
@@ -416,7 +520,7 @@ function NewBillPage() {
   }
 
   function addItemRow() {
-    setRows((prev) => [...prev, { itemId: '', itemName: '', qty: 0, defaultRate: 0, rate: 0, manualRateEdited: false }])
+    setRows((prev) => [...prev, newBillItemRow()])
   }
 
   function removeItemRow(index: number) {
@@ -427,22 +531,40 @@ function NewBillPage() {
     setRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)))
   }
 
-  const getGstRateDiscount = useCallback((nextGstMode: GstMode = gstMode) => {
-    return nextGstMode === 'percent18' ? GST_RATE_DISCOUNT : 0
-  }, [gstMode])
+  const getLastRateForItem = useCallback((item: ItemOption) => {
+    return findLastRateForItem(customerLastRatesQuery.data ?? {}, item)
+  }, [customerLastRatesQuery.data])
 
   const getAutoRateFromDefault = useCallback((defaultRate: number, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
-    const gstDiscount = nextGstMode === 'percent18' ? GST_RATE_DISCOUNT : 0
-    return Math.max(0, defaultRate + nextMktRate - gstDiscount)
+    return calculateGasFinalRate(defaultRate, nextMktRate, nextGstMode)
   }, [mktRate, gstMode])
 
   const getDefaultRateFromFinal = useCallback((finalRate: number, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
-    return Math.max(0, finalRate - nextMktRate + getGstRateDiscount(nextGstMode))
-  }, [getGstRateDiscount, mktRate, gstMode])
+    return calculateGasDefaultRateFromFinal(finalRate, nextMktRate, nextGstMode)
+  }, [mktRate, gstMode])
 
   const getAutoRate = useCallback((item: ItemOption, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
-    return getAutoRateFromDefault(item.defaultRate, nextMktRate, nextGstMode)
-  }, [getAutoRateFromDefault, mktRate, gstMode])
+    return suggestBillingRate({
+      item,
+      mktRate: nextMktRate,
+      gstMode: nextGstMode as BillingGstMode,
+      lastRate: getLastRateForItem(item),
+    })
+  }, [getLastRateForItem, mktRate, gstMode])
+
+  const getSuggestedRowPatch = useCallback((item: ItemOption, nextMktRate = mktRate, nextGstMode: GstMode = gstMode) => {
+    const suggested = getAutoRate(item, nextMktRate, nextGstMode)
+    return {
+      itemId: item.id,
+      itemName: item.name,
+      defaultRate: suggested.defaultRate,
+      rate: suggested.rate,
+      manualRateEdited: false,
+      type: item.type,
+      unit: item.unit,
+      bagWeight: item.bagWeight,
+    }
+  }, [getAutoRate, mktRate, gstMode])
 
   function updateGstMode(nextMode: GstMode) {
     setGstMode(nextMode)
@@ -454,8 +576,7 @@ function NewBillPage() {
         if (!row.itemName || row.manualRateEdited) return row
         const selected = items.find((it) => it.name === row.itemName)
         if (!selected) return row
-        const defaultRate = row.defaultRate || selected.defaultRate
-        return { ...row, itemId: selected.id, defaultRate, rate: getAutoRateFromDefault(defaultRate, mktRate, nextMode) }
+        return { ...row, ...getSuggestedRowPatch(selected, mktRate, nextMode) }
       }),
     )
   }
@@ -512,6 +633,8 @@ function NewBillPage() {
     }
     const command = parsed.command
     const nextGstMode = command.gstMode === 'manual' ? 'manual' : command.gstRate === 18 ? 'percent18' : 'none'
+    const commandLastRates = await loadCustomerLastItemRates(command.customer.id).catch(() => ({}))
+    const itemMasters = itemsQuery.data ?? []
     if (command.bookNo) {
       setBookNo(command.bookNo)
       if (command.billNo) {
@@ -533,14 +656,40 @@ function NewBillPage() {
     setGstMode(nextGstMode)
     setManualGstAmount(command.gstMode === 'manual' ? command.gstAmount : 0)
     setRows(
-      command.items.map((line) => ({
-        itemName: line.item.name,
-        itemId: line.item.id,
-        qty: line.qty,
-        defaultRate: line.defaultRate || getDefaultRateFromFinal(line.rate, commandMktRate, nextGstMode),
-        rate: line.rate,
-        manualRateEdited: line.manualRateEdited,
-      })),
+      command.items.map((line) => {
+        const selected =
+          itemMasters.find((item) => item.id === line.item.id || item.name === line.item.name) ??
+          {
+            id: line.item.id,
+            name: line.item.name,
+            defaultRate: Number(line.item.defaultRate ?? 0),
+            type: line.item.type ?? '',
+            unit: line.item.unit ?? '',
+            bagWeight: Number(line.item.bagWeight ?? 50) || 50,
+          }
+        const suggested = line.manualRateEdited
+          ? null
+          : suggestBillingRate({
+              item: selected,
+              mktRate: commandMktRate,
+              gstMode: nextGstMode,
+              lastRate: findLastRateForItem(commandLastRates, selected),
+            })
+        const fallbackDefaultRate = line.manualRateEdited && !isGasBillingItem(selected)
+          ? line.rate
+          : line.defaultRate || getDefaultRateFromFinal(line.rate, commandMktRate, nextGstMode)
+        return {
+          itemName: selected.name,
+          itemId: selected.id,
+          qty: line.qty,
+          defaultRate: suggested?.defaultRate ?? fallbackDefaultRate,
+          rate: suggested?.rate ?? line.rate,
+          manualRateEdited: line.manualRateEdited,
+          type: selected.type ?? '',
+          unit: selected.unit ?? '',
+          bagWeight: Number(selected.bagWeight ?? 50) || 50,
+        }
+      }),
     )
     setIsQuickEntryOpen(false)
     setStatusText(
@@ -661,11 +810,10 @@ function NewBillPage() {
         if (!row.itemName || row.manualRateEdited) return row
         const selected = items.find((it) => it.id === row.itemId || it.name === row.itemName)
         if (!selected) return row
-        const defaultRate = row.defaultRate || selected.defaultRate
-        return { ...row, itemId: selected.id, defaultRate, rate: getAutoRateFromDefault(defaultRate) }
+        return { ...row, ...getSuggestedRowPatch(selected) }
       }),
     )
-  }, [mktRate, itemsQuery.data, gstMode, getAutoRateFromDefault])
+  }, [mktRate, itemsQuery.data, gstMode, getSuggestedRowPatch])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -761,6 +909,7 @@ function NewBillPage() {
               value={customerId}
               onChange={(nextId) => {
                 setCustomerId(nextId)
+                setRows([newBillItemRow()])
                 setStatusText('')
               }}
               inputClassName={inputClass}
@@ -989,8 +1138,8 @@ function NewBillPage() {
               <tr className="bg-slate-50">
                 <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Item</th>
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Qty</th>
-                <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Default Rate</th>
-                <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Rate</th>
+                <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Margin / Unit</th>
+                <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Final Rate</th>
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
                 <th className="px-3 py-2.5 text-center text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
               </tr>
@@ -1009,25 +1158,24 @@ function NewBillPage() {
                           const id = e.target.value
                           const selected = (itemsQuery.data ?? []).find((it) => it.id === id)
                           if (!selected) {
-                            updateRow(i, { itemId: '', itemName: '', defaultRate: 0, rate: 0, manualRateEdited: false })
+                            updateRow(i, newBillItemRow())
                             return
                           }
-                          updateRow(i, {
-                            itemId: selected.id,
-                            itemName: selected.name,
-                            defaultRate: selected.defaultRate,
-                            rate: getAutoRate(selected),
-                            manualRateEdited: false,
-                          })
+                          updateRow(i, getSuggestedRowPatch(selected))
                         }}
                       >
                         <option value="">{itemsQuery.isLoading ? 'Loading items…' : 'Select item…'}</option>
-                        {(itemsQuery.data ?? []).map((item) => (
+                        {availableItems.map((item) => (
                           <option key={item.id} value={item.id}>
-                            {item.name}
+                            {item.name} · {getBillingItemType(item) === 'electronic' ? 'pcs' : 'kg'}
                           </option>
                         ))}
                       </select>
+                      {row.itemName && (
+                        <p className="mt-1 text-[11px] font-medium text-slate-500">
+                          {isGasBillingItem(row) ? 'Gas item: qty in kg, margin follows MKT.' : 'Electronic item: qty in pcs, rate is unit price.'}
+                        </p>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 align-middle">
                       <input
@@ -1041,7 +1189,7 @@ function NewBillPage() {
                         onBlur={() => {
                           if (row.qty === 0) updateRow(i, { qty: 0 })
                         }}
-                        placeholder="0"
+                        placeholder={getBillingUnit(row) === 'piece' ? 'pcs' : 'kg'}
                       />
                     </td>
                     <td className="px-3 py-2.5 align-middle">
@@ -1054,14 +1202,17 @@ function NewBillPage() {
                         onChange={(e) => {
                           const v = e.target.value
                           if (v === '') {
-                            updateRow(i, { defaultRate: 0, rate: getAutoRateFromDefault(0), manualRateEdited: false })
+                            updateRow(i, { defaultRate: 0, rate: 0, manualRateEdited: false })
                             return
                           }
                           const n = Number(v)
                           const defaultRate = Number.isFinite(n) ? n : 0
+                          const nextRate = isGasBillingItem(row)
+                            ? getAutoRateFromDefault(defaultRate)
+                            : defaultRate
                           updateRow(i, {
                             defaultRate,
-                            rate: getAutoRateFromDefault(defaultRate),
+                            rate: nextRate,
                             manualRateEdited: false,
                           })
                         }}
@@ -1083,7 +1234,11 @@ function NewBillPage() {
                           }
                           const n = Number(v)
                           const rate = Number.isFinite(n) ? n : 0
-                          updateRow(i, { rate, defaultRate: getDefaultRateFromFinal(rate), manualRateEdited: true })
+                          updateRow(i, {
+                            rate,
+                            defaultRate: isGasBillingItem(row) ? getDefaultRateFromFinal(rate) : rate,
+                            manualRateEdited: true,
+                          })
                         }}
                         placeholder="0"
                       />
@@ -1111,7 +1266,7 @@ function NewBillPage() {
         <div className="mt-5 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch">
             <div className="grid flex-1 grid-cols-2 gap-2 md:grid-cols-4">
-              <Metric label="Qty" value={formatInQty(totalQty, 'kg')} />
+              <Metric label="Qty" value={qtySummary} />
               <Metric label="Items" value={formatInrInteger(itemsTotal)} />
               <Metric label="Transport" value={formatInrInteger(transport)} />
               <Metric label="GST" value={formatInrInteger(gstAmount)} />

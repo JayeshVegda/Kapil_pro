@@ -1,6 +1,7 @@
 import { getLocalIsoDate } from '@/lib/date'
 import { findBestNameMatch } from '@/lib/search'
 import { getAdminControlSettings } from '@/lib/admin-control'
+import { calculateGasDefaultRateFromFinal, calculateGasFinalRate, isGasBillingItem } from '@/domain/billing-modes'
 
 export type CommandKind = 'bill' | 'payment' | 'print'
 export const PENDING_COMMAND_STORAGE_KEY = 'kapil-pending-command-v1'
@@ -374,8 +375,9 @@ function parseBillLineCommands(
     const qtyInfo = parseItemQuantity(tokens[qtyIndex], item, true)
     if (!(qtyInfo.qty > 0)) return { ok: false, error: `Invalid quantity for ${item.name}.` }
 
+    const isGas = isGasBillingItem(item)
     let defaultRate = Number(item.defaultRate ?? 0)
-    let rate = Math.max(0, defaultRate + mktRate - (gstMode === 'percent18' ? 30 : 0))
+    let rate = isGas ? calculateGasFinalRate(defaultRate, mktRate, gstMode) : defaultRate
     let manualRateEdited = false
     i = qtyIndex + 1
 
@@ -389,7 +391,7 @@ function parseBillLineCommands(
         const next = parseAmountToken(tokens[i + 1] ?? '')
         if (next > 0) {
           rate = next
-          defaultRate = Math.max(0, rate - mktRate + (gstMode === 'percent18' ? 30 : 0))
+          defaultRate = isGas ? calculateGasDefaultRateFromFinal(rate, mktRate, gstMode) : rate
           manualRateEdited = true
           i += 2
           continue
@@ -399,7 +401,7 @@ function parseBillLineCommands(
         const next = parseAmountToken(tokens[i + 1] ?? '')
         if (next > 0) {
           defaultRate = next
-          rate = Math.max(0, defaultRate + mktRate - (gstMode === 'percent18' ? 30 : 0))
+          rate = isGas ? calculateGasFinalRate(defaultRate, mktRate, gstMode) : defaultRate
           manualRateEdited = false
           i += 2
           continue
@@ -408,7 +410,7 @@ function parseBillLineCommands(
       const numeric = parseAmountToken(token)
       if (numeric > 0) {
         rate = numeric
-        defaultRate = Math.max(0, rate - mktRate + (gstMode === 'percent18' ? 30 : 0))
+        defaultRate = isGas ? calculateGasDefaultRateFromFinal(rate, mktRate, gstMode) : rate
         manualRateEdited = true
         i += 1
         continue

@@ -1,5 +1,6 @@
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
+import { getBillingUnit, isGasBillingItem } from '@/domain/billing-modes'
 
 /** Phone / narrow-receipt width for preview, print, PDF, and JPG (shared with print CSS). */
 export const BILL_PRINT_PAGE_WIDTH_CM = 14
@@ -10,6 +11,9 @@ export type BillPrintLineRow = {
   rate: number
   amount: number
   bags: number
+  type?: string
+  unit?: string
+  bagWeight?: number
 }
 
 export type BillPrintCreditRow = { date: string; amount: number }
@@ -60,6 +64,16 @@ export function BillPrintLayout({
   lrList,
 }: BillPrintLayoutProps) {
   const hasGst = gstAmount > 0 || gstRate > 0
+  const gasQty = itemRows.filter(isGasBillingItem).reduce((sum, row) => sum + row.qty, 0)
+  const electronicQty = itemRows.filter((row) => !isGasBillingItem(row)).reduce((sum, row) => sum + row.qty, 0)
+  const qtyFooterLabel = electronicQty > 0 && gasQty === 0 ? 'Units' : electronicQty > 0 ? 'Qty' : 'Weight'
+  const qtyFooterValue =
+    electronicQty > 0 && gasQty > 0
+      ? `${Math.round(gasQty)} kg / ${Math.round(electronicQty)} pcs`
+      : electronicQty > 0
+        ? `${Math.round(electronicQty)} pcs`
+        : `${Math.round(totalQty)} kg`
+  const visibleBags = itemRows.reduce((sum, row) => sum + (isGasBillingItem(row) ? row.bags : 0), 0)
 
   return (
     <div className="bill-print-root">
@@ -109,7 +123,7 @@ export function BillPrintLayout({
           {itemRows.map((row, index) => (
             <tr key={`${row.itemName}-${index}`}>
               <td>{row.itemName}</td>
-              <td className="bill-print-col-qty">{row.qty} kg</td>
+              <td className="bill-print-col-qty">{formatPrintQty(row.qty, getBillingUnit(row))}</td>
               <td className="bill-print-col-rate">{formatInrInteger(row.rate)}</td>
               <td className="bill-print-col-amt">{formatInrInteger(row.amount)}</td>
             </tr>
@@ -175,12 +189,12 @@ export function BillPrintLayout({
 
       <div className="bill-print-footer">
         <div>
-          <p className="bill-print-footer-label">Weight</p>
-          <p className="bill-print-footer-value">{Math.round(totalQty)} kg</p>
+          <p className="bill-print-footer-label">{qtyFooterLabel}</p>
+          <p className="bill-print-footer-value">{qtyFooterValue}</p>
         </div>
         <div>
           <p className="bill-print-footer-label">Bags</p>
-          <p className="bill-print-footer-value">{Math.round(totalBags)}</p>
+          <p className="bill-print-footer-value">{Math.round(visibleBags || totalBags)}</p>
         </div>
         <div>
           <p className="bill-print-footer-label">LR No.</p>
@@ -189,4 +203,9 @@ export function BillPrintLayout({
       </div>
     </div>
   )
+}
+
+function formatPrintQty(qty: number, unit: string) {
+  const rounded = Number.isInteger(qty) ? String(Math.round(qty)) : String(qty)
+  return `${rounded} ${unit === 'piece' ? 'pcs' : unit}`
 }

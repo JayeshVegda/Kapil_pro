@@ -6,6 +6,7 @@ import {
   type CanonicalPaymentRecord,
 } from '@/domain/records'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
+import { isGasBillingItem } from '@/domain/billing-modes'
 
 export type PartyEvent = {
   id: string
@@ -56,6 +57,9 @@ export type LedgerBillItem = {
   amount: number
   qty: number
   bags: number
+  type?: string
+  unit?: string
+  bagWeight?: number
 }
 
 export type LedgerPayment = CanonicalPaymentRecord & { date?: string }
@@ -91,8 +95,10 @@ export function buildPartyRows(params: {
   const itemBagsByBill = new Map<string, number>()
   for (const item of params.billItems) {
     itemSumByBill.set(item.billId, (itemSumByBill.get(item.billId) ?? 0) + item.amount)
-    itemQtyByBill.set(item.billId, (itemQtyByBill.get(item.billId) ?? 0) + item.qty)
-    itemBagsByBill.set(item.billId, (itemBagsByBill.get(item.billId) ?? 0) + item.bags)
+    if (isGasBillingItem(item)) {
+      itemQtyByBill.set(item.billId, (itemQtyByBill.get(item.billId) ?? 0) + item.qty)
+      itemBagsByBill.set(item.billId, (itemBagsByBill.get(item.billId) ?? 0) + item.bags)
+    }
   }
 
   return params.customers

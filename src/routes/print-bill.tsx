@@ -51,6 +51,9 @@ type BillPrintItem = {
   rate: number
   amount: number
   bags: number
+  type?: string
+  unit?: string
+  bagWeight?: number
 }
 
 const num = (value: unknown) => {
@@ -108,14 +111,17 @@ function PrintBillPage() {
   const printQuery = useQuery({
     queryKey: ['print-bill-data'],
     queryFn: async () => {
-      const [billsRaw, billItemsRaw, paymentsRaw, customersRaw] = await Promise.all([
+      const [billsRaw, billItemsRaw, paymentsRaw, customersRaw, itemsRaw] = await Promise.all([
         pb.collection('bills').getFullList({ sort: '-date,-bill_no' }),
         pb.collection('bill_items').getFullList(),
         pb.collection('payments').getFullList({ sort: 'date' }),
         pb.collection('customers').getFullList({ sort: 'company_name,name' }),
+        pb.collection('items').getFullList({ sort: 'name' }),
       ])
 
       const customerById = new Map((customersRaw as PBRecord[]).map((row) => [row.id, row]))
+      const itemById = new Map((itemsRaw as PBRecord[]).map((row) => [row.id, row]))
+      const itemByName = new Map((itemsRaw as PBRecord[]).map((row) => [String(row.name ?? '').trim().toLowerCase(), row]))
       const itemBaseByBill = new Map<string, number>()
       const itemRowsByBill = new Map<string, Array<{ itemName: string; qty: number }>>()
 
@@ -136,16 +142,20 @@ function PrintBillPage() {
           calculateBillTotalFromBase(itemBaseByBill.get(row.id) ?? 0, num(row.transport), num(row.gst_rate), num(row.gst_amount)),
         ),
       )
-      const billItems = (billItemsRaw as PBRecord[]).map(
-        (row): BillPrintItem & { billId: string } => ({
+      const billItems = (billItemsRaw as PBRecord[]).map((row): BillPrintItem & { billId: string } => {
+        const master = itemById.get(String(row.item ?? '')) ?? itemByName.get(String(row.item_name ?? '').trim().toLowerCase())
+        return {
           billId: String(row.bill ?? ''),
           itemName: String(row.item_name ?? ''),
           qty: num(row.qty),
           rate: num(row.rate),
           amount: num(row.amount),
           bags: num(row.bags),
-        }),
-      )
+          type: String(master?.type ?? ''),
+          unit: String(master?.unit ?? ''),
+          bagWeight: num(master?.bag_weight) || 50,
+        }
+      })
       const payments = (paymentsRaw as PBRecord[]).map((row) => ({
         customerId: String(row.customer ?? ''),
         date: datePart(row.date),

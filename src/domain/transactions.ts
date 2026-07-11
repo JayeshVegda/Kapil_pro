@@ -7,6 +7,9 @@ export type BillItemSnapshot = {
   itemName: string
   qty: number
   rate: number
+  type?: string
+  unit?: string
+  bagWeight?: number
 }
 
 export type BillSnapshot = CanonicalBillRecord & {
@@ -94,6 +97,9 @@ type BuildRowsInput = {
     qty: number
     rate: number
     amount: number
+    type?: string
+    unit?: string
+    bagWeight?: number
   }>
   payments: PaymentSnapshot[]
 }
@@ -105,7 +111,15 @@ export function buildTransactionRows(input: BuildRowsInput): TransactionRow[] {
   const amountByBill = new Map<string, number>()
   for (const item of input.billItems) {
     const list = itemsByBill.get(item.billId) ?? []
-    list.push({ itemId: item.itemId, itemName: item.itemName, qty: item.qty, rate: item.rate })
+    list.push({
+      itemId: item.itemId,
+      itemName: item.itemName,
+      qty: item.qty,
+      rate: item.rate,
+      type: item.type,
+      unit: item.unit,
+      bagWeight: item.bagWeight,
+    })
     itemsByBill.set(item.billId, list)
     amountByBill.set(item.billId, (amountByBill.get(item.billId) ?? 0) + item.amount)
   }

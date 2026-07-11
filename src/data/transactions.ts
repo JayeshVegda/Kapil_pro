@@ -3,7 +3,7 @@ import { recalculateAndPersistBillStatusesForCustomer } from '@/data/bill-status
 import { runDataOperation } from '@/data/reliability'
 import type { BillSnapshot, PaymentSnapshot } from '@/domain/transactions'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
-import { BAGS_PER_KG } from '@/shared/constants'
+import { calculateBillingLineAmount, calculateBillingLineBags, type BillingItemMeta } from '@/domain/billing-modes'
 
 type PBRecord = Record<string, unknown> & { id: string }
 
@@ -13,11 +13,6 @@ const num = (value: unknown) => {
 }
 
 const key = (value: unknown) => String(value ?? '').trim().toLowerCase()
-
-const bagsFromQtyKg = (qtyKg: number) => {
-  if (!(qtyKg > 0)) return 0
-  return Math.round(qtyKg * BAGS_PER_KG)
-}
 
 const datePart = (value: unknown) => String(value ?? '').slice(0, 10)
 const dateTimeText = (value: unknown) => String(value ?? '')
@@ -39,7 +34,7 @@ async function assertBillNumberAvailable(bookNo: number, billNo: number, current
 
 export type TransactionsContext = {
   customers: Array<{ id: string; name: string }>
-  items: Array<{ id: string; name: string; defaultRate: number }>
+  items: Array<{ id: string; name: string; defaultRate: number; type: string; unit: string; bagWeight: number }>
   bills: Array<{
     id: string
     date: string
@@ -62,6 +57,9 @@ export type TransactionsContext = {
     qty: number
     rate: number
     amount: number
+    type?: string
+    unit?: string
+    bagWeight?: number
   }>
   payments: PaymentSnapshot[]
 }
@@ -84,7 +82,14 @@ export async function loadTransactionsContext(): Promise<TransactionsContext> {
       id: row.id,
       name: formatCustomerDisplayName(row.company_name, row.name),
     })),
-    items: (itemsRaw as PBRecord[]).map((row) => ({ id: row.id, name: String(row.name ?? ''), defaultRate: num(row.default_rate) })),
+    items: (itemsRaw as PBRecord[]).map((row) => ({
+      id: row.id,
+      name: String(row.name ?? ''),
+      defaultRate: num(row.default_rate),
+      type: String(row.type ?? ''),
+      unit: String(row.unit ?? ''),
+      bagWeight: num(row.bag_weight) || 50,
+    })),
     bills: (billsRaw as PBRecord[]).map((row) => ({
       id: row.id,
       date: dateTimeText(row.date),
@@ -101,14 +106,21 @@ export async function loadTransactionsContext(): Promise<TransactionsContext> {
       lrNo: String(row.lr_no ?? ''),
       total: 0,
     })),
-    billItems: (billItemsRaw as PBRecord[]).map((row) => ({
-      billId: String(row.bill ?? ''),
-      itemId: String(row.item ?? ''),
-      itemName: String(row.item_name ?? ''),
-      qty: num(row.qty),
-      rate: num(row.rate),
-      amount: num(row.amount),
-    })),
+    billItems: (billItemsRaw as PBRecord[]).map((row) => {
+      const itemId = String(row.item ?? '')
+      const master = (itemsRaw as PBRecord[]).find((item) => item.id === itemId || key(item.name) === key(row.item_name))
+      return {
+        billId: String(row.bill ?? ''),
+        itemId,
+        itemName: String(row.item_name ?? ''),
+        qty: num(row.qty),
+        rate: num(row.rate),
+        amount: num(row.amount),
+        type: String(master?.type ?? ''),
+        unit: String(master?.unit ?? ''),
+        bagWeight: num(master?.bag_weight) || 50,
+      }
+    }),
     payments: (paymentsRaw as PBRecord[]).map((row) => ({
       id: row.id,
       businessDate: datePart(row.date),
@@ -152,21 +164,29 @@ export async function updateBillWithItems(
       filter: `bill = "${billId}"`,
     })
     const masterItems = await pb.collection('items').getFullList({ sort: 'name' })
-    const itemIdByName = new Map((masterItems as PBRecord[]).map((item) => [key(item.name), item.id]))
+    const itemByName = new Map((masterItems as PBRecord[]).map((item) => [key(item.name), item]))
     await pb.collection('bills').update(billId, nextBillPayload)
 
     const createdItemIds: string[] = []
     try {
       for (const item of input.items) {
-        const itemId = item.itemId || itemIdByName.get(key(item.itemName)) || ''
+        const masterItem = item.itemId
+          ? (masterItems as PBRecord[]).find((row) => row.id === item.itemId)
+          : itemByName.get(key(item.itemName))
+        const itemId = item.itemId || masterItem?.id || ''
+        const itemMeta: BillingItemMeta = {
+          type: String((item as BillingItemMeta).type ?? masterItem?.type ?? ''),
+          unit: String((item as BillingItemMeta).unit ?? masterItem?.unit ?? ''),
+          bagWeight: num((item as BillingItemMeta).bagWeight ?? masterItem?.bag_weight) || 50,
+        }
         const created = await pb.collection('bill_items').create({
           bill: billId,
           item: itemId,
           item_name: item.itemName,
           qty: item.qty,
           rate: item.rate,
-          amount: item.qty * item.rate,
-          bags: bagsFromQtyKg(item.qty),
+          amount: calculateBillingLineAmount(item),
+          bags: calculateBillingLineBags({ qty: item.qty, item: itemMeta }),
         })
         createdItemIds.push(created.id)
       }
@@ -226,17 +246,25 @@ export async function restoreBillFromSnapshot(snapshot: BillSnapshot) {
       lr_no: snapshot.lrNo,
     })
     const masterItems = await pb.collection('items').getFullList({ sort: 'name' })
-    const itemIdByName = new Map((masterItems as PBRecord[]).map((item) => [key(item.name), item.id]))
+    const itemByName = new Map((masterItems as PBRecord[]).map((item) => [key(item.name), item]))
     for (const item of snapshot.items) {
-      const itemId = item.itemId || itemIdByName.get(key(item.itemName)) || ''
+      const masterItem = item.itemId
+        ? (masterItems as PBRecord[]).find((row) => row.id === item.itemId)
+        : itemByName.get(key(item.itemName))
+      const itemId = item.itemId || masterItem?.id || ''
+      const itemMeta: BillingItemMeta = {
+        type: String((item as BillingItemMeta).type ?? masterItem?.type ?? ''),
+        unit: String((item as BillingItemMeta).unit ?? masterItem?.unit ?? ''),
+        bagWeight: num((item as BillingItemMeta).bagWeight ?? masterItem?.bag_weight) || 50,
+      }
       await pb.collection('bill_items').create({
         bill: bill.id,
         item: itemId,
         item_name: item.itemName,
         qty: item.qty,
         rate: item.rate,
-        amount: item.qty * item.rate,
-        bags: bagsFromQtyKg(item.qty),
+        amount: calculateBillingLineAmount(item),
+        bags: calculateBillingLineBags({ qty: item.qty, item: itemMeta }),
       })
     }
     await recalculateAndPersistBillStatusesForCustomer(snapshot.customerId)

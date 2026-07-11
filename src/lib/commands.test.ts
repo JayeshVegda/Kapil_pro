@@ -9,6 +9,7 @@ const customers = [
 const items = [
   { id: 'i1', name: 'Spindle (8.5GM)', defaultRate: 40, type: 'gas', unit: 'kg', bagWeight: 50 },
   { id: 'i2', name: 'Tapper Plug (10.50GM)', defaultRate: 60, type: 'gas', unit: 'kg', bagWeight: 50 },
+  { id: 'i3', name: 'F5 (400GM)', defaultRate: 4.35, type: 'electronic', unit: 'piece', bagWeight: 0 },
 ]
 
 describe('command parsing', () => {
@@ -71,6 +72,24 @@ describe('command parsing', () => {
     expect(parsed).toMatchObject({
       ok: true,
       command: { kind: 'bill', customer: { id: 'c1' }, item: { id: 'i1' }, qty: 100, rate: 540 },
+    })
+  })
+
+  it('keeps electronic bill commands on unit price instead of market rate', () => {
+    const parsed = parseBillCommand('ashish f5 40000', customers, items, '2026-05-20', 801)
+    expect(parsed).toMatchObject({
+      ok: true,
+      command: {
+        items: [
+          {
+            item: { id: 'i3' },
+            qty: 40000,
+            defaultRate: 4.35,
+            rate: 4.35,
+            manualRateEdited: false,
+          },
+        ],
+      },
     })
   })
 })

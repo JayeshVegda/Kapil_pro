@@ -11,6 +11,7 @@ import {
 import { formatMonthYear, getLocalIsoDate, toMonthKey } from '@/lib/date'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { buildMonthlyItemComparisons, type MonthlyItemComparisons } from '@/domain/monthly-item-rollup'
+import { isGasBillingItem } from '@/domain/billing-modes'
 
 export const DASHBOARD_QUERY_KEY = ['dashboard-data'] as const
 
@@ -162,7 +163,7 @@ export function buildReceivableRiskRows({
 }
 
 export async function fetchDashboardData(): Promise<DashboardData> {
-  const { billsRaw, billItemsRaw, paymentsRaw, customersRaw } = await loadDashboardCollections()
+  const { billsRaw, billItemsRaw, paymentsRaw, customersRaw, itemsRaw } = await loadDashboardCollections()
   const asOfDate = getLocalIsoDate()
 
   const itemSumByBill = new Map<string, number>()
@@ -171,6 +172,8 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     itemSumByBill.set(billId, (itemSumByBill.get(billId) ?? 0) + num(row.amount))
   }
   const customerDisplayById = new Map(customersRaw.map((row) => [row.id, formatCustomerDisplayName(row.company_name, row.name)]))
+  const itemById = new Map(itemsRaw.map((row) => [row.id, row]))
+  const itemByName = new Map(itemsRaw.map((row) => [String(row.name ?? '').trim().toLowerCase(), row]))
 
   const bills = billsRaw
     .filter((row) => datePart(row.date) <= asOfDate)
@@ -232,8 +235,10 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     if (!billDate) continue
     const name = String(row.item_name ?? '').trim()
     if (!name) continue
-    const bags = num(row.bags)
-    const kg = num(row.qty)
+    const itemMeta = itemById.get(String(row.item ?? '')) ?? itemByName.get(name.toLowerCase())
+    const isGas = isGasBillingItem({ type: String(itemMeta?.type ?? '') })
+    const bags = isGas ? num(row.bags) : 0
+    const kg = isGas ? num(row.qty) : 0
     const nameLower = name.toLowerCase()
     if (nameLower.includes('spindle')) {
       allTimeSpindleBags += bags
@@ -241,7 +246,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     }
     if (nameLower.includes('tapper') && nameLower.includes('plug')) allTimeTapperPlugBags += bags
 
-    if (monthKey(billDate) === nowMonth) {
+    if (isGas && monthKey(billDate) === nowMonth) {
       const cur = thisMonthItemAgg.get(name) ?? { bags: 0, kg: 0 }
       cur.bags += bags
       cur.kg += kg
@@ -291,8 +296,10 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     if (!billDate || monthKey(billDate) !== nowMonth) continue
     const name = String(row.item_name ?? '').trim().toLowerCase()
     if (!name) continue
-    const bags = num(row.bags)
-    const kg = num(row.qty)
+    const itemMeta = itemById.get(String(row.item ?? '')) ?? itemByName.get(name)
+    const isGas = isGasBillingItem({ type: String(itemMeta?.type ?? '') })
+    const bags = isGas ? num(row.bags) : 0
+    const kg = isGas ? num(row.qty) : 0
     if (name.includes('spindle')) thisMonthSpindleBags += bags
     if (name.includes('tapper') && name.includes('plug')) thisMonthTapperPlugBags += bags
     if (name.includes('spindle')) thisMonthSpindleKg += kg

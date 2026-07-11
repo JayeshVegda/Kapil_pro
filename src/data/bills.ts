@@ -2,12 +2,7 @@ import { recalculateAndPersistBillStatusesForCustomer } from '@/data/bill-status
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
 import { calculateBillTotals, type BillItemInput } from '@/domain/billing-calculations'
-import { BAGS_PER_KG } from '@/shared/constants'
-
-const bagsFromQtyKg = (qtyKg: number) => {
-  if (!(qtyKg > 0)) return 0
-  return Math.round(qtyKg * BAGS_PER_KG)
-}
+import { calculateBillingLineAmount, calculateBillingLineBags, type BillingItemMeta } from '@/domain/billing-modes'
 
 export async function assertBillNumberAvailable(bookNo: number, billNo: number) {
   const existing = await pb
@@ -54,7 +49,7 @@ type SaveBillInput = {
   gstRate: number
   gstAmount: number
   lrList: string[]
-  items: Array<BillItemInput & { itemId?: string; itemName: string }>
+  items: Array<BillItemInput & { itemId?: string; itemName: string } & BillingItemMeta>
 }
 
 export async function saveBillWithItems(input: SaveBillInput) {
@@ -92,8 +87,8 @@ export async function saveBillWithItems(input: SaveBillInput) {
           item_name: row.itemName,
           qty: row.qty,
           rate: row.rate,
-          amount: row.qty * row.rate,
-          bags: bagsFromQtyKg(row.qty),
+          amount: calculateBillingLineAmount(row),
+          bags: calculateBillingLineBags({ qty: row.qty, item: row }),
         })
         createdItemIds.push(created.id)
       }

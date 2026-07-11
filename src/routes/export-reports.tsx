@@ -12,6 +12,7 @@ import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } 
 import { buildBackupSnapshot, type BackupSnapshot } from '@/data/backup'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { getBillingUnit, isGasBillingItem } from '@/domain/billing-modes'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { BILL_PREVIEW_CARD_CLASS, BILL_PRINT_JPEG_QUALITY_DOWNLOAD } from '@/lib/bill-print-export'
 import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
@@ -403,7 +404,7 @@ function buildSalesRegister(snapshot: BackupSnapshot, range: { start: string; en
       formatInrInteger(num(bill.transport)),
       formatInrInteger(num(bill.gst_amount)),
       formatInrInteger(total),
-      includeBillItems ? itemDetails(billItemsByBill.get(bill.id) ?? []) : String(bill.lr_no ?? ''),
+      includeBillItems ? itemDetails(snapshot, billItemsByBill.get(bill.id) ?? []) : String(bill.lr_no ?? ''),
     ]
   })
   const total = bills.reduce((sum, bill) => sum + calculateBillTotalFromBase(itemBaseByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount)), 0)
@@ -505,7 +506,7 @@ function buildPartyPackage(snapshot: BackupSnapshot, partyId: string, range: { s
           ref: billRef(bill),
           debit: total,
           credit: 0,
-          details: includeBillItems ? itemDetails(billItemsByBill.get(bill.id) ?? []) : String(bill.lr_no ?? ''),
+          details: includeBillItems ? itemDetails(snapshot, billItemsByBill.get(bill.id) ?? []) : String(bill.lr_no ?? ''),
         }
       }),
     ...snapshot.data.payments
@@ -549,16 +550,27 @@ function buildPartyPackage(snapshot: BackupSnapshot, partyId: string, range: { s
     .sort((a, b) => datePart(a.date).localeCompare(datePart(b.date)))
   const totalBills = bills.reduce((sum, bill) => sum + billTotal(snapshot, bill), 0)
   const totalPayments = payments.reduce((sum, payment) => sum + num(payment.amount), 0)
-  const totalQty = bills.reduce((sum, bill) => sum + (billItemsByBill.get(bill.id) ?? []).reduce((itemSum, item) => itemSum + num(item.qty), 0), 0)
+  const totalGasQty = bills.reduce((sum, bill) => {
+    const items = billItemsByBill.get(bill.id) ?? []
+    return sum + items
+      .filter((item) => isGasBillingItem({ type: String(findSnapshotItem(snapshot, item)?.type ?? '') }))
+      .reduce((itemSum, item) => itemSum + num(item.qty), 0)
+  }, 0)
+  const totalElectronicQty = bills.reduce((sum, bill) => {
+    const items = billItemsByBill.get(bill.id) ?? []
+    return sum + items
+      .filter((item) => !isGasBillingItem({ type: String(findSnapshotItem(snapshot, item)?.type ?? '') }))
+      .reduce((itemSum, item) => itemSum + num(item.qty), 0)
+  }, 0)
+  const totalQty = totalGasQty + totalElectronicQty
 
   const billSummaryRows = bills.map((bill) => {
     const items = billItemsByBill.get(bill.id) ?? []
-    const qty = items.reduce((sum, item) => sum + num(item.qty), 0)
     return [
       formatFullDate(datePart(bill.date)),
       billRef(bill),
-      itemDetails(items) || '-',
-      formatInQty(qty, 'kg'),
+      itemDetails(snapshot, items) || '-',
+      formatExportQty(snapshot, items),
       formatInrInteger(billTotal(snapshot, bill)),
     ]
   })
@@ -579,9 +591,9 @@ function buildPartyPackage(snapshot: BackupSnapshot, partyId: string, range: { s
         csvDate(datePart(bill.date)),
         billRef(bill),
         billRef(bill),
-        itemDetails(items) || 'Items',
+        itemDetails(snapshot, items) || 'Items',
         String(qty),
-        'kg',
+        formatExportUnit(snapshot, items),
         String(qty > 0 ? Math.round(base / qty) : 0),
         String(billTotal(snapshot, bill)),
         String(balanceAfterById.get(bill.id) ?? 0),
@@ -658,7 +670,7 @@ function buildPartyPackage(snapshot: BackupSnapshot, partyId: string, range: { s
     billSummaryRows,
     billSummary: [
       { label: 'Total Bills', value: String(bills.length) },
-      { label: 'Total Qty', value: formatInQty(totalQty, 'kg') },
+      { label: 'Total Qty', value: formatQtyTotals(totalGasQty, totalElectronicQty) },
       { label: 'Total Amount', value: formatInrInteger(totalBills) },
     ],
     paymentSummaryColumns: ['Date', 'Mode', 'Reference', 'Amount', 'Balance After'],
@@ -827,7 +839,7 @@ function buildBookRegisterRows(snapshot: BackupSnapshot, bills: PBRecord[]) {
     billRef(bill),
     String(bill.customer_name ?? ''),
     formatInrInteger(billTotal(snapshot, bill)),
-    itemDetails(billItemsByBill.get(bill.id) ?? []),
+    itemDetails(snapshot, billItemsByBill.get(bill.id) ?? []),
   ])
 }
 
@@ -889,13 +901,23 @@ function buildBillPrintProps(snapshot: BackupSnapshot, selectedBill: PBRecord): 
   const currentIdx = Math.max(0, allCustomerBills.findIndex((bill) => bill.id === selectedBill.id))
   const itemRows = snapshot.data.billItems
     .filter((item) => String(item.bill ?? '') === selectedBill.id)
-    .map((item) => ({
-      itemName: String(item.item_name ?? ''),
-      qty: num(item.qty),
-      rate: num(item.rate),
-      amount: num(item.amount),
-      bags: num(item.bags),
-    }))
+    .map((item) => {
+      const master = snapshot.data.items.find(
+        (row) =>
+          row.id === String(item.item ?? '') ||
+          String(row.name ?? '').trim().toLowerCase() === String(item.item_name ?? '').trim().toLowerCase(),
+      )
+      return {
+        itemName: String(item.item_name ?? ''),
+        qty: num(item.qty),
+        rate: num(item.rate),
+        amount: num(item.amount),
+        bags: num(item.bags),
+        type: String(master?.type ?? ''),
+        unit: String(master?.unit ?? ''),
+        bagWeight: num(master?.bag_weight) || 50,
+      }
+    })
   const itemBaseTotal = itemRows.reduce((sum, row) => sum + row.amount, 0)
   const gstRate = num(selectedBill.gst_rate)
   const gstAmount = num(selectedBill.gst_amount) > 0 ? num(selectedBill.gst_amount) : (itemBaseTotal * gstRate) / 100
@@ -1194,8 +1216,42 @@ function billRef(row: PBRecord) {
   return `${num(row.book_no)}/${num(row.bill_no)}`
 }
 
-function itemDetails(items: PBRecord[]) {
-  return items.map((item) => `${String(item.item_name ?? '')} ${formatInQty(num(item.qty), 'kg')}`).join(' | ')
+function itemDetails(snapshot: BackupSnapshot, items: PBRecord[]) {
+  return items.map((item) => {
+    const meta = findSnapshotItem(snapshot, item)
+    const unit = getBillingUnit({ type: String(meta?.type ?? ''), unit: String(meta?.unit ?? '') })
+    const qty = num(item.qty)
+    return `${String(item.item_name ?? '')} ${unit === 'piece' ? `${Math.round(qty)} pcs` : formatInQty(qty, unit)}`
+  }).join(' | ')
+}
+
+function formatExportQty(snapshot: BackupSnapshot, items: PBRecord[]) {
+  const gasQty = items
+    .filter((item) => isGasBillingItem({ type: String(findSnapshotItem(snapshot, item)?.type ?? '') }))
+    .reduce((sum, item) => sum + num(item.qty), 0)
+  const electronicQty = items
+    .filter((item) => !isGasBillingItem({ type: String(findSnapshotItem(snapshot, item)?.type ?? '') }))
+    .reduce((sum, item) => sum + num(item.qty), 0)
+  return formatQtyTotals(gasQty, electronicQty)
+}
+
+function formatQtyTotals(gasQty: number, electronicQty: number) {
+  if (gasQty > 0 && electronicQty > 0) return `${formatInQty(gasQty, 'kg')} / ${Math.round(electronicQty)} pcs`
+  if (electronicQty > 0) return `${Math.round(electronicQty)} pcs`
+  return formatInQty(gasQty, 'kg')
+}
+
+function formatExportUnit(snapshot: BackupSnapshot, items: PBRecord[]) {
+  const hasGas = items.some((item) => isGasBillingItem({ type: String(findSnapshotItem(snapshot, item)?.type ?? '') }))
+  const hasElectronic = items.some((item) => !isGasBillingItem({ type: String(findSnapshotItem(snapshot, item)?.type ?? '') }))
+  if (hasGas && hasElectronic) return 'mixed'
+  return hasElectronic ? 'piece' : 'kg'
+}
+
+function findSnapshotItem(snapshot: BackupSnapshot, item: PBRecord) {
+  const itemId = String(item.item ?? '')
+  const itemName = String(item.item_name ?? '').trim().toLowerCase()
+  return snapshot.data.items.find((row) => row.id === itemId || String(row.name ?? '').trim().toLowerCase() === itemName)
 }
 
 function datePart(value: unknown) {

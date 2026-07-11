@@ -10,6 +10,7 @@ import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } 
 import { buildBackupSnapshot, type BackupSnapshot } from '@/data/backup'
 import { loadPartyDashboard, loadPartyStatement } from '@/data/ledger'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { getBillingUnit, isGasBillingItem } from '@/domain/billing-modes'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { BILL_PREVIEW_CARD_CLASS, BILL_PRINT_JPEG_QUALITY_DOWNLOAD } from '@/lib/bill-print-export'
 import { formatCompanyName } from '@/lib/customer-display'
@@ -440,7 +441,7 @@ function LedgerPage() {
               <div className="grid grid-cols-2 gap-x-2.5 gap-y-1 text-[10px] font-medium text-slate-500 pt-0.5">
                 <SummaryLine label="Total Bills" value={String(selectedRow.billCount)} />
                 <SummaryLine label="Total Bags" value={String(Math.round(selectedRow.totalBags))} />
-                <SummaryLine label="Total Weight" value={`${Math.round(selectedRow.totalWeight)} kg`} />
+                <SummaryLine label="Gas Weight" value={`${Math.round(selectedRow.totalWeight)} kg`} />
                 <SummaryLine label="Avg Rate" value={formatInrInteger(selectedRow.averageSellingRate)} />
               </div>
             </div>
@@ -557,7 +558,7 @@ function LedgerPage() {
                     <th className="px-3 py-2 text-left font-bold text-slate-600">Item Name</th>
                     <th className="px-3 py-2 text-right font-bold text-slate-600 w-20">Bills</th>
                     <th className="px-3 py-2 text-right font-bold text-slate-600 w-24">Bags</th>
-                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Qty (kg)</th>
+                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Qty</th>
                     <th className="px-3 py-2 text-right font-bold text-slate-600 w-32">Amount</th>
                     <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Avg Rate</th>
                     <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Last Purchased</th>
@@ -790,7 +791,7 @@ function buildLedgerPartyPackage(snapshot: BackupSnapshot, partyId: string, asOf
       ref: billRef(bill),
       debit: billTotal(snapshot, bill),
       credit: 0,
-      details: itemDetails(billItemsByBill.get(bill.id) ?? []),
+      details: itemDetails(snapshot, billItemsByBill.get(bill.id) ?? []),
     })),
     ...payments.map((payment) => ({
       id: payment.id,
@@ -821,12 +822,11 @@ function buildLedgerPartyPackage(snapshot: BackupSnapshot, partyId: string, asOf
   const billColumns = ['Date', 'Bill No.', 'Items', 'Qty', 'Amount', 'Balance']
   const billRows = bills.map((bill) => {
     const items = billItemsByBill.get(bill.id) ?? []
-    const qty = items.reduce((sum, item) => sum + num(item.qty), 0)
     return [
       formatFullDate(datePart(bill.date)),
       billRef(bill),
-      itemDetails(items) || '-',
-      formatInQty(qty, 'kg'),
+      itemDetails(snapshot, items) || '-',
+      formatExportQty(snapshot, items),
       formatInrInteger(billTotal(snapshot, bill)),
       formatInrInteger(balanceAfterById.get(bill.id) ?? 0),
     ]
@@ -837,7 +837,7 @@ function buildLedgerPartyPackage(snapshot: BackupSnapshot, partyId: string, asOf
     return [
       datePart(bill.date),
       billRef(bill),
-      itemDetails(items) || '-',
+      itemDetails(snapshot, items) || '-',
       qty,
       billTotal(snapshot, bill),
       balanceAfterById.get(bill.id) ?? 0,
@@ -1017,13 +1017,23 @@ function buildBillPrintProps(snapshot: BackupSnapshot, selectedBill: PBRecord): 
   const currentIdx = Math.max(0, allCustomerBills.findIndex((bill) => bill.id === selectedBill.id))
   const itemRows = snapshot.data.billItems
     .filter((item) => String(item.bill ?? '') === selectedBill.id)
-    .map((item) => ({
-      itemName: String(item.item_name ?? ''),
-      qty: num(item.qty),
-      rate: num(item.rate),
-      amount: num(item.amount),
-      bags: num(item.bags),
-    }))
+    .map((item) => {
+      const master = snapshot.data.items.find(
+        (row) =>
+          row.id === String(item.item ?? '') ||
+          String(row.name ?? '').trim().toLowerCase() === String(item.item_name ?? '').trim().toLowerCase(),
+      )
+      return {
+        itemName: String(item.item_name ?? ''),
+        qty: num(item.qty),
+        rate: num(item.rate),
+        amount: num(item.amount),
+        bags: num(item.bags),
+        type: String(master?.type ?? ''),
+        unit: String(master?.unit ?? ''),
+        bagWeight: num(master?.bag_weight) || 50,
+      }
+    })
   const itemBaseTotal = itemRows.reduce((sum, row) => sum + row.amount, 0)
   const gstRate = num(selectedBill.gst_rate)
   const gstAmount = num(selectedBill.gst_amount) > 0 ? num(selectedBill.gst_amount) : (itemBaseTotal * gstRate) / 100
@@ -1212,8 +1222,31 @@ function billRef(row: PBRecord) {
   return `${num(row.book_no)}/${num(row.bill_no)}`
 }
 
-function itemDetails(items: PBRecord[]) {
-  return items.map((item) => `${String(item.item_name ?? '')} ${formatInQty(num(item.qty), 'kg')}`).join(' | ')
+function itemDetails(snapshot: BackupSnapshot, items: PBRecord[]) {
+  return items.map((item) => {
+    const meta = findSnapshotItem(snapshot, item)
+    const unit = getBillingUnit({ type: String(meta?.type ?? ''), unit: String(meta?.unit ?? '') })
+    const qty = num(item.qty)
+    return `${String(item.item_name ?? '')} ${unit === 'piece' ? `${Math.round(qty)} pcs` : formatInQty(qty, unit)}`
+  }).join(' | ')
+}
+
+function formatExportQty(snapshot: BackupSnapshot, items: PBRecord[]) {
+  const gasQty = items
+    .filter((item) => isGasBillingItem({ type: String(findSnapshotItem(snapshot, item)?.type ?? '') }))
+    .reduce((sum, item) => sum + num(item.qty), 0)
+  const electronicQty = items
+    .filter((item) => !isGasBillingItem({ type: String(findSnapshotItem(snapshot, item)?.type ?? '') }))
+    .reduce((sum, item) => sum + num(item.qty), 0)
+  if (gasQty > 0 && electronicQty > 0) return `${formatInQty(gasQty, 'kg')} / ${Math.round(electronicQty)} pcs`
+  if (electronicQty > 0) return `${Math.round(electronicQty)} pcs`
+  return formatInQty(gasQty, 'kg')
+}
+
+function findSnapshotItem(snapshot: BackupSnapshot, item: PBRecord) {
+  const itemId = String(item.item ?? '')
+  const itemName = String(item.item_name ?? '').trim().toLowerCase()
+  return snapshot.data.items.find((row) => row.id === itemId || String(row.name ?? '').trim().toLowerCase() === itemName)
 }
 
 function compareBillDate(a: PBRecord, b: PBRecord) {
