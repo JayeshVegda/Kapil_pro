@@ -123,3 +123,5 @@ The installed schedule is `/etc/cron.d/kapil-pocketbase-dr`:
 
 Logs are written to
 `/opt/stacks/sites/kapil/replica_state/backup-cron.log`.
+Six-hour PocketBase archives are retained in encrypted Backblaze storage for 30
+days.

@@ -93,6 +93,9 @@ async function main() {
     name,
     objectPath: SKIP_B2 ? null : objectPath,
     telegramSent: SEND_TELEGRAM,
+    lastTelegramAt: SEND_TELEGRAM
+      ? new Date().toISOString()
+      : previousStatus?.lastTelegramAt || null,
     localRestored: !SKIP_LOCAL_RESTORE,
     recordTotal,
     ...validation,
@@ -179,6 +182,19 @@ async function uploadToBackblaze(archivePath, objectPath) {
   })
   const metadata = JSON.parse(listed)
   if (Number(metadata.Size || 0) <= 0) throw new Error('Backblaze verification returned an empty object')
+  await runCommand(
+    'rclone',
+    [
+      'delete',
+      '--min-age',
+      '30d',
+      '--include',
+      '????/??/dr_kapil_*.zip',
+      '--rmdirs',
+      'kapilcrypt:',
+    ],
+    { env: rcloneEnvironment },
+  )
 }
 
 async function restoreLocalStandby(archivePath, name) {

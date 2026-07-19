@@ -61,7 +61,8 @@ record total, and SHA-256 in the caption.
 
 Backblaze retention remains independent from PocketBase Cloud. Existing nightly
 Restic snapshots continue to protect the local standby data directory and the
-deployment files.
+deployment files. Six-hour Backblaze PocketBase archives use a rolling 30-day
+retention window.
 
 ## Failover
 
