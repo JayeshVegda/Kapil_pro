@@ -29,8 +29,9 @@ Backblaze B2 and deliver one encrypted archive to Telegram each day.
 - Auto-date fields and file metadata are excluded from normalized business-data
   comparisons because PocketBase manages their physical values.
 - The worker refuses to continue when collection schemas differ.
-- A deletion guard stops a cycle if the proposed deletions exceed 50 records or
-  20 percent of any non-empty target collection.
+- A deletion guard stops a cycle if the proposed deletions exceed 50 records, or
+  if a batch of at least five deletions exceeds 20 percent of a non-empty target
+  collection. A single valid deletion in a small collection remains replicable.
 - A failed or partial cycle is retried from a fresh Cloud read; no local state is
   used as a source of truth.
 - Replication status is written atomically with the last success time, lag,

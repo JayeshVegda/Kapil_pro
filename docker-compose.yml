@@ -9,6 +9,17 @@ services:
     networks:
       - proxy-net
     mem_limit: 64m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
 
   kapil-pb:
     image: ghcr.io/muchobien/pocketbase:latest
@@ -23,6 +34,58 @@ services:
     networks:
       - proxy-net
     mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8090/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  kapil-replica:
+    image: node:alpine
+    container_name: kapil-billing-pb-replica
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - .:/app:ro
+      - ./replica_state:/state
+    entrypoint: ["node", "scripts/pb-replica.mjs"]
+    environment:
+      SOURCE_PB_URL: https://7ddi60xr8g6ktz3.ba7w.pocketbasecloud.com
+      TARGET_PB_URL: http://kapil-pb:8090
+      PB_ADMIN_EMAIL: ${PB_ADMIN_EMAIL:?Run docker compose through Doppler or set PB_ADMIN_EMAIL}
+      PB_ADMIN_PASSWORD: ${PB_ADMIN_PASSWORD:?Run docker compose through Doppler or set PB_ADMIN_PASSWORD}
+      REPLICA_STATE_FILE: /state/status.json
+      REPLICA_MAINTENANCE_FILE: /state/maintenance
+      REPLICA_CYCLE_FILE: /state/cycle
+      REPLICA_INTERVAL_SECONDS: ${REPLICA_INTERVAL_SECONDS:-60}
+      REPLICA_HEALTH_MAX_AGE_SECONDS: 120
+      REPLICA_MAX_DELETES: 50
+      REPLICA_MAX_DELETE_RATIO_PERCENT: 20
+      BRASS_TELEGRAM_BOT_TOKEN: ${BRASS_TELEGRAM_BOT_TOKEN:?Run docker compose through Doppler or set BRASS_TELEGRAM_BOT_TOKEN}
+      BRASS_TELEGRAM_CHAT_ID: ${BRASS_TELEGRAM_CHAT_ID:?Run docker compose through Doppler or set BRASS_TELEGRAM_CHAT_ID}
+    networks:
+      - proxy-net
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "node", "scripts/check-replica-health.mjs"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    depends_on:
+      kapil-pb:
+        condition: service_healthy
 
   kapil-bot:
     image: node:alpine
@@ -42,15 +105,23 @@ services:
       BRASS_DAEMON_ACTIVE_INTERVAL_SECONDS: ${BRASS_DAEMON_ACTIVE_INTERVAL_SECONDS:-120}
       BRASS_DAEMON_IDLE_INTERVAL_SECONDS: ${BRASS_DAEMON_IDLE_INTERVAL_SECONDS:-900}
       BRASS_DAEMON_REQUIRE_TODAY: ${BRASS_DAEMON_REQUIRE_TODAY:-true}
-      PB_URL: http://kapil-pb:8090
+      PB_URL: https://7ddi60xr8g6ktz3.ba7w.pocketbasecloud.com
       PB_ADMIN_EMAIL: ${PB_ADMIN_EMAIL:?Run docker compose through Doppler or set PB_ADMIN_EMAIL}
       PB_ADMIN_PASSWORD: ${PB_ADMIN_PASSWORD:?Run docker compose through Doppler or set PB_ADMIN_PASSWORD}
     networks:
       - proxy-net
     mem_limit: 128m
-    depends_on:
-      - kapil-pb
-
+    healthcheck:
+      test: ["CMD-SHELL", "case \"$$(cat /proc/1/comm)\" in node*) exit 0;; *) exit 1;; esac"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
 networks:
   proxy-net:
     external: true
