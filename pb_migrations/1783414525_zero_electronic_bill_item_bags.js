@@ -1,6 +1,6 @@
 /// <reference path="../pb_data/types.d.ts" />
 migrate((app) => {
-  return app.db()
+  app.db()
     .newQuery(`
       UPDATE bill_items
       SET bags = 0
@@ -17,7 +17,7 @@ migrate((app) => {
     `)
     .execute()
 }, (app) => {
-  return app.db()
+  app.db()
     .newQuery(`
       UPDATE bill_items
       SET bags = round(qty / 50)
