@@ -76,6 +76,31 @@ export function nextBillNoForBook(bookNo: number, usedBillNos: number[]) {
   return highest >= lastBillNo ? null : highest + 1
 }
 
+export function resolveCustomerBookSelection(input: {
+  preferredBookNo: number
+  preferredNextBillNo: number | null
+  temporaryBookNo?: number
+  temporaryNextBillNo?: number | null
+}) {
+  const temporaryBookNo = input.temporaryBookNo ?? 69
+  if (input.preferredNextBillNo != null) {
+    return {
+      preferredBookNo: input.preferredBookNo,
+      bookNo: input.preferredBookNo,
+      billNo: input.preferredNextBillNo,
+      warning: '',
+    }
+  }
+  return {
+    preferredBookNo: input.preferredBookNo,
+    bookNo: temporaryBookNo,
+    billNo: input.temporaryNextBillNo ?? null,
+    warning: input.temporaryNextBillNo == null
+      ? `Preferred book ${input.preferredBookNo} and temporary book ${temporaryBookNo} are finished.`
+      : `Preferred book ${input.preferredBookNo} is finished. Using temporary book ${temporaryBookNo}.`,
+  }
+}
+
 export function findMisfiledBills(records: BillNumberRecord[]): MisfiledBill[] {
   return records
     .filter((record) => isPositiveInt(record.bookNo) && isPositiveInt(record.billNo))

@@ -9,6 +9,7 @@ import {
   getBookRange,
   isBillNoInBook,
   nextBillNoForBook,
+  resolveCustomerBookSelection,
   type BillNumberRecord,
 } from '@/domain/bill-books'
 
@@ -63,6 +64,22 @@ export async function suggestNextBillNo(bookNo: number, _billNo: number) {
 /** Next number to write in the book (one past the highest used). */
 export async function getNextBillNoForBook(bookNo: number) {
   return nextBillNoForBook(bookNo, await loadUsedBillNos(bookNo))
+}
+
+export async function getCustomerBookSelection(customerId: string, temporaryBookNo = 69) {
+  if (!customerId) return null
+  const latest = await pb.collection('bills').getList(1, 1, {
+    filter: pb.filter('customer = {:customerId}', { customerId }),
+    fields: 'id,book_no,date,created',
+    sort: '-date,-created,-id',
+  })
+  const preferredBookNo = Number(latest.items[0]?.book_no ?? 0)
+  if (!(preferredBookNo > 0)) return null
+  const preferredNextBillNo = await getNextBillNoForBook(preferredBookNo)
+  const temporaryNextBillNo = preferredBookNo === temporaryBookNo
+    ? preferredNextBillNo
+    : await getNextBillNoForBook(temporaryBookNo)
+  return resolveCustomerBookSelection({ preferredBookNo, preferredNextBillNo, temporaryBookNo, temporaryNextBillNo })
 }
 
 export async function loadBookRegister() {

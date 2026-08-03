@@ -8,7 +8,7 @@ import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } 
 import { DateInput } from '@/components/ui/date-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
-import { assertBillNumberAvailable, getNextBillNoForBook, saveBillWithItems } from '@/data/bills'
+import { assertBillNumberAvailable, getCustomerBookSelection, getNextBillNoForBook, saveBillWithItems } from '@/data/bills'
 import { bookNoForBillNo, getBookRange, isBillNoInBook } from '@/domain/bill-books'
 import { savePayment } from '@/data/payments'
 import { pb } from '@/data/pocketbase'
@@ -172,6 +172,7 @@ function NewBillPage() {
   const [lrList, setLrList] = useState<string[]>([])
   const [rows, setRows] = useState<BillItemRow[]>([newBillItemRow()])
   const [statusText, setStatusText] = useState('')
+  const [bookSelectionWarning, setBookSelectionWarning] = useState('')
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
   const [marketPillOpen, setMarketPillOpen] = useState(false)
@@ -181,6 +182,7 @@ function NewBillPage() {
   const [previewBalanceSnapshot, setPreviewBalanceSnapshot] = useState<AutoBalanceContext | null>(null)
   const { marketRate, refreshMarketRate } = useMarketRate(date)
   const billNoInitializedRef = useRef(false)
+  const manualBookRef = useRef(false)
   const manualBillNoRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
 
@@ -219,6 +221,11 @@ function NewBillPage() {
     queryKey: ['next-bill-no', bookNo],
     queryFn: () => getNextBillNoForBook(bookNo),
     enabled: bookNo > 0,
+  })
+  const customerBookQuery = useQuery({
+    queryKey: ['customer-book-selection', customerId],
+    queryFn: () => getCustomerBookSelection(customerId),
+    enabled: Boolean(customerId),
   })
   // `null` means every number in the book is used; fall back to the book start so the field stays usable.
   const isBookFull = !nextBillNoQuery.isLoading && nextBillNoQuery.data === null
@@ -497,6 +504,7 @@ function NewBillPage() {
     setQuickPayments([])
     setLrInput('')
     setLrList([])
+    manualBookRef.current = false
     manualBillNoRef.current = false
     void getNextBillNoForBook(bookNo)
       .then((next) => setBillNo(next ?? getBookRange(bookNo).firstBillNo))
@@ -505,6 +513,7 @@ function NewBillPage() {
     setQuickCommandInput('')
     setPendingCommandPreview(false)
     setPreviewBalanceSnapshot(null)
+    setBookSelectionWarning('')
   }
 
   function addLrChip() {
@@ -672,7 +681,10 @@ function NewBillPage() {
     const command = parsed.command
     const nextGstMode = command.gstMode === 'manual' ? 'manual' : command.gstRate === 18 ? 'percent18' : 'none'
     const itemMasters = itemsQuery.data ?? []
+    const automaticBook = command.bookNo ? null : await getCustomerBookSelection(command.customer.id).catch(() => null)
     if (command.bookNo) {
+      manualBookRef.current = true
+      setBookSelectionWarning('')
       setBookNo(command.bookNo)
       if (command.billNo) {
         manualBillNoRef.current = true
@@ -682,6 +694,12 @@ function NewBillPage() {
         const nextNo = await getNextBillNoForBook(command.bookNo).catch(() => null)
         setBillNo(nextNo ?? getBookRange(command.bookNo).firstBillNo)
       }
+    } else if (automaticBook) {
+      manualBookRef.current = false
+      manualBillNoRef.current = Boolean(command.billNo)
+      setBookNo(automaticBook.bookNo)
+      setBillNo(command.billNo ?? automaticBook.billNo ?? 0)
+      setBookSelectionWarning(automaticBook.warning)
     } else if (command.billNo) {
       manualBillNoRef.current = true
       setBillNo(command.billNo)
@@ -828,6 +846,15 @@ function NewBillPage() {
   }, [marketRate.rate])
 
   useEffect(() => {
+    const selection = customerBookQuery.data
+    if (!selection || manualBookRef.current) return
+    manualBillNoRef.current = false
+    setBookNo(selection.bookNo)
+    setBillNo(selection.billNo ?? 0)
+    setBookSelectionWarning(selection.warning)
+  }, [customerBookQuery.data])
+
+  useEffect(() => {
     if (billNoInitializedRef.current) return
     if (nextBillNoQuery.isLoading) return
     setBillNo(resolvedNextBillNo)
@@ -914,13 +941,15 @@ function NewBillPage() {
           </div>
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <Field label="Book No">
+          <Field label="Book No" hint={bookSelectionWarning || undefined} hintTone={bookSelectionWarning ? 'warning' : 'muted'}>
             <input
               className={inputClass}
               type="number"
               value={bookNo}
               onChange={(e) => {
+                manualBookRef.current = true
                 manualBillNoRef.current = false
+                setBookSelectionWarning('')
                 setBookNo(parseNonNegativeNumber(e.target.value))
               }}
             />
@@ -948,6 +977,8 @@ function NewBillPage() {
               options={customersQuery.data ?? []}
               value={customerId}
               onChange={(nextId) => {
+                manualBookRef.current = false
+                manualBillNoRef.current = false
                 setCustomerId(nextId)
                 setRows([newBillItemRow()])
                 setStatusText('')

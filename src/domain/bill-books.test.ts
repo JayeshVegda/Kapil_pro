@@ -7,6 +7,7 @@ import {
   getBookRange,
   isBillNoInBook,
   nextBillNoForBook,
+  resolveCustomerBookSelection,
   type BillNumberRecord,
 } from '@/domain/bill-books'
 
@@ -83,6 +84,26 @@ describe('nextBillNoForBook', () => {
     expect(nextBillNoForBook(151, [151, 200])).toBeNull()
     const full = Array.from({ length: BILL_BOOK_SIZE }, (_, index) => 151 + index)
     expect(nextBillNoForBook(151, full)).toBeNull()
+  })
+})
+
+describe('resolveCustomerBookSelection', () => {
+  it('keeps the customer preferred book while it has pages', () => {
+    expect(resolveCustomerBookSelection({ preferredBookNo: 151, preferredNextBillNo: 188, temporaryBookNo: 69, temporaryNextBillNo: 75 })).toEqual({
+      preferredBookNo: 151,
+      bookNo: 151,
+      billNo: 188,
+      warning: '',
+    })
+  })
+
+  it('warns and uses temporary book 69 when the preferred book is finished', () => {
+    expect(resolveCustomerBookSelection({ preferredBookNo: 151, preferredNextBillNo: null, temporaryBookNo: 69, temporaryNextBillNo: 75 })).toEqual({
+      preferredBookNo: 151,
+      bookNo: 69,
+      billNo: 75,
+      warning: 'Preferred book 151 is finished. Using temporary book 69.',
+    })
   })
 })
 

@@ -5,6 +5,9 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 import { pb } from '@/data/pocketbase'
 import { loadQuickSearchResults, type QuickSearchResult } from '@/data/quick-search'
 import { useMarketRate } from '@/domain/market-rate'
+import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { nextBillNoForBook, resolveCustomerBookSelection } from '@/domain/bill-books'
+import { buildCommandBillSummary, buildCommandPaymentSummary } from '@/domain/command-financial-summary'
 import { getAdminControlSettings, subscribeAdminControlSettings } from '@/lib/admin-control'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
@@ -81,6 +84,7 @@ type CommandDraft = {
 }
 
 type CommandMode = 'command' | 'search' | 'help' | 'action'
+type CommandBookSelection = ReturnType<typeof resolveCustomerBookSelection>
 type QuickSearchSectionKey = QuickSearchResult['kind']
 
 type CommandSuggestion = {
@@ -138,13 +142,52 @@ export function AppShell() {
     enabled: commandOpen || commandInput.trim().length > 0,
     staleTime: 5 * 60_000,
     queryFn: async () => {
-      const [customersRaw, itemsRaw, billsRaw, billItemsRaw] = await Promise.all([
+      const [customersRaw, itemsRaw, billsRaw, billItemsRaw, paymentsRaw] = await Promise.all([
         pb.collection('customers').getFullList({ sort: 'company_name,name' }),
         pb.collection('items').getFullList({ sort: 'name' }),
-        pb.collection('bills').getFullList({ sort: 'date,created,bill_no' }),
+        pb.collection('bills').getFullList({ sort: 'date,created,id' }),
         pb.collection('bill_items').getFullList(),
+        pb.collection('payments').getFullList({ sort: 'date,created' }),
       ])
       const billById = new Map(billsRaw.map((row) => [row.id, row]))
+      const itemTotalByBill = new Map<string, number>()
+      for (const row of billItemsRaw) {
+        const billId = String(row.bill ?? '')
+        itemTotalByBill.set(billId, (itemTotalByBill.get(billId) ?? 0) + Number(row.amount ?? 0))
+      }
+      const customerBalances: Record<string, number> = Object.fromEntries(customersRaw.map((row) => [row.id, Number(row.opening_balance ?? 0)]))
+      const usedBillNosByBook = new Map<number, number[]>()
+      const preferredBookByCustomer = new Map<string, number>()
+      for (const bill of billsRaw) {
+        const customerId = String(bill.customer ?? '')
+        const bookNo = Number(bill.book_no ?? 0)
+        const billNo = Number(bill.bill_no ?? 0)
+        if (customerId) {
+          customerBalances[customerId] = (customerBalances[customerId] ?? 0) + calculateBillTotalFromBase(
+            itemTotalByBill.get(bill.id) ?? 0,
+            Number(bill.transport ?? 0),
+            Number(bill.gst_rate ?? 0),
+            Number(bill.gst_amount ?? 0),
+          )
+          if (bookNo > 0) preferredBookByCustomer.set(customerId, bookNo)
+        }
+        if (bookNo > 0 && billNo > 0) usedBillNosByBook.set(bookNo, [...(usedBillNosByBook.get(bookNo) ?? []), billNo])
+      }
+      for (const payment of paymentsRaw) {
+        const customerId = String(payment.customer ?? '')
+        if (customerId) customerBalances[customerId] = (customerBalances[customerId] ?? 0) - Number(payment.amount ?? 0)
+      }
+      const temporaryBookNo = 69
+      const temporaryNextBillNo = nextBillNoForBook(temporaryBookNo, usedBillNosByBook.get(temporaryBookNo) ?? [])
+      const customerBookSelections = Object.fromEntries([...preferredBookByCustomer.entries()].map(([customerId, preferredBookNo]) => [
+        customerId,
+        resolveCustomerBookSelection({
+          preferredBookNo,
+          preferredNextBillNo: nextBillNoForBook(preferredBookNo, usedBillNosByBook.get(preferredBookNo) ?? []),
+          temporaryBookNo,
+          temporaryNextBillNo,
+        }),
+      ]))
       const lastRates: Record<string, CommandLastRate> = {}
       for (const row of billItemsRaw) {
         const bill = billById.get(String(row.bill ?? ''))
@@ -183,6 +226,8 @@ export function AppShell() {
           bagWeight: Number(r.bag_weight ?? 50),
         })),
         lastRates,
+        customerBalances,
+        customerBookSelections,
       }
     },
   })
@@ -732,7 +777,16 @@ export function AppShell() {
               </div>
               {commandError && <p className="mt-2 text-xs text-red-600">{commandError}</p>}
             </div>
-            <CommandLivePreview preview={commandPreview} draft={commandDraft} isLoading={commandDepsQuery.isFetching} billSession={billSession} mode={commandMode} input={commandInput} />
+            <CommandLivePreview
+              preview={commandPreview}
+              draft={commandDraft}
+              isLoading={commandDepsQuery.isFetching}
+              billSession={billSession}
+              mode={commandMode}
+              input={commandInput}
+              customerBalances={commandDepsQuery.data?.customerBalances ?? {}}
+              customerBookSelections={commandDepsQuery.data?.customerBookSelections ?? {}}
+            />
             <CommandSuggestionList
               suggestions={commandSuggestions}
               activeIndex={activeCommandSuggestionIndex}
@@ -937,6 +991,8 @@ function CommandLivePreview({
   billSession,
   mode,
   input,
+  customerBalances,
+  customerBookSelections,
 }: {
   preview: ReturnType<typeof parseContextCommand> | null
   draft: CommandDraft | null
@@ -944,6 +1000,8 @@ function CommandLivePreview({
   billSession: BillSession | null
   mode: CommandMode
   input: string
+  customerBalances: Record<string, number>
+  customerBookSelections: Record<string, CommandBookSelection>
 }) {
   if (mode === 'help') {
     return <CommandHelpPanel inputMode="help" input={input} />
@@ -1024,28 +1082,57 @@ function CommandLivePreview({
     )
   }
   const command = preview.command
+  const currentBalance = command.kind === 'print' ? 0 : customerBalances[command.customer.id] ?? 0
+  const bookSelection = command.kind === 'bill' ? customerBookSelections[command.customer.id] : undefined
+  const billSummary = command.kind === 'bill'
+    ? buildCommandBillSummary({
+        items: command.items,
+        transport: command.transport,
+        gstRate: command.gstRate,
+        gstAmount: command.gstAmount,
+        previousBalance: currentBalance,
+      })
+    : null
+  const paymentSummary = command.kind === 'payment'
+    ? buildCommandPaymentSummary({ currentBalance, paymentAmount: command.amount })
+    : null
+  const resolvedBookBill = command.kind === 'bill'
+    ? command.bookNo
+      ? `${command.bookNo}/${command.billNo ?? 'next'}`
+      : bookSelection
+        ? `${bookSelection.bookNo}/${command.billNo ?? bookSelection.billNo ?? 'full'}`
+        : command.billNo
+          ? `Current book/${command.billNo}`
+          : 'No party book history'
+    : ''
   return (
     <div className="border-b border-slate-100 bg-slate-50 px-3 py-3">
       <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
         {command.kind === 'payment' && (
           <>
-            <PreviewLine label="Mode" value="Payment" />
             <PreviewLine label="Party" value={command.customer.name} />
             <PreviewLine label="Amount" value={formatInrInteger(command.amount)} />
             <PreviewLine label="Date" value={formatFullDate(command.date)} />
             <PreviewLine label="Pay Mode" value={command.mode} />
-            <PreviewLine label="Note" value={command.note || '-'} />
+            <PreviewLine label="Current Balance" value={formatInrInteger(paymentSummary?.currentBalance ?? 0)} />
+            <PreviewLine label="After Payment" value={formatInrInteger(paymentSummary?.balanceAfterPayment ?? 0)} />
           </>
         )}
         {command.kind === 'bill' && (
           <>
-            <PreviewLine label="Mode" value="Bill" />
             <PreviewLine label="Party" value={command.customer.name} />
-            <PreviewLine label="Book/Bill" value={command.bookNo ? `${command.bookNo}/${command.billNo ?? 'next'}` : command.billNo ? `Current book/${command.billNo}` : 'Auto'} />
+            <PreviewLine label="Book/Bill" value={resolvedBookBill} />
             <PreviewLine label="Date" value={formatFullDate(command.date)} />
-            <PreviewLine label="Transport" value={formatInrInteger(command.transport)} />
-            <PreviewLine label="GST" value={command.gstMode === 'manual' ? `Manual ${formatInrInteger(command.gstAmount)}` : command.gstRate ? `${command.gstRate}%` : 'No GST'} />
-            <PreviewLine label="Items" value={`${command.items.length}`} />
+            {command.transport > 0 && <PreviewLine label="Transport" value={formatInrInteger(command.transport)} />}
+            {(command.gstAmount > 0 || command.gstRate > 0) && <PreviewLine label="GST" value={command.gstMode === 'manual' ? `Manual ${formatInrInteger(command.gstAmount)}` : `${command.gstRate}%`} />}
+            <PreviewLine label="Bill Total" value={formatInrInteger(billSummary?.grandTotal ?? 0)} />
+            <PreviewLine label="Previous Balance" value={formatInrInteger(currentBalance)} />
+            <PreviewLine label="Amount Due" value={formatInrInteger(billSummary?.amountDue ?? 0)} />
+            {bookSelection?.warning && !command.bookNo && (
+              <div className="md:col-span-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-800">
+                {bookSelection.warning}
+              </div>
+            )}
             <div className="md:col-span-2">
               <div className="mt-1 overflow-hidden rounded-md border border-slate-200 bg-white">
                 {command.items.map((line, index) => (
