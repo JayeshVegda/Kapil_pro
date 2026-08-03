@@ -464,9 +464,16 @@ function TransactionsPage() {
                         <Plus size={12} /> Add Row
                       </button>
                     </div>
+                    <div className="mb-1 hidden grid-cols-[1fr_110px_110px_110px_76px] gap-2 px-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-400 md:grid">
+                      <span>Item</span>
+                      <span className="text-right">Qty</span>
+                      <span className="text-right">Rate</span>
+                      <span className="text-right">Amount</span>
+                      <span />
+                    </div>
                     <div className="space-y-2">
                       {billDraft.items.map((item, index) => (
-                        <div key={index} className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_120px_120px_auto]">
+                        <div key={index} className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_110px_110px_110px_76px] md:items-center">
                           <select
                             className={inputClass}
                             value={item.itemId || items.find((entry) => entry.name === item.itemName)?.id || ''}
@@ -483,14 +490,30 @@ function TransactionsPage() {
                               </option>
                             ))}
                           </select>
-                          <input className={inputClass} type="number" value={item.qty || ''} onChange={(event) => updateBillItem(index, { qty: parseNonNegativeNumber(event.target.value) })} placeholder="Qty" />
-                          <input className={inputClass} type="number" value={item.rate || ''} onChange={(event) => updateBillItem(index, { rate: parseNonNegativeNumber(event.target.value) })} placeholder="Rate" />
-                          <button type="button" className="rounded-md border border-rose-300 bg-white px-3 py-2 text-xs text-rose-700 hover:bg-rose-50 disabled:opacity-60" onClick={() => removeBillItem(index)} disabled={billDraft.items.length <= 1}>
+                          <input className={`${inputClass} text-right`} type="number" value={item.qty || ''} onChange={(event) => updateBillItem(index, { qty: parseNonNegativeNumber(event.target.value) })} placeholder="Qty" />
+                          <input className={`${inputClass} text-right`} type="number" value={item.rate || ''} onChange={(event) => updateBillItem(index, { rate: parseNonNegativeNumber(event.target.value) })} placeholder="Rate" />
+                          <p className="text-right font-mono text-sm tabular-nums text-slate-800 max-md:px-0.5">{formatInrInteger(item.qty * item.rate)}</p>
+                          <button type="button" className="rounded-md border border-rose-300 bg-white px-2 py-2 text-xs text-rose-700 hover:bg-rose-50 disabled:opacity-60" onClick={() => removeBillItem(index)} disabled={billDraft.items.length <= 1}>
                             Remove
                           </button>
                         </div>
                       ))}
                     </div>
+                    {(() => {
+                      const base = billDraft.items.reduce((sum, item) => sum + item.qty * item.rate, 0)
+                      const gst = (base * billDraft.gstRate) / 100
+                      const total = base + gst + billDraft.transport
+                      return (
+                        <div className="mt-3 flex flex-wrap items-center justify-end gap-x-5 gap-y-1 border-t border-slate-100 pt-2.5 text-xs text-slate-500">
+                          <span>Items <strong className="font-mono tabular-nums text-slate-800">{formatInrInteger(base)}</strong></span>
+                          {billDraft.transport > 0 && <span>Transport <strong className="font-mono tabular-nums text-slate-800">{formatInrInteger(billDraft.transport)}</strong></span>}
+                          {gst > 0 && <span>GST <strong className="font-mono tabular-nums text-slate-800">{formatInrInteger(gst)}</strong></span>}
+                          <span className="text-sm text-slate-600">
+                            New Total <strong className="font-mono text-base font-bold tabular-nums text-slate-900">{formatInrInteger(total)}</strong>
+                          </span>
+                        </div>
+                      )
+                    })()}
                   </div>
                 </>
               )}

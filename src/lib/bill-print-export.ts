@@ -1,8 +1,7 @@
 import { BILL_PRINT_PAGE_WIDTH_CM } from '@/components/billing/bill-print-layout'
 import { getBillPrintPopupStyles } from '@/components/billing/bill-print-styles'
 import { openAndPrintHtml, printHtmlInHiddenIframe } from '@/lib/print-html'
-
-const BILL_JPEG_OUTPUT_WIDTH_PX = 2160
+import { BILL_JPEG_OUTPUT_WIDTH_PX } from '@/lib/image-export-config'
 
 /** Single source of truth — Print bill and New bill must match. */
 export const BILL_PRINT_JPEG_QUALITY_DOWNLOAD = 0.97

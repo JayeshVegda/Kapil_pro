@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { useState } from 'react'
 import { applyDataHealthFix, loadDataHealthIssues, previewDataHealthFix, type DataHealthFixPreview, type DataHealthIssue } from '@/data/data-health'
 import { toUserMessage } from '@/app/errors'
+import { BookRegisterPanel } from '@/components/data-health/book-register-panel'
 
 export const Route = createFileRoute('/data-health')({
   component: DataHealthPage,
@@ -45,7 +46,7 @@ function DataHealthPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-slate-900">Data Health</h2>
-            <p className="mt-1 text-xs text-slate-500">Checks bill item links, customer links, and duplicate bills.</p>
+            <p className="mt-1 text-xs text-slate-500">Checks bill item links, customer links, duplicate bills, and bill book numbering.</p>
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
             <Metric label="High" value={high} tone="red" />
@@ -55,6 +56,8 @@ function DataHealthPage() {
         </div>
         {statusText && <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">{statusText}</p>}
       </section>
+
+      <BookRegisterPanel />
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         {healthQuery.isLoading && <p className="text-sm text-slate-500">Checking data...</p>}

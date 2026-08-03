@@ -44,7 +44,7 @@ export async function loadCalendarMonthData(monthKey: string) {
     }
   }
 
-  const [billsRaw, prevBillsRaw, paymentsRaw, customersRaw, ratesRaw, prevRatesRaw] = await Promise.all([
+  const [billsRaw, prevBillsRaw, paymentsRaw, customersRaw, itemsRaw, ratesRaw, prevRatesRaw] = await Promise.all([
     pb.collection('bills').getFullList({
       sort: 'date,bill_no',
       filter: `date >= "${start}" && date <= "${end}"`,
@@ -58,6 +58,7 @@ export async function loadCalendarMonthData(monthKey: string) {
       filter: `date >= "${start}" && date <= "${end}"`,
     }) as Promise<PBRecord[]>,
     pb.collection('customers').getFullList({ sort: 'company_name,name' }) as Promise<PBRecord[]>,
+    pb.collection('items').getFullList({ sort: 'name' }) as Promise<PBRecord[]>,
     listRatesBetween(start, end),
     listRatesBetween(prevStartEnd.start, prevStartEnd.end),
   ])
@@ -87,6 +88,7 @@ export async function loadCalendarMonthData(monthKey: string) {
     prevBillItemsRaw,
     paymentsRaw,
     customersRaw,
+    itemsRaw,
     ratesRaw,
     prevRatesRaw,
     rangeStart: start,

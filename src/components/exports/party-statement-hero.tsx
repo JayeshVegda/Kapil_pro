@@ -6,6 +6,7 @@ export function PartyStatementHero(props: {
   summary: Array<{ label: string; value: string }>
   primaryAction: ReactNode
   secondaryAction: ReactNode
+  excelAction?: ReactNode
   tertiaryAction?: ReactNode
 }) {
   return (
@@ -54,9 +55,10 @@ export function PartyStatementHero(props: {
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-700">3</span>
             <h3 className="text-sm font-semibold text-slate-900">Export</h3>
           </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
             {props.primaryAction}
             {props.secondaryAction}
+            {props.excelAction}
             {props.tertiaryAction}
           </div>
         </div>

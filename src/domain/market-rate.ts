@@ -36,24 +36,29 @@ function dayRange(dateIso: string) {
   }
 }
 
-function parseBrassB2BRate(xmlText: string) {
-  const latestItem = (xmlText.match(/<item>[\s\S]*?<\/item>/i) || [xmlText])[0]
-  const jamnagarBlock = (latestItem.match(/Jamnagar[\s\S]*?(?:Delhi|Copper|MCX|Disclaimer)/i) || [latestItem])[0]
+export function parseBrassB2BRate(xmlText: string) {
+  const items = xmlText.match(/<item>[\s\S]*?<\/item>/gi) ?? [xmlText]
   const localPatterns = [
     /Brass\s+Vilaity[\s\S]{0,80}?:\s*[^0-9]*(\d{3,4})/i,
     /Brass\s+Vilality[\s\S]{0,80}?:\s*[^0-9]*(\d{3,4})/i,
     /Local[\s\S]{0,40}?:\s*[^0-9]*(\d{3,4})/i,
   ]
-  let localRate: number | null = null
-  for (const pattern of localPatterns) {
-    const m = jamnagarBlock.match(pattern)
-    if (m) {
-      localRate = Number(m[1])
-      break
+  const parsedItems = items.map((item) => {
+    const jamnagarBlock = (item.match(/Jamnagar[\s\S]*?(?:Delhi|Copper|MCX|Disclaimer)/i) || [item])[0]
+    let localRate: number | null = null
+    for (const pattern of localPatterns) {
+      const m = jamnagarBlock.match(pattern)
+      if (m) {
+        localRate = Number(m[1])
+        break
+      }
     }
-  }
-  const dateMatch = latestItem.match(/Date\s*:\s*(\d{2}\.\d{2}\.\d{4})/i)
-  return { localRate, date: dateMatch ? dateMatch[1] : '' }
+    const dateMatch = item.match(/Date\s*:\s*(\d{2}\.\d{2}\.\d{4})/i)
+    return { localRate, date: dateMatch ? dateMatch[1] : '' }
+  }).filter((item) => item.localRate != null && item.localRate > 0)
+  if (parsedItems.length === 0) return { localRate: null, date: '' }
+  parsedItems.sort((a, b) => normalizeFeedDate(b.date).localeCompare(normalizeFeedDate(a.date)))
+  return parsedItems[0]
 }
 
 async function fetchMarketRateViaProxy() {
@@ -150,7 +155,7 @@ async function loadNearestMarketRateRecord(dateIso: string) {
   try {
     const range = dayRange(dateIso)
     const page = await pb.collection('brass_rates').getList(1, 1, {
-      filter: `date < "${range.end}"`,
+      filter: `date < "${range.start}"`,
       sort: '-date',
     })
     const record = page.items[0]
@@ -239,7 +244,22 @@ export function useMarketRate(targetDate = getTodayLocalIso()) {
     }
     const parsed = parseBrassB2BRate(fetched.text)
     if (!parsed.localRate) {
-      setState((prev) => ({ ...prev, status: 'Feed fetched but local rate could not be parsed.' }))
+      const nearest = await loadNearestMarketRateRecord(requestedDate)
+      if (nearest) {
+        const fallback: MarketRateState = {
+          rate: nearest.rate,
+          rateDate: nearest.rateDate,
+          status: `Using saved rate for ${nearest.rateDate} (BrassB2B feed had no valid rate)`,
+          source: 'db-fallback',
+          previousRate: null,
+          change: null,
+        }
+        setState(fallback)
+        saveCachedMarketRate(fallback)
+        return false
+      }
+      if (loadCachedMarketRate(setState)) return false
+      setState((prev) => ({ ...prev, status: 'BrassB2B feed fetched but no valid local rate was found.' }))
       return false
     }
     const normalizedDate = normalizeFeedDate(parsed.date)
@@ -253,8 +273,9 @@ export function useMarketRate(targetDate = getTodayLocalIso()) {
     }
     setState(next)
     saveCachedMarketRate(next)
-    void saveMarketRateDayRecord(parsed.localRate, normalizedDate).catch(() => {
-      // Saving is non-blocking for bill creation UX.
+    void saveMarketRateDayRecord(parsed.localRate, normalizedDate).catch((error) => {
+      const message = error instanceof Error ? error.message : 'database save failed'
+      setState((prev) => ({ ...prev, status: `Rate loaded from BrassB2B; database save failed: ${message}` }))
     })
     return true
   }, [targetDate])

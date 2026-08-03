@@ -1,6 +1,8 @@
 import { Link } from '@tanstack/react-router'
 import { useState, type ComponentType } from 'react'
-import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Printer, ReceiptText, ScrollText, Users, X } from 'lucide-react'
+import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Printer, ReceiptText, ScrollText, SlidersHorizontal, Users, X } from 'lucide-react'
+import { isPathHiddenByModules } from '@/lib/module-settings'
+import { useModuleSettings } from '@/lib/use-module-settings'
 
 type NavGroup = {
   label: string
@@ -29,7 +31,7 @@ const navGroups: NavGroup[] = [
   {
     label: 'Reports',
     items: [
-      { to: '/calendar', title: 'Calendar', icon: Calendar },
+      { to: '/monthly-sales-calendar', title: 'Monthly Sales Calendar', icon: Calendar },
       { to: '/monthly-report', title: 'Company Report', icon: CalendarDays },
       { to: '/export-reports', title: 'Exports', icon: Download },
     ],
@@ -40,6 +42,7 @@ const navGroups: NavGroup[] = [
       { to: '/items', title: 'Items', icon: Boxes },
       { to: '/data-health', title: 'Data Health', icon: HeartPulse },
       { to: '/backup', title: 'Backup', icon: Database },
+      { to: '/settings', title: 'Settings', icon: SlidersHorizontal },
     ],
   },
   {
@@ -64,6 +67,14 @@ const mobilePrimaryItems = [
 
 export function SidebarNav() {
   return <SidebarNavPanel />
+}
+
+/** Nav groups with switched-off modules removed, dropping any group left empty. */
+function useVisibleNavGroups() {
+  const moduleSettings = useModuleSettings()
+  return navGroups
+    .map((group) => ({ ...group, items: group.items.filter((item) => !isPathHiddenByModules(item.to, moduleSettings)) }))
+    .filter((group) => group.items.length > 0)
 }
 
 function NavGroupsList({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?: () => void }) {
@@ -126,6 +137,7 @@ export function SidebarNavPanel({
   mobileOpen?: boolean
   onMobileClose?: () => void
 }) {
+  const visibleGroups = useVisibleNavGroups()
   return (
     <>
       <aside className="sticky top-0 hidden h-dvh w-[224px] min-w-[224px] flex-col border-r border-white/10 bg-[#1e2a3b] text-slate-300 lg:flex">
@@ -133,7 +145,7 @@ export function SidebarNavPanel({
           <BrandBlock />
         </div>
         <nav className="flex-1 overflow-y-auto px-2 py-3">
-          <NavGroupsList groups={navGroups} />
+          <NavGroupsList groups={visibleGroups} />
         </nav>
       </aside>
       <div className={`fixed inset-0 z-[70] bg-slate-950/45 transition lg:hidden ${mobileOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'}`} onClick={onMobileClose} />
@@ -154,7 +166,7 @@ export function SidebarNavPanel({
           </button>
         </div>
         <nav className="flex-1 overflow-y-auto px-2 py-3">
-          <NavGroupsList groups={navGroups} onNavigate={onMobileClose} />
+          <NavGroupsList groups={visibleGroups} onNavigate={onMobileClose} />
         </nav>
       </aside>
     </>
@@ -162,10 +174,13 @@ export function SidebarNavPanel({
 }
 
 export function MobileBottomNav({ onMore }: { onMore: () => void }) {
+  const moduleSettings = useModuleSettings()
+  const visibleItems = mobilePrimaryItems.filter((item) => !isPathHiddenByModules(item.to, moduleSettings))
   return (
     <nav className="fixed inset-x-0 bottom-0 z-[60] border-t border-slate-200 bg-white/95 px-2 pb-[max(env(safe-area-inset-bottom),0.35rem)] pt-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden" aria-label="Primary navigation">
-      <div className="grid grid-cols-5 gap-1">
-        {mobilePrimaryItems.map((item) => {
+      {/* Column count follows the visible items (plus More), so hiding a module leaves no gap. */}
+      <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${visibleItems.length + 1}, minmax(0, 1fr))` }}>
+        {visibleItems.map((item) => {
           const Icon = item.icon
           return (
             <Link

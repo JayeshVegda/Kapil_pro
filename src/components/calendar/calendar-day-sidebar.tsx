@@ -2,6 +2,7 @@ import { CalendarDays, ChevronRight } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
+import type { GasSalesMetrics } from '@/domain/gas-sales-reporting'
 
 export type CalendarSidebarBill = {
   id: string
@@ -28,6 +29,7 @@ export type CalendarDaySidebarData = {
   collections: number
   soldBags: number
   soldKg: number
+  gas?: GasSalesMetrics
   bills: CalendarSidebarBill[]
   payments: CalendarSidebarPayment[]
 }
@@ -46,7 +48,10 @@ export function CalendarDaySidebar({ data }: { data: CalendarDaySidebarData }) {
           <h2 className="shrink-0 font-mono text-sm font-bold leading-tight text-slate-950">{formatFullDate(data.date)}</h2>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-1.5">
-          <DayMetric label="Market" value={data.rate ? formatInrInteger(data.rate) : '-'} tone="text-blue-700" surface="bg-blue-50/70 border-blue-100" />
+          <DayMetric label="Gas selling" value={data.gas?.weightedSellingRate == null ? '-' : `${formatInrInteger(data.gas.weightedSellingRate)}/kg`} tone="text-blue-700" surface="bg-blue-50/70 border-blue-100" />
+          <DayMetric label="Bill market" value={data.gas?.weightedMarketRate == null ? (data.rate ? formatInrInteger(data.rate) : '-') : `${formatInrInteger(data.gas.weightedMarketRate)}/kg`} tone="text-amber-700" surface="bg-amber-50/70 border-amber-100" />
+          <DayMetric label="Premium / discount" value={data.gas?.premiumPerKg == null ? '-' : `${data.gas.premiumPerKg >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(data.gas.premiumPerKg))}/kg`} tone={data.gas?.premiumPerKg == null ? 'text-slate-500' : data.gas.premiumPerKg >= 0 ? 'text-emerald-700' : 'text-rose-700'} surface={data.gas?.premiumPerKg == null ? 'bg-slate-50 border-slate-100' : data.gas.premiumPerKg >= 0 ? 'bg-emerald-50/70 border-emerald-100' : 'bg-rose-50/70 border-rose-100'} />
+          <DayMetric label="Gas volume" value={`${formatNumber(data.gas?.kg ?? 0)} kg`} tone="text-slate-800" surface="bg-slate-50 border-slate-100" />
           <DayMetric label="Collections" value={formatInrInteger(data.collections)} tone="text-emerald-700" surface="bg-emerald-50/70 border-emerald-100" />
           <DayMetric label="Sales" value={`${formatInrInteger(data.sales)} (${data.bills.length})`} tone="text-slate-950" surface="bg-slate-50 border-slate-100" />
           <DayMetric label="Sold" value={`${formatNumber(data.soldBags)} bags`} tone="text-amber-700" surface="bg-amber-50/70 border-amber-100" />

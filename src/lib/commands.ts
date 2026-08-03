@@ -59,6 +59,14 @@ export type CommandItem = {
   bagWeight?: number
 }
 
+export type CommandLastRate = {
+  rate: number
+  mktRate: number
+  gstRate: number
+}
+
+const commandItemKey = (value: unknown) => String(value ?? '').trim().toLowerCase()
+
 export type ParsedBillLineCommand = {
   item: CommandItem
   qty: number
@@ -132,12 +140,13 @@ export function parseContextCommand(input: string, context: CommandRouteContext,
   items?: CommandItem[]
   today: string
   mktRate?: number
+  lastRates?: Record<string, CommandLastRate>
 }): CommandParseResult {
   const raw = input.trim()
   if (!raw) return { ok: false, error: 'Type a command first.' }
   const resolved = splitCommandPrefix(raw, context)
   if (!resolved.kind) return { ok: false, error: 'Add a prefix: b for bill, p for payment, or pr for print.' }
-  if (resolved.kind === 'bill') return parseBillCommand(resolved.body, deps.customers ?? [], deps.items ?? [], deps.today, deps.mktRate ?? 0)
+  if (resolved.kind === 'bill') return parseBillCommand(resolved.body, deps.customers ?? [], deps.items ?? [], deps.today, deps.mktRate ?? 0, deps.lastRates)
   if (resolved.kind === 'payment') return parsePaymentCommand(resolved.body, deps.customers ?? [], deps.today)
   return parsePrintCommand(resolved.body)
 }
@@ -148,6 +157,7 @@ export function parseBillCommand(
   items: CommandItem[],
   today: string,
   mktRate: number,
+  lastRates: Record<string, CommandLastRate> = {},
 ): CommandParseResult<ParsedBillCommand> {
   const tokens = input.trim().split(/\s+/).filter(Boolean)
   if (tokens.length < 2) return { ok: false, error: 'Use: party [item qty [rate]]... [gst|cgst amount] [+t amount] [book n] [bill n] [date]' }
@@ -230,7 +240,7 @@ export function parseBillCommand(
     lineTokens.push(tokens[i])
   }
 
-  const parsedItems = parseBillLineCommands(lineTokens, items, mktRate, gstMode)
+  const parsedItems = parseBillLineCommands(lineTokens, items, mktRate, gstMode, customer.id, lastRates)
   if (!parsedItems.ok) return parsedItems
   const first = parsedItems.items[0]
   return {
@@ -350,6 +360,8 @@ function parseBillLineCommands(
   items: CommandItem[],
   mktRate: number,
   gstMode: ParsedBillCommand['gstMode'],
+  customerId: string,
+  lastRates: Record<string, CommandLastRate>,
 ): { ok: true; items: ParsedBillLineCommand[] } | { ok: false; error: string } {
   if (items.length === 0) return { ok: false, error: 'Item list is empty.' }
   const fallbackItem = findDefaultBillItem(items)
@@ -376,7 +388,11 @@ function parseBillLineCommands(
     if (!(qtyInfo.qty > 0)) return { ok: false, error: `Invalid quantity for ${item.name}.` }
 
     const isGas = isGasBillingItem(item)
-    let defaultRate = Number(item.defaultRate ?? 0)
+    const lastRate = lastRates[`${customerId}:${item.id}`] ?? lastRates[`${customerId}:${commandItemKey(item.name)}`]
+    const isElectronic = String(item.type ?? '').toLowerCase() === 'electronic'
+    let defaultRate = lastRate && !isElectronic
+      ? calculateGasDefaultRateFromFinal(lastRate.rate, lastRate.mktRate, lastRate.gstRate)
+      : lastRate?.rate ?? Number(item.defaultRate ?? 0)
     let rate = isGas ? calculateGasFinalRate(defaultRate, mktRate, gstMode) : defaultRate
     let manualRateEdited = false
     i = qtyIndex + 1

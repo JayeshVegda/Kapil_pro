@@ -16,7 +16,7 @@ export type BillPrintLineRow = {
   bagWeight?: number
 }
 
-export type BillPrintCreditRow = { date: string; amount: number }
+export type BillPrintCreditRow = { id?: string; date: string; amount: number }
 
 export type BillPrintLayoutProps = {
   bookNo: number
@@ -172,7 +172,7 @@ export function BillPrintLayout({
         {periodCreditEntries.length > 0 && (
           <div className="bill-print-credits">
             {periodCreditEntries.map((entry, index) => (
-              <div key={`${entry.date}-${entry.amount}-${index}`} className="bill-print-credit-line">
+                <div key={entry.id ?? `${entry.date}-${entry.amount}-${index}`} className="bill-print-credit-line">
                 <span>Credited on {formatFullDate(entry.date)}</span>
                 <span className="bill-print-summary-value" style={{ fontSize: 11 }}>
                   − {formatInrInteger(entry.amount)}

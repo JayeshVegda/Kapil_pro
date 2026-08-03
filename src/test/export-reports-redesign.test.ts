@@ -6,10 +6,13 @@ import {
 } from '@/routes/export-reports'
 
 describe('exports page redesign model', () => {
-  it('makes party statement the first visible section', () => {
+  it('exposes the focused report studio sections in business priority order', () => {
     expect(getExportsPageSectionsForTest()).toEqual([
-      'party-statement-generator',
-      'statement-preview',
+      'party-statement',
+      'monthly-summary',
+      'sales-register',
+      'rate-analysis',
+      'outstanding',
       'more-exports',
     ])
   })
@@ -17,12 +20,13 @@ describe('exports page redesign model', () => {
   it('keeps party statement actions in business priority order', () => {
     expect(getPrimaryPartyStatementActionsForTest()).toEqual([
       'download-pdf',
+      'download-excel',
       'download-csv',
       'download-package',
     ])
   })
 
   it('keeps only compact business exports as secondary options', () => {
-    expect(getSecondaryExportIdsForTest()).toEqual(['book', 'sales'])
+    expect(getSecondaryExportIdsForTest()).toEqual(['book'])
   })
 })

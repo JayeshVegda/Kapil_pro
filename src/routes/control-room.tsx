@@ -33,7 +33,7 @@ const routeOptions = [
   { label: 'Casting', path: '/casting/new-session' },
   { label: 'Logs', path: '/transactions' },
   { label: 'Ledger', path: '/ledger' },
-  { label: 'Calendar', path: '/calendar' },
+  { label: 'Monthly Sales Calendar', path: '/monthly-sales-calendar' },
   { label: 'Exports', path: '/export-reports' },
   { label: 'Customers', path: '/customers' },
   { label: 'Items', path: '/items' },

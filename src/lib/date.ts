@@ -43,6 +43,47 @@ export function parseDisplayDate(dateText: string): string {
   return iso
 }
 
+const isValidCalendarDay = (year: number, month: number, day: number) => {
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false
+  const probe = new Date(year, month - 1, day)
+  return probe.getFullYear() === year && probe.getMonth() === month - 1 && probe.getDate() === day
+}
+
+/**
+ * Fast day-first date entry for operators:
+ *   "13"        -> 13th of the current month
+ *   "13-6"      -> 13 June this year
+ *   "1-31"      -> 31 January (when the month slot is impossible, day/month swap)
+ *   "13-6-25"   -> 13-06-2025
+ *   "13-06-2026"-> as written
+ * Separators -, /, . and space all work. Returns '' when nothing sensible fits.
+ */
+export function parseSmartDate(input: string, todayIso = getLocalIsoDate()): string {
+  const trimmed = String(input ?? '').trim()
+  if (!trimmed) return ''
+
+  const parts = trimmed.split(/[\s/.-]+/).filter(Boolean)
+  if (parts.length === 0 || parts.length > 3 || parts.some((part) => !/^\d{1,4}$/.test(part))) return ''
+
+  const today = parseIsoDate(todayIso) ?? new Date()
+  const currentYear = today.getFullYear()
+  const currentMonth = today.getMonth() + 1
+
+  let day = Number(parts[0])
+  let month = parts.length >= 2 ? Number(parts[1]) : currentMonth
+  let year = parts.length === 3 ? Number(parts[2]) : currentYear
+  if (parts.length === 3 && parts[2].length <= 2) year = 2000 + year
+
+  // Day-first is the house convention; when the month slot is impossible but a
+  // swap fixes it (e.g. "1-31"), assume the operator typed month-day.
+  if (!isValidCalendarDay(year, month, day) && isValidCalendarDay(year, day, month)) {
+    ;[day, month] = [month, day]
+  }
+  if (!isValidCalendarDay(year, month, day)) return ''
+
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
 export function formatDateTime(dateText: string): string {
   if (!dateText) return '-'
   const parsed = new Date(normalizeDateLike(dateText))

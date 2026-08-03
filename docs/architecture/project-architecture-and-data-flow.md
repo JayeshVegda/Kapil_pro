@@ -19,6 +19,7 @@ Core product areas:
 - Customers master (`/customers`)
 - Party ledger analytics (`/ledger`)
 - Company report (`/monthly-report`)
+- Monthly sales calendar (`/monthly-sales-calendar`; legacy `/calendar` redirects here)
 - Items master (`/items`)
 - Backup/export/validation (`/backup`)
 
@@ -215,4 +216,3 @@ Recommended next improvements:
 - Company Report: `src/routes/monthly-report.tsx`
 - Items: `src/routes/items.tsx`, `src/data/items.ts`
 - Backup: `src/routes/backup.tsx`, `src/data/backup.ts`
-

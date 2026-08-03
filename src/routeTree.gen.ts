@@ -10,9 +10,11 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TransactionsRouteImport } from './routes/transactions'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PrintBillRouteImport } from './routes/print-bill'
 import { Route as NewPaymentRouteImport } from './routes/new-payment'
 import { Route as NewBillRouteImport } from './routes/new-bill'
+import { Route as MonthlySalesCalendarRouteImport } from './routes/monthly-sales-calendar'
 import { Route as MonthlyReportRouteImport } from './routes/monthly-report'
 import { Route as LedgerRouteImport } from './routes/ledger'
 import { Route as ItemsRouteImport } from './routes/items'
@@ -35,6 +37,11 @@ const TransactionsRoute = TransactionsRouteImport.update({
   path: '/transactions',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PrintBillRoute = PrintBillRouteImport.update({
   id: '/print-bill',
   path: '/print-bill',
@@ -48,6 +55,11 @@ const NewPaymentRoute = NewPaymentRouteImport.update({
 const NewBillRoute = NewBillRouteImport.update({
   id: '/new-bill',
   path: '/new-bill',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MonthlySalesCalendarRoute = MonthlySalesCalendarRouteImport.update({
+  id: '/monthly-sales-calendar',
+  path: '/monthly-sales-calendar',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MonthlyReportRoute = MonthlyReportRouteImport.update({
@@ -143,9 +155,11 @@ export interface FileRoutesByFullPath {
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
   '/monthly-report': typeof MonthlyReportRoute
+  '/monthly-sales-calendar': typeof MonthlySalesCalendarRoute
   '/new-bill': typeof NewBillRoute
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/settings': typeof SettingsRoute
   '/transactions': typeof TransactionsRoute
   '/casting/bill': typeof CastingBillRoute
   '/casting/log': typeof CastingLogRoute
@@ -164,9 +178,11 @@ export interface FileRoutesByTo {
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
   '/monthly-report': typeof MonthlyReportRoute
+  '/monthly-sales-calendar': typeof MonthlySalesCalendarRoute
   '/new-bill': typeof NewBillRoute
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/settings': typeof SettingsRoute
   '/transactions': typeof TransactionsRoute
   '/casting/bill': typeof CastingBillRoute
   '/casting/log': typeof CastingLogRoute
@@ -187,9 +203,11 @@ export interface FileRoutesById {
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
   '/monthly-report': typeof MonthlyReportRoute
+  '/monthly-sales-calendar': typeof MonthlySalesCalendarRoute
   '/new-bill': typeof NewBillRoute
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/settings': typeof SettingsRoute
   '/transactions': typeof TransactionsRoute
   '/casting/bill': typeof CastingBillRoute
   '/casting/log': typeof CastingLogRoute
@@ -211,9 +229,11 @@ export interface FileRouteTypes {
     | '/items'
     | '/ledger'
     | '/monthly-report'
+    | '/monthly-sales-calendar'
     | '/new-bill'
     | '/new-payment'
     | '/print-bill'
+    | '/settings'
     | '/transactions'
     | '/casting/bill'
     | '/casting/log'
@@ -232,9 +252,11 @@ export interface FileRouteTypes {
     | '/items'
     | '/ledger'
     | '/monthly-report'
+    | '/monthly-sales-calendar'
     | '/new-bill'
     | '/new-payment'
     | '/print-bill'
+    | '/settings'
     | '/transactions'
     | '/casting/bill'
     | '/casting/log'
@@ -254,9 +276,11 @@ export interface FileRouteTypes {
     | '/items'
     | '/ledger'
     | '/monthly-report'
+    | '/monthly-sales-calendar'
     | '/new-bill'
     | '/new-payment'
     | '/print-bill'
+    | '/settings'
     | '/transactions'
     | '/casting/bill'
     | '/casting/log'
@@ -277,9 +301,11 @@ export interface RootRouteChildren {
   ItemsRoute: typeof ItemsRoute
   LedgerRoute: typeof LedgerRoute
   MonthlyReportRoute: typeof MonthlyReportRoute
+  MonthlySalesCalendarRoute: typeof MonthlySalesCalendarRoute
   NewBillRoute: typeof NewBillRoute
   NewPaymentRoute: typeof NewPaymentRoute
   PrintBillRoute: typeof PrintBillRoute
+  SettingsRoute: typeof SettingsRoute
   TransactionsRoute: typeof TransactionsRoute
 }
 
@@ -290,6 +316,13 @@ declare module '@tanstack/react-router' {
       path: '/transactions'
       fullPath: '/transactions'
       preLoaderRoute: typeof TransactionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/print-bill': {
@@ -311,6 +344,13 @@ declare module '@tanstack/react-router' {
       path: '/new-bill'
       fullPath: '/new-bill'
       preLoaderRoute: typeof NewBillRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/monthly-sales-calendar': {
+      id: '/monthly-sales-calendar'
+      path: '/monthly-sales-calendar'
+      fullPath: '/monthly-sales-calendar'
+      preLoaderRoute: typeof MonthlySalesCalendarRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/monthly-report': {
@@ -459,9 +499,11 @@ const rootRouteChildren: RootRouteChildren = {
   ItemsRoute: ItemsRoute,
   LedgerRoute: LedgerRoute,
   MonthlyReportRoute: MonthlyReportRoute,
+  MonthlySalesCalendarRoute: MonthlySalesCalendarRoute,
   NewBillRoute: NewBillRoute,
   NewPaymentRoute: NewPaymentRoute,
   PrintBillRoute: PrintBillRoute,
+  SettingsRoute: SettingsRoute,
   TransactionsRoute: TransactionsRoute,
 }
 export const routeTree = rootRouteImport

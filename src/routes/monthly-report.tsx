@@ -1,9 +1,11 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, CircleDollarSign, Landmark, ReceiptText, TrendingUp } from 'lucide-react'
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, CircleDollarSign, FileSpreadsheet, FileText, Landmark, ReceiptText, TrendingUp } from 'lucide-react'
+import { CollectionEfficiencyGauge, GasSellingRateTrendChart, ReceivableAgingBars, SalesCollectionTrendChart, WeeklySalesChart } from '@/components/reports/company-charts'
 import { useMemo, useState, type ReactNode } from 'react'
 import { loadDashboardCollections } from '@/data/dashboard'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { buildGasSalesReport, type GasSalesGroup, type GasSalesMetrics } from '@/domain/gas-sales-reporting'
 import { computeCustomerOutstanding, type CanonicalBillRecord, type CanonicalPaymentRecord } from '@/domain/records'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
@@ -16,6 +18,7 @@ export const Route = createFileRoute('/monthly-report')({
 function ReportPage() {
   const today = useMemo(() => getLocalIsoDate(), [])
   const [selectedAgingBucket, setSelectedAgingBucket] = useState<'current' | 'days31to60' | 'days61to90' | 'above90'>('above90')
+  const [selectedGasMonth, setSelectedGasMonth] = useState(() => today.slice(0, 7))
   const reportQuery = useQuery({
     queryKey: ['company-report', today],
     queryFn: loadDashboardCollections,
@@ -318,12 +321,170 @@ function ReportPage() {
     }
   }, [reportQuery.data, today])
 
+  const gasSales = useMemo(() => {
+    const data = reportQuery.data
+    if (!data) {
+      const empty = buildGasSalesReport({ bills: [], lines: [] })
+      return { all: empty, selected: empty, previous: empty }
+    }
+    const customerNameById = new Map(data.customersRaw.map((row) => [row.id, formatCustomerDisplayName(row.company_name, row.name)]))
+    const itemById = new Map(data.itemsRaw.map((row) => [row.id, row]))
+    const itemByName = new Map(data.itemsRaw.map((row) => [str(row.name).trim().toLowerCase(), row]))
+    const bills = data.billsRaw
+      .filter((bill) => str(bill.date).slice(0, 10) <= today)
+      .map((bill) => ({
+        id: bill.id,
+        date: str(bill.date).slice(0, 10),
+        customerId: str(bill.customer),
+        customerName: customerNameById.get(str(bill.customer)) ?? str(bill.customer_name) ?? 'Unknown customer',
+        marketRate: num(bill.mkt),
+      }))
+    const validBillIds = new Set(bills.map((bill) => bill.id))
+    const lines = data.billItemsRaw
+      .filter((line) => validBillIds.has(str(line.bill)))
+      .map((line) => {
+        const item = itemById.get(str(line.item)) ?? itemByName.get(str(line.item_name).trim().toLowerCase())
+        return {
+          billId: str(line.bill),
+          itemId: str(line.item) || str(line.item_name).trim().toLowerCase(),
+          itemName: str(line.item_name) || str(item?.name) || 'Unknown item',
+          itemType: str(item?.type) || 'gas',
+          qty: num(line.qty),
+          bags: num(line.bags),
+          amount: num(line.amount),
+        }
+      })
+    const previousMonth = shiftMonth(selectedGasMonth, -1)
+    return {
+      all: buildGasSalesReport({ bills, lines }),
+      selected: buildGasSalesReport({
+        bills: bills.filter((bill) => bill.date.startsWith(selectedGasMonth)),
+        lines,
+      }),
+      previous: buildGasSalesReport({
+        bills: bills.filter((bill) => bill.date.startsWith(previousMonth)),
+        lines,
+      }),
+    }
+  }, [reportQuery.data, selectedGasMonth, today])
+
   const heatmapSummary = useMemo(() => buildHeatmapSummary(report.dailySalesHeatmap), [report.dailySalesHeatmap])
   const highestOutstandingCustomer = report.topCustomersByOutstanding[0] ?? null
   const overdueCustomersCount = report.receivableAgingCustomers.above90.length
   const monthlyCashGap = report.thisMonth.sales - report.thisMonth.collections
   const salesDelta = report.thisMonth.sales - report.lastMonth.sales
   const collectionEfficiencyStatus = getEfficiencyStatus(report.overall.collectionEfficiencyPct)
+  async function downloadReportPdf() {
+    const { createStyledPdf } = await import('@/lib/exports/pdf-engine')
+    const doc = await createStyledPdf({
+      title: 'Company Report',
+      subtitle: `As of ${formatFullDate(today)} | Kapil Products`,
+      summary: [
+        { label: 'Total Sales', value: formatInrInteger(report.overall.totalSales) },
+        { label: 'Collections', value: formatInrInteger(report.overall.totalCollections) },
+        { label: 'Receivable', value: formatInrInteger(report.overall.receivable) },
+        { label: 'Efficiency', value: `${Math.round(report.overall.collectionEfficiencyPct)}%` },
+      ],
+      sections: [
+        {
+          kind: 'table',
+          title: 'Monthly sales vs collections',
+          columns: [
+            { header: 'Month' },
+            { header: 'Sales', align: 'right' },
+            { header: 'Collections', align: 'right' },
+            { header: 'Gap', align: 'right' },
+          ],
+          rows: report.monthlyTrend.map((row) => [
+            formatMonthYear(row.month),
+            formatInrInteger(row.sales),
+            formatInrInteger(row.collections),
+            formatInrInteger(row.sales - row.collections),
+          ]),
+        },
+        {
+          kind: 'table',
+          title: 'Receivable aging',
+          columns: [{ header: 'Bucket' }, { header: 'Outstanding', align: 'right' }, { header: 'Parties', align: 'right' }],
+          rows: [
+            ['0-30 days', formatInrInteger(report.receivableAging.current), report.receivableAgingCustomers.current.length],
+            ['31-60 days', formatInrInteger(report.receivableAging.days31to60), report.receivableAgingCustomers.days31to60.length],
+            ['61-90 days', formatInrInteger(report.receivableAging.days61to90), report.receivableAgingCustomers.days61to90.length],
+            ['Above 90 days', formatInrInteger(report.receivableAging.above90), report.receivableAgingCustomers.above90.length],
+          ],
+        },
+        {
+          kind: 'table',
+          title: 'Top parties by outstanding',
+          columns: [{ header: 'Party' }, { header: 'Outstanding', align: 'right' }],
+          rows: report.topCustomersByOutstanding.map((row) => [row.name, formatInrInteger(row.value)]),
+        },
+      ],
+    })
+    doc.save(`company-report-${today}.pdf`)
+  }
+
+  async function downloadReportExcel() {
+    const { createXlsxBlob } = await import('@/lib/exports/xlsx-workbook')
+    const blob = await createXlsxBlob([
+      {
+        name: 'Monthly Trend',
+        totalsLabel: 'Total',
+        columns: [
+          { header: 'Month', type: 'text' },
+          { header: 'Sales', type: 'currency', total: true },
+          { header: 'Collections', type: 'currency', total: true },
+          { header: 'Gap', type: 'currency' },
+        ],
+        rows: report.monthlyTrend.map((row) => [formatMonthYear(row.month), row.sales, row.collections, row.sales - row.collections]),
+      },
+      {
+        name: 'Receivable Aging',
+        columns: [
+          { header: 'Party', type: 'text' },
+          { header: 'Bucket', type: 'text' },
+          { header: 'Due days', type: 'integer' },
+          { header: 'Outstanding', type: 'currency', total: true },
+        ],
+        totalsLabel: 'Total',
+        rows: (['current', 'days31to60', 'days61to90', 'above90'] as const).flatMap((bucket) =>
+          report.receivableAgingCustomers[bucket].map((row) => [
+            row.name,
+            bucket === 'current' ? '0-30d' : bucket === 'days31to60' ? '31-60d' : bucket === 'days61to90' ? '61-90d' : '90d+',
+            row.dueDays,
+            row.amount,
+          ]),
+        ),
+      },
+      {
+        name: 'Top by Sales',
+        columns: [
+          { header: 'Party', type: 'text' },
+          { header: 'Sales', type: 'currency', total: true },
+        ],
+        totalsLabel: 'Total',
+        rows: report.topCustomersBySales.map((row) => [row.name, row.value]),
+      },
+      {
+        name: 'FY Summary',
+        columns: [
+          { header: 'Financial Year', type: 'text' },
+          { header: 'Sales', type: 'currency', total: true },
+          { header: 'Collections', type: 'currency', total: true },
+          { header: 'Gap', type: 'currency' },
+        ],
+        totalsLabel: 'Total',
+        rows: report.financialYearSummary.map((fy) => [fy.label, fy.sales, fy.collections, fy.gap]),
+      },
+    ])
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `company-report-${today}.xlsx`
+    link.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 2000)
+  }
+
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {reportQuery.isLoading && <section className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">Loading company report...</section>}
@@ -331,6 +492,26 @@ function ReportPage() {
 
       {!reportQuery.isLoading && !reportQuery.isError && (
         <>
+          <section className="flex flex-wrap items-center justify-between gap-3" aria-label="Report actions">
+            <h2 className="text-base font-semibold text-slate-900">Company Report</h2>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                onClick={() => void downloadReportPdf()}
+              >
+                <FileText size={13} /> PDF
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                onClick={() => void downloadReportExcel()}
+              >
+                <FileSpreadsheet size={13} /> Excel
+              </button>
+            </div>
+          </section>
+
           <section className="space-y-3" aria-label="Executive health overview">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
               <ExecutiveKpiCard title="Total Sales" value={formatInrInteger(report.overall.totalSales)} tone="blue" trend={report.thisMonth.sales - report.lastMonth.sales} trendLabel="vs last month" status={salesDelta >= 0 ? 'Healthy' : 'Warning'} icon={<TrendingUp size={18} />} sparkline={report.monthlyTrend.map((row) => row.sales)} />
@@ -349,19 +530,29 @@ function ReportPage() {
             gstEstimate={report.thisMonth.gstEstimate}
           />
 
+          <GasSalesPerformance
+            month={selectedGasMonth}
+            onMonthChange={setSelectedGasMonth}
+            current={gasSales.selected.overall}
+            previous={gasSales.previous.overall}
+            monthlyTrend={gasSales.all.byMonth.slice(-12)}
+            items={gasSales.selected.byItem}
+            customers={gasSales.selected.byCustomer}
+          />
+
           <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.35fr_1fr]" aria-label="Main analytics">
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <SectionHeader eyebrow="Main analytics" title="Sales vs Collections Trend" subtitle="Monthly comparison with billing, collection, and cash gap." />
-              <SalesCollectionChart data={report.monthlyTrend} />
+              <SalesCollectionTrendChart data={report.monthlyTrend} />
             </div>
             <div className="grid grid-cols-1 gap-6">
               <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <SectionHeader eyebrow="Efficiency" title="Collection Progress" subtitle="Collected against billed value." />
-                <EfficiencyRadial value={report.overall.collectionEfficiencyPct} status={collectionEfficiencyStatus} />
+                <CollectionEfficiencyGauge value={report.overall.collectionEfficiencyPct} tone={collectionEfficiencyStatus === 'Healthy' ? 'green' : collectionEfficiencyStatus === 'Warning' ? 'amber' : 'red'} />
               </div>
               <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <SectionHeader eyebrow="Receivable" title="Aging Distribution" subtitle="Outstanding split by due age." />
-                <ReceivableAgingChart aging={report.receivableAging} selected={selectedAgingBucket} onSelect={setSelectedAgingBucket} />
+                <ReceivableAgingBars aging={report.receivableAging} selected={selectedAgingBucket} onSelect={setSelectedAgingBucket} />
               </div>
             </div>
           </section>
@@ -371,27 +562,15 @@ function ReportPage() {
             <CustomerRankingCard title="Top Customers by Outstanding" tone="red" rows={report.topCustomersByOutstanding} />
           </section>
 
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm" aria-label="Daily activity">
-            <SectionHeader eyebrow="Daily activity" title="Sales Heatmap" subtitle="Last 365 days of selling activity with intensity by sales value." />
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm" aria-label="Weekly activity">
+            <SectionHeader eyebrow="Weekly activity" title="Weekly Sales" subtitle="Last 12 weeks of selling, hover a bar for the exact amount." />
             <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
               <MiniMetric label="Best sales day" value={heatmapSummary.bestDay ? `${formatFullDate(heatmapSummary.bestDay.date)} · ${formatInrInteger(heatmapSummary.bestDay.sales)}` : '-'} />
               <MiniMetric label="Active days" value={`${heatmapSummary.activeDays}/${report.dailySalesHeatmap.length}`} />
               <MiniMetric label="Highest streak" value={`${heatmapSummary.highestStreak} days`} />
               <MiniMetric label="Activity status" value={heatmapSummary.activeDays < 20 ? 'Low activity warning' : 'Normal'} tone={heatmapSummary.activeDays < 20 ? 'orange' : 'green'} />
             </div>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-[11px] text-slate-500">
-                <span>Less</span>
-                <span className="h-3 w-3 rounded bg-slate-100" />
-                <span className="h-3 w-3 rounded bg-emerald-200" />
-                <span className="h-3 w-3 rounded bg-emerald-400" />
-                <span className="h-3 w-3 rounded bg-emerald-600" />
-                <span className="h-3 w-3 rounded bg-emerald-800" />
-                <span>More</span>
-              </div>
-              <p className="text-[11px] text-slate-500">Hover each day for sales and bags.</p>
-            </div>
-            <GithubSalesHeatmap daily={report.dailySalesHeatmap} />
+            <WeeklySalesChart daily={report.dailySalesHeatmap} />
           </section>
 
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm" aria-label="Financial year comparison">
@@ -438,7 +617,6 @@ function ReportPage() {
 
 type Tone = 'blue' | 'green' | 'red' | 'orange' | 'gray'
 type HealthStatus = 'Healthy' | 'Warning' | 'Risk'
-type AgingBucket = 'current' | 'days31to60' | 'days61to90' | 'above90'
 
 function SectionHeader({ eyebrow, title, subtitle }: { eyebrow: string; title: string; subtitle: string }) {
   return (
@@ -590,132 +768,169 @@ function ActionSignal({ icon, tone, label, value, detail }: { icon: ReactNode; t
   )
 }
 
-function SalesCollectionChart({ data }: { data: Array<{ month: string; sales: number; collections: number }> }) {
-  if (data.length === 0) return <p className="text-sm text-slate-500">No monthly trend data available.</p>
-  const width = 720
-  const height = 260
-  const padding = { top: 20, right: 24, bottom: 42, left: 58 }
-  const max = Math.max(1, ...data.flatMap((row) => [row.sales, row.collections]))
-  const plotWidth = width - padding.left - padding.right
-  const plotHeight = height - padding.top - padding.bottom
-  const xFor = (index: number) => padding.left + (plotWidth * index) / Math.max(1, data.length - 1)
-  const yFor = (value: number) => padding.top + plotHeight - (value / max) * plotHeight
-  const linePath = (key: 'sales' | 'collections') => data.map((row, index) => `${index === 0 ? 'M' : 'L'} ${xFor(index)} ${yFor(row[key])}`).join(' ')
-  const areaPath = (key: 'sales' | 'collections') => `${linePath(key)} L ${xFor(data.length - 1)} ${padding.top + plotHeight} L ${padding.left} ${padding.top + plotHeight} Z`
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-slate-100 bg-slate-50/40">
-      <svg viewBox={`0 0 ${width} ${height}`} className="h-[300px] w-full" role="img" aria-label="Sales and collections monthly trend chart">
-        {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
-          const y = padding.top + plotHeight - tick * plotHeight
-          return (
-            <g key={tick}>
-              <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} stroke="#e2e8f0" strokeDasharray={tick === 0 ? undefined : '4 5'} />
-              <text x={14} y={y + 4} className="fill-slate-500 text-[10px]">{formatCompactMoney(max * tick)}</text>
-            </g>
-          )
-        })}
-        <path d={areaPath('sales')} fill="#3b82f6" opacity="0.10" />
-        <path d={areaPath('collections')} fill="#10b981" opacity="0.12" />
-        <path d={linePath('sales')} fill="none" stroke="#2563eb" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-        <path d={linePath('collections')} fill="none" stroke="#059669" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-        {data.map((row, index) => (
-          <g key={row.month}>
-            <circle cx={xFor(index)} cy={yFor(row.sales)} r="4" fill="#2563eb">
-              <title>{`${formatMonthYear(row.month)} sales ${formatInrInteger(row.sales)}`}</title>
-            </circle>
-            <circle cx={xFor(index)} cy={yFor(row.collections)} r="4" fill="#059669">
-              <title>{`${formatMonthYear(row.month)} collections ${formatInrInteger(row.collections)}`}</title>
-            </circle>
-            <text x={xFor(index)} y={height - 16} textAnchor="middle" className="fill-slate-500 text-[10px]">{formatMonthYear(row.month).slice(0, 3)}</text>
-          </g>
-        ))}
-      </svg>
-      <div className="flex items-center gap-4 border-t border-slate-100 px-4 py-3 text-xs text-slate-600">
-        <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-blue-600" />Sales</span>
-        <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-emerald-600" />Collections</span>
-      </div>
-    </div>
-  )
-}
-
-function EfficiencyRadial({ value, status }: { value: number; status: HealthStatus }) {
-  const pct = Math.min(100, Math.max(0, value))
-  const radius = 52
-  const circumference = 2 * Math.PI * radius
-  const offset = circumference - (pct / 100) * circumference
-  return (
-    <div className="flex flex-col items-center justify-center gap-3 py-2">
-      <svg viewBox="0 0 140 140" className="h-44 w-44" role="img" aria-label={`Collection efficiency ${Math.round(pct)} percent`}>
-        <circle cx="70" cy="70" r={radius} fill="none" stroke="#e2e8f0" strokeWidth="14" />
-        <circle cx="70" cy="70" r={radius} fill="none" stroke="#059669" strokeWidth="14" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} transform="rotate(-90 70 70)" className="transition-all duration-700" />
-        <text x="70" y="66" textAnchor="middle" className="fill-slate-950 text-2xl font-bold">{Math.round(pct)}%</text>
-        <text x="70" y="88" textAnchor="middle" className="fill-slate-500 text-[11px]">Collected</text>
-      </svg>
-      <StatusBadge status={status} />
-    </div>
-  )
-}
-
-function ReceivableAgingChart({
-  aging,
-  selected,
-  onSelect,
+function GasSalesPerformance({
+  month,
+  onMonthChange,
+  current,
+  previous,
+  monthlyTrend,
+  items,
+  customers,
 }: {
-  aging: Record<AgingBucket, number>
-  selected: AgingBucket
-  onSelect: (bucket: AgingBucket) => void
+  month: string
+  onMonthChange: (month: string) => void
+  current: GasSalesMetrics
+  previous: GasSalesMetrics
+  monthlyTrend: GasSalesGroup[]
+  items: GasSalesGroup[]
+  customers: GasSalesGroup[]
 }) {
-  const buckets: Array<{ key: AgingBucket; label: string; color: string; className: string }> = [
-    { key: 'current', label: '0-30', color: '#10b981', className: 'bg-emerald-500' },
-    { key: 'days31to60', label: '31-60', color: '#f59e0b', className: 'bg-amber-500' },
-    { key: 'days61to90', label: '61-90', color: '#f97316', className: 'bg-orange-500' },
-    { key: 'above90', label: '90+', color: '#ef4444', className: 'bg-rose-500' },
-  ]
-  const total = Object.values(aging).reduce((sum, value) => sum + value, 0)
-  let cursor = 0
-  const gradient = total > 0
-    ? buckets.map((bucket) => {
-      const start = cursor
-      const share = (aging[bucket.key] / total) * 100
-      cursor += share
-      return `${bucket.color} ${start}% ${cursor}%`
-    }).join(', ')
-    : '#e2e8f0 0% 100%'
+  const rateDelta =
+    current.weightedSellingRate != null && previous.weightedSellingRate != null
+      ? current.weightedSellingRate - previous.weightedSellingRate
+      : null
+  const premiumTone = current.premiumPerKg == null ? 'text-slate-500' : current.premiumPerKg >= 0 ? 'text-emerald-700' : 'text-rose-700'
 
   return (
-    <div className="grid grid-cols-1 items-center gap-4 sm:grid-cols-[180px_1fr]">
-      <div className="relative mx-auto h-40 w-40 rounded-full" style={{ background: `conic-gradient(${gradient})` }} aria-label="Receivable aging distribution">
-        <div className="absolute inset-5 flex flex-col items-center justify-center rounded-full bg-white shadow-inner">
-          <span className="text-xs text-slate-500">Total</span>
-          <span className="text-lg font-bold text-slate-950">{formatCompactMoney(total)}</span>
+    <section className="rounded-xl border border-blue-200 bg-white shadow-sm" aria-labelledby="gas-sales-title">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 px-4 py-4 sm:px-5">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-700">Gas sales performance</p>
+          <h2 id="gas-sales-title" className="mt-1 text-lg font-semibold text-slate-950">Selling rate against the market</h2>
+          <p className="mt-1 text-sm text-slate-500">Quantity-weighted rates from gas bill lines only; GST and transport are excluded.</p>
         </div>
+        <label className="text-xs font-semibold text-slate-600">
+          Report month
+          <input
+            type="month"
+            value={month}
+            onChange={(event) => onMonthChange(event.target.value || month)}
+            className="mt-1 block h-9 rounded-lg border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          />
+        </label>
       </div>
-      <div className="space-y-2">
-        {buckets.map((bucket) => {
-          const amount = aging[bucket.key]
-          const pct = total > 0 ? (amount / total) * 100 : 0
-          return (
-            <button
-              key={bucket.key}
-              type="button"
-              onClick={() => onSelect(bucket.key)}
-              className={`w-full rounded-lg border px-3 py-2 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-100 ${selected === bucket.key ? 'border-slate-400 bg-slate-50' : 'border-slate-200 bg-white'}`}
-            >
-              <span className="flex items-center justify-between gap-2 text-sm">
-                <span className="flex items-center gap-2 font-medium text-slate-700"><span className={`h-2.5 w-2.5 rounded-full ${bucket.className}`} />{bucket.label} days</span>
-                <span className="font-mono font-semibold text-slate-900">{formatInrInteger(amount)}</span>
-              </span>
-              <span className="mt-1 block h-1.5 overflow-hidden rounded-full bg-slate-100">
-                <span className={bucket.className} style={{ display: 'block', width: `${pct}%`, height: '100%' }} />
-              </span>
-            </button>
-          )
-        })}
+
+      {current.kg <= 0 ? (
+        <div className="m-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+          <p className="text-sm font-semibold text-slate-700">No gas sales in {formatMonthYear(month)}.</p>
+          <p className="mt-1 text-xs text-slate-500">Other company sales and collection figures remain available below.</p>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-px bg-slate-200 lg:grid-cols-3 xl:grid-cols-6">
+            <GasMetric label="Gas sales" value={formatInrInteger(current.sales)} detail={formatMetricDelta(current.sales, previous.sales, 'vs last month')} />
+            <GasMetric label="Gas volume" value={`${formatNumber(current.kg)} kg`} detail={`${formatNumber(current.bags)} bags · ${formatMetricDelta(current.kg, previous.kg, '')}`} />
+            <GasMetric label="Avg selling rate" value={formatRate(current.weightedSellingRate)} detail={rateDelta == null ? 'No previous-month rate' : `${formatSignedRate(rateDelta)} vs last month`} />
+            <GasMetric label="Avg bill market" value={formatRate(current.weightedMarketRate)} detail="Weighted by sold kilograms" />
+            <GasMetric label="Premium / discount" value={formatSignedRate(current.premiumPerKg)} detail={current.premiumPct == null ? 'Market comparison unavailable' : `${current.premiumPct >= 0 ? '+' : ''}${current.premiumPct.toFixed(1)}% vs market`} valueClassName={premiumTone} />
+            <GasMetric label="Gas bills" value={formatNumber(current.billCount)} detail="Bills containing gas lines" />
+          </div>
+
+          <div className="grid gap-5 p-4 sm:p-5 xl:grid-cols-[1.15fr_1fr]">
+            <div className="min-w-0">
+              <SectionHeader eyebrow="Rate movement" title="Selling Rate vs Bill Market" subtitle="Monthly weighted rates show how negotiated selling moved with the saved market rate." />
+              <GasSellingRateTrendChart
+                data={monthlyTrend.map((row) => ({
+                  month: row.key,
+                  sellingRate: row.weightedSellingRate,
+                  marketRate: row.weightedMarketRate,
+                  kg: row.kg,
+                }))}
+              />
+            </div>
+            <GasBreakdownTable title="Gas Items" rows={items} mode="item" />
+          </div>
+
+          <div className="border-t border-slate-200 p-4 sm:p-5">
+            <GasBreakdownTable title="Customers by Gas Sales" rows={customers} mode="customer" />
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+function GasMetric({ label, value, detail, valueClassName = 'text-slate-950' }: { label: string; value: string; detail: string; valueClassName?: string }) {
+  return (
+    <div className="min-w-0 bg-white px-4 py-3.5">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+      <p className={`mt-1 truncate font-mono text-lg font-bold tabular-nums ${valueClassName}`}>{value}</p>
+      <p className="mt-1 truncate text-[11px] text-slate-500" title={detail}>{detail}</p>
+    </div>
+  )
+}
+
+function GasBreakdownTable({ title, rows, mode }: { title: string; rows: GasSalesGroup[]; mode: 'item' | 'customer' }) {
+  return (
+    <div className="min-w-0">
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
+        <span className="text-[11px] text-slate-500">{rows.length} {mode === 'customer' ? 'customers' : 'items'}</span>
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-slate-200">
+        <table className="w-full min-w-[760px] border-collapse text-xs">
+          <thead className="bg-slate-50 text-[10px] uppercase tracking-[0.06em] text-slate-500">
+            <tr>
+              <th className="px-3 py-2.5 text-left font-semibold">{mode === 'customer' ? 'Customer' : 'Item'}</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Gas sales</th>
+              {mode === 'customer' ? <th className="px-3 py-2.5 text-right font-semibold">Share</th> : null}
+              <th className="px-3 py-2.5 text-right font-semibold">Kg</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Bags</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Bills</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Avg sell</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Avg market</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Premium</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.map((row) => (
+              <tr key={row.key} className="bg-white hover:bg-blue-50/40">
+                <td className="max-w-[220px] truncate px-3 py-2.5 font-semibold text-slate-800">
+                  {mode === 'customer' ? <Link to="/ledger" search={{ customerId: row.key, focus: '' }} className="hover:text-blue-700">{row.label}</Link> : row.label}
+                </td>
+                <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums">{formatInrInteger(row.sales)}</td>
+                {mode === 'customer' ? <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-600">{row.salesSharePct.toFixed(1)}%</td> : null}
+                <td className="px-3 py-2.5 text-right font-mono tabular-nums">{formatNumber(row.kg)}</td>
+                <td className="px-3 py-2.5 text-right font-mono tabular-nums">{formatNumber(row.bags)}</td>
+                <td className="px-3 py-2.5 text-right font-mono tabular-nums">{row.billCount}</td>
+                <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-blue-700">{formatRate(row.weightedSellingRate)}</td>
+                <td className="px-3 py-2.5 text-right font-mono tabular-nums text-amber-700">{formatRate(row.weightedMarketRate)}</td>
+                <td className={`px-3 py-2.5 text-right font-mono font-semibold tabular-nums ${row.premiumPerKg == null ? 'text-slate-400' : row.premiumPerKg >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                  {formatSignedRate(row.premiumPerKg)}
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 ? (
+              <tr><td colSpan={mode === 'customer' ? 9 : 8} className="px-3 py-8 text-center text-sm text-slate-500">No gas sales in this period.</td></tr>
+            ) : null}
+          </tbody>
+        </table>
       </div>
     </div>
   )
 }
+
+function formatRate(value: number | null) {
+  return value == null ? '—' : `${formatInrInteger(value)}/kg`
+}
+
+function formatSignedRate(value: number | null) {
+  if (value == null) return '—'
+  return `${value >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(value))}/kg`
+}
+
+function formatMetricDelta(current: number, previous: number, suffix: string) {
+  if (!(previous > 0)) return 'No previous-month base'
+  const pct = ((current - previous) / previous) * 100
+  return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}% ${suffix}`.trim()
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: Number.isInteger(value) ? 0 : 1 }).format(value)
+}
+
+
+
 
 function CustomerRankingCard({ title, tone, rows }: { title: string; tone: Tone; rows: Array<{ customerId: string; name: string; value: number }> }) {
   return (
@@ -817,13 +1032,6 @@ function boundedPct(value: number, maxValue: number) {
   return Math.min(100, Math.max(0, (value / maxValue) * 100))
 }
 
-function formatCompactMoney(value: number) {
-  const abs = Math.abs(value)
-  if (abs >= 10000000) return `₹${(value / 10000000).toFixed(1)}Cr`
-  if (abs >= 100000) return `₹${(value / 100000).toFixed(1)}L`
-  if (abs >= 1000) return `₹${(value / 1000).toFixed(1)}K`
-  return formatInrInteger(value)
-}
 
 function toneClasses(tone: Tone) {
   switch (tone) {
@@ -902,94 +1110,13 @@ function formatDelta(amount: number) {
   return `-${formatInrInteger(Math.abs(amount))}`
 }
 
-function GithubSalesHeatmap({ daily }: { daily: Array<{ date: string; sales: number; bags: number }> }) {
-  if (daily.length === 0) {
-    return <p className="text-sm text-slate-500">No daily sales data available.</p>
-  }
-  const salesByDate = new Map(daily.map((row) => [row.date, row.sales]))
-  const bagsByDate = new Map(daily.map((row) => [row.date, row.bags]))
-  const firstDate = fromIsoDate(daily[0].date)
-  const lastDate = fromIsoDate(daily[daily.length - 1].date)
-  const gridStart = alignToSunday(firstDate)
-  const gridEnd = alignToSaturday(lastDate)
-  const allDates = eachDayInclusive(gridStart, gridEnd)
-  const maxSales = Math.max(1, ...daily.map((row) => row.sales))
-  const weekColumns = chunkByWeek(allDates)
-  const weekColumnCount = weekColumns.length
-  const monthLabels = weekColumns.map((week) => {
-    const first = week[0]
-    return first.getDate() <= 7 ? formatMonthYear(toIsoDate(first).slice(0, 7)) : ''
-  })
 
-  return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-slate-50/60 p-3">
-      <div className="w-full min-w-[980px]">
-        <div
-          className="mb-1 grid gap-[3px]"
-          style={{ gridTemplateColumns: `30px repeat(${weekColumnCount}, minmax(12px, 1fr))` }}
-        >
-          <span />
-          {monthLabels.map((label, index) => (
-            <span key={`month-${index}`} className="text-[10px] text-slate-500">
-              {label}
-            </span>
-          ))}
-        </div>
-        <div className="grid grid-cols-[30px_1fr] gap-1">
-          <div className="grid grid-rows-7 gap-[3px] text-[10px] text-slate-500">
-            <span />
-            <span>Mon</span>
-            <span />
-            <span>Wed</span>
-            <span />
-            <span>Fri</span>
-            <span />
-          </div>
-          <div className="flex w-full gap-[3px]">
-            {weekColumns.map((week, weekIndex) => (
-              <div key={`week-${weekIndex}`} className="grid flex-1 grid-rows-7 gap-[3px]">
-                {week.map((date) => {
-                  const key = toIsoDate(date)
-                  const sales = salesByDate.get(key) ?? 0
-                  const bags = bagsByDate.get(key) ?? 0
-                  const intensity = Math.min(1, Math.max(0, sales) / maxSales)
-                  return (
-                    <span
-                      key={key}
-                      className={`h-[12px] w-full min-w-[11px] rounded-[2px] ${heatCellClass(intensity)}`}
-                      title={`${formatFullDate(key)}: ${formatInrInteger(sales)} sales, ${Math.round(bags)} bags`}
-                      aria-label={`${formatFullDate(key)} sales ${Math.round(sales)} and bags ${Math.round(bags)}`}
-                    />
-                  )
-                })}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
 
-function chunkByWeek(dates: Date[]) {
-  const weeks: Date[][] = []
-  for (let i = 0; i < dates.length; i += 7) {
-    weeks.push(dates.slice(i, i + 7))
-  }
-  return weeks
-}
 
-function alignToSunday(date: Date) {
-  const d = new Date(date)
-  d.setDate(d.getDate() - d.getDay())
-  return d
-}
 
-function alignToSaturday(date: Date) {
-  const d = new Date(date)
-  d.setDate(d.getDate() + (6 - d.getDay()))
-  return d
-}
+
+
+
 
 function eachDayInclusive(startDate: Date, endDate: Date) {
   const days: Date[] = []
@@ -1006,20 +1133,6 @@ function toIsoDate(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
-}
-
-function fromIsoDate(iso: string) {
-  const parsed = new Date(`${iso}T00:00:00`)
-  if (Number.isNaN(parsed.getTime())) return new Date()
-  return parsed
-}
-
-function heatCellClass(intensity: number) {
-  if (intensity <= 0) return 'bg-slate-100'
-  if (intensity > 0.75) return 'bg-emerald-800'
-  if (intensity > 0.5) return 'bg-emerald-600'
-  if (intensity > 0.25) return 'bg-emerald-400'
-  return 'bg-emerald-200'
 }
 
 function getFinancialYearStartYear(monthKey: string) {

@@ -1,4 +1,5 @@
 import { pb } from '@/data/pocketbase'
+import { findMisfiledBills, type BillNumberRecord } from '@/domain/bill-books'
 
 type PBRecord = Record<string, unknown> & { id: string }
 
@@ -80,6 +81,30 @@ export async function loadDataHealthIssues(): Promise<DataHealthIssue[]> {
       detail: `Bill ${ref} appears ${rows.length} times.`,
     })
   }
+
+  const numberRecords: BillNumberRecord[] = (billsRaw as PBRecord[]).map((bill) => ({
+    id: bill.id,
+    bookNo: num(bill.book_no),
+    billNo: num(bill.bill_no),
+    businessDate: String(bill.date ?? '').slice(0, 10),
+    customerName: String(bill.customer_name ?? ''),
+  }))
+
+  for (const misfiled of findMisfiledBills(numberRecords)) {
+    issues.push({
+      id: `misfiled-bill-${misfiled.id}`,
+      severity: 'Medium',
+      area: 'Bills',
+      title: 'Bill saved under the wrong book',
+      detail: `Bill ${misfiled.billNo} is recorded in book ${misfiled.recordedBookNo}, but belongs to book ${misfiled.expectedBookNo}.${
+        misfiled.customerName ? ` Party ${misfiled.customerName}.` : ''
+      }${misfiled.businessDate ? ` Dated ${misfiled.businessDate}.` : ''}`,
+    })
+  }
+
+  // Skipped numbers inside a book are NOT flagged: a gap means the physical
+  // page was torn or cancelled, which is normal. The Book Register still shows
+  // them for reference.
 
   return issues.sort((a, b) => severityRank(a.severity) - severityRank(b.severity) || a.area.localeCompare(b.area))
 }

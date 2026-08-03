@@ -1,11 +1,12 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Edit3, Plus } from 'lucide-react'
+import { ArrowDown, ArrowUp, Edit3, Phone, Plus, Search, X } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { DateInput } from '@/components/ui/date-input'
 import { createCustomer, loadCustomersWithLedgerContext, toggleCustomerActive, updateCustomer } from '@/data/customers'
+import type { CustomerLedgerSummary } from '@/domain/customers'
 import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatFullDate } from '@/lib/date'
@@ -58,21 +59,69 @@ const defaultCustomerFormState = (): CustomerFormState => ({
   note: '',
 })
 
+type BalanceFilter = 'all' | 'due' | 'advance' | 'inactive'
+type SortKey = 'name' | 'outstanding' | 'billed' | 'activity'
+
+const FILTER_LABEL: Record<BalanceFilter, string> = {
+  all: 'All',
+  due: 'With due',
+  advance: 'Advance',
+  inactive: 'Inactive',
+}
+
 function CustomersPage() {
   const queryClient = useQueryClient()
   const [statusText, setStatusText] = useState('')
-  const [showMoreDetails, setShowMoreDetails] = useState(false)
-  const [formState, setFormState] = useState<CustomerFormState>(defaultCustomerFormState())
+  const [query, setQuery] = useState('')
+  const [balanceFilter, setBalanceFilter] = useState<BalanceFilter>('all')
+  const [sortKey, setSortKey] = useState<SortKey>('outstanding')
+  const [sortDesc, setSortDesc] = useState(true)
+  const [dialogState, setDialogState] = useState<CustomerFormState | null>(null)
 
   const customersQuery = useQuery({
     queryKey: CUSTOMER_QUERY_KEY,
     queryFn: loadCustomersWithLedgerContext,
   })
+  const allRows = customersQuery.data ?? []
 
-  const filteredRows = useMemo(() => customersQuery.data ?? [], [customersQuery.data])
+  const kpis = useMemo(() => {
+    const active = allRows.filter((row) => row.customer.active).length
+    const withDue = allRows.filter((row) => row.dueAmount > 0)
+    return {
+      total: allRows.length,
+      active,
+      withDue: withDue.length,
+      totalDue: withDue.reduce((sum, row) => sum + row.dueAmount, 0),
+    }
+  }, [allRows])
+
+  const visibleRows = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    let rows = allRows
+    if (needle) {
+      rows = rows.filter((row) =>
+        `${row.customer.companyName} ${row.customer.name} ${row.customer.phone}`.toLowerCase().includes(needle),
+      )
+    }
+    if (balanceFilter === 'due') rows = rows.filter((row) => row.dueAmount > 0)
+    else if (balanceFilter === 'advance') rows = rows.filter((row) => row.advanceAmount > 0)
+    else if (balanceFilter === 'inactive') rows = rows.filter((row) => !row.customer.active)
+
+    const direction = sortDesc ? -1 : 1
+    const lastActivity = (row: CustomerLedgerSummary) =>
+      row.lastBillDate > row.lastPaymentDate ? row.lastBillDate : row.lastPaymentDate
+    return [...rows].sort((a, b) => {
+      if (sortKey === 'name') {
+        return direction * formatCustomerDisplayName(a.customer.companyName, a.customer.name).localeCompare(formatCustomerDisplayName(b.customer.companyName, b.customer.name))
+      }
+      if (sortKey === 'billed') return direction * (a.billedTotal - b.billedTotal)
+      if (sortKey === 'activity') return direction * lastActivity(a).localeCompare(lastActivity(b))
+      return direction * (a.netBalance - b.netBalance)
+    })
+  }, [allRows, balanceFilter, query, sortDesc, sortKey])
 
   const createOrUpdateMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (formState: CustomerFormState) => {
       const parsed = customerSchema.safeParse({
         ...formState,
         companyName: formState.companyName.trim(),
@@ -81,7 +130,6 @@ function CustomersPage() {
       if (!parsed.success) {
         throw new Error(parsed.error.issues[0]?.message ?? 'Customer validation failed')
       }
-
       const payload = {
         companyName: parsed.data.companyName,
         name: parsed.data.name,
@@ -94,24 +142,19 @@ function CustomersPage() {
         creditLimit: parsed.data.creditLimit ?? 0,
         note: parsed.data.note ?? '',
       }
-
-      if (formState.id) {
-        await updateCustomer(formState.id, payload)
-      } else {
-        await createCustomer(payload)
-      }
+      if (formState.id) await updateCustomer(formState.id, payload)
+      else await createCustomer(payload)
+      return formState.id
     },
-    onSuccess: async () => {
-      setStatusText(formState.id ? 'Customer updated successfully' : 'Customer created successfully')
-      resetForm()
+    onSuccess: async (updatedId) => {
+      setStatusText(updatedId ? 'Customer updated.' : 'Customer created.')
+      setDialogState(null)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: CUSTOMER_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
       ])
     },
-    onError: (error) => {
-      setStatusText(toUserMessage(error))
-    },
+    onError: (error) => setStatusText(toUserMessage(error)),
   })
 
   const toggleMutation = useMutation({
@@ -124,18 +167,11 @@ function CustomersPage() {
         queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
       ])
     },
-    onError: (error) => {
-      setStatusText(toUserMessage(error))
-    },
+    onError: (error) => setStatusText(toUserMessage(error)),
   })
 
-  function resetForm() {
-    setFormState(defaultCustomerFormState())
-    setShowMoreDetails(false)
-  }
-
-  function openEditForm(row: (typeof filteredRows)[number]) {
-    setFormState({
+  function openEditDialog(row: CustomerLedgerSummary) {
+    setDialogState({
       id: row.customer.id,
       companyName: row.customer.companyName || row.customer.name,
       name: row.customer.name,
@@ -150,156 +186,293 @@ function CustomersPage() {
     })
   }
 
-  const canSubmitForm = formState.companyName.trim().length > 0 && formState.name.trim().length > 0 && !createOrUpdateMutation.isPending
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDesc((current) => !current)
+    } else {
+      setSortKey(key)
+      setSortDesc(key !== 'name')
+    }
+  }
 
   return (
-    <div className="w-full space-y-8 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
-      {statusText && <p className="text-xs text-slate-500" role="status" aria-live="polite">{statusText}</p>}
-
+    <div className="w-full space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+      {/* Toolbar: KPIs, search, filters, add */}
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-slate-900">{formState.id ? 'Edit Customer' : 'Add Customer'}</h3>
-            <div className="flex items-center gap-2">
-              <button type="button" className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50" onClick={() => setShowMoreDetails((prev) => !prev)}>
-                {showMoreDetails ? 'Less details' : 'More details'}
-              </button>
-              {formState.id && (
-                <button type="button" className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50" onClick={resetForm}>
-                  Switch to New
-                </button>
-              )}
-            </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">Customers</h2>
+            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">{kpis.total}</span>
+            <span className="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-rose-100">
+              {kpis.withDue} owe {formatInrInteger(kpis.totalDue)}
+            </span>
           </div>
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
-            <Field label="Company Name *">
-              <input className={inputClass} type="text" value={formState.companyName} onChange={(event) => setFormState((prev) => ({ ...prev, companyName: event.target.value }))} />
-            </Field>
-            <Field label="Customer Name *">
-              <input className={inputClass} type="text" value={formState.name} onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))} />
-            </Field>
-            <Field label="Opening Balance">
-              <input className={inputClass} type="number" value={formState.openingBalance || ''} onChange={(event) => setFormState((prev) => ({ ...prev, openingBalance: Number(event.target.value || 0) }))} />
-            </Field>
-            <Field label="Opening Balance Date">
-              <DateInput className={inputClass} value={formState.openingBalanceDate} onChange={(nextDate) => setFormState((prev) => ({ ...prev, openingBalanceDate: nextDate }))} />
-            </Field>
-            <Field label="Status">
-              <select className={inputClass} value={formState.active ? 'yes' : 'no'} onChange={(event) => setFormState((prev) => ({ ...prev, active: event.target.value === 'yes' }))}>
-                <option value="yes">Active</option>
-                <option value="no">Inactive</option>
-              </select>
-            </Field>
-            <div className="flex items-end gap-2 xl:col-span-1">
-              <button type="button" className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50" onClick={resetForm}>
-                Clear
-              </button>
+          <button
+            type="button"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
+            onClick={() => setDialogState(defaultCustomerFormState())}
+          >
+            <Plus size={14} /> Add Customer
+          </button>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="relative w-full sm:w-72">
+            <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              placeholder="Search name, company, or phone..."
+              className="h-9 w-full rounded-md border border-slate-300 bg-white pl-8 pr-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </div>
+          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
+            {(Object.keys(FILTER_LABEL) as BalanceFilter[]).map((key) => (
               <button
+                key={key}
                 type="button"
-                className="inline-flex h-10 items-center gap-1 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={() => void createOrUpdateMutation.mutateAsync()}
-                disabled={!canSubmitForm}
+                className={`rounded-md px-3 py-1.5 transition ${balanceFilter === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                onClick={() => setBalanceFilter(key)}
               >
-                <Plus size={14} />
-                {createOrUpdateMutation.isPending ? 'Saving...' : formState.id ? 'Update' : 'Save'}
+                {FILTER_LABEL[key]}
               </button>
-            </div>
+            ))}
           </div>
-          {showMoreDetails && (
-            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-              <Field label="Phone">
-                <input className={inputClass} type="text" value={formState.phone} onChange={(event) => setFormState((prev) => ({ ...prev, phone: event.target.value }))} />
-              </Field>
-              <Field label="GSTIN (optional)">
-                <input className={inputClass} type="text" value={formState.gstin} onChange={(event) => setFormState((prev) => ({ ...prev, gstin: event.target.value }))} />
-              </Field>
-              <Field label="Credit Limit (optional)">
-                <input className={inputClass} type="number" value={formState.creditLimit || ''} onChange={(event) => setFormState((prev) => ({ ...prev, creditLimit: parseNonNegativeNumber(event.target.value) }))} />
-              </Field>
-              <Field label="Address (optional)">
-                <input className={inputClass} type="text" value={formState.address} onChange={(event) => setFormState((prev) => ({ ...prev, address: event.target.value }))} />
-              </Field>
-              <Field label="Note (optional)">
-                <input className={inputClass} type="text" value={formState.note} onChange={(event) => setFormState((prev) => ({ ...prev, note: event.target.value }))} />
-              </Field>
-            </div>
-          )}
+          {statusText && <p className="text-xs text-slate-500" role="status" aria-live="polite">{statusText}</p>}
+        </div>
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-3 text-sm font-semibold text-slate-900">Customer List</h3>
-        {customersQuery.isLoading && <p className="text-sm text-slate-500">Loading customers...</p>}
-        {customersQuery.isError && <p className="text-sm text-red-600">Unable to load customers.</p>}
+      {/* Customer table */}
+      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        {customersQuery.isLoading && <p className="p-5 text-sm text-slate-500">Loading customers...</p>}
+        {customersQuery.isError && <p className="p-5 text-sm text-red-600">Unable to load customers.</p>}
         {!customersQuery.isLoading && !customersQuery.isError && (
           <div className="overflow-x-auto no-scrollbar">
-            <table className="w-full min-w-[980px]">
-              <thead>
-                <tr className="bg-slate-50">
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Company Name</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Customer Name</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Opening Dt.</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Opening Balance</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Closing Balance</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
+            <table className="w-full min-w-[880px] text-sm">
+              <thead className="bg-slate-50">
+                <tr className="text-left text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+                  <SortableTh label="Party" active={sortKey === 'name'} desc={sortDesc} onClick={() => toggleSort('name')} />
+                  <th className="px-3 py-2.5">Contact</th>
+                  <SortableTh label="Billed" active={sortKey === 'billed'} desc={sortDesc} onClick={() => toggleSort('billed')} align="right" />
+                  <th className="px-3 py-2.5 text-right">Paid</th>
+                  <SortableTh label="Outstanding" active={sortKey === 'outstanding'} desc={sortDesc} onClick={() => toggleSort('outstanding')} align="right" />
+                  <SortableTh label="Last activity" active={sortKey === 'activity'} desc={sortDesc} onClick={() => toggleSort('activity')} align="right" />
+                  <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody>
-                {filteredRows.length === 0 && (
+              <tbody className="divide-y divide-slate-100">
+                {visibleRows.length === 0 && (
                   <tr>
-                    <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={6}>
-                      <p className="font-medium text-slate-700">No customers yet.</p>
-                      <p className="mt-1">Create your first customer to start billing and ledger tracking.</p>
-                      <button
-                        type="button"
-                        className="mt-3 inline-flex items-center gap-1 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
-                        onClick={() => {
-                          resetForm()
-                          window.scrollTo({ top: 0, behavior: 'smooth' })
-                        }}
-                      >
-                        <Plus size={14} />
-                        Add Customer
-                      </button>
+                    <td className="px-3 py-10 text-center text-sm text-slate-500" colSpan={7}>
+                      {allRows.length === 0 ? (
+                        <>
+                          <p className="font-medium text-slate-700">No customers yet.</p>
+                          <button
+                            type="button"
+                            className="mt-3 inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                            onClick={() => setDialogState(defaultCustomerFormState())}
+                          >
+                            <Plus size={14} /> Add your first customer
+                          </button>
+                        </>
+                      ) : (
+                        <>No customer matches this search or filter.</>
+                      )}
                     </td>
                   </tr>
                 )}
-                {filteredRows.map((row, index) => (
-                  <tr key={row.customer.id} className={`border-t border-slate-100 transition hover:bg-slate-50 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-                    <td className="px-3 py-3">
-                      <Link to="/ledger" search={{ customerId: row.customer.id, focus: '' }} className="text-sm font-medium text-blue-700 hover:text-blue-800 hover:underline">
-                        {formatCustomerDisplayName(row.customer.companyName, row.customer.name)}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-3 text-sm text-slate-700">{row.customer.name || '-'}</td>
-                    <td className="px-3 py-3 text-sm text-slate-600">{row.customer.openingBalanceDate ? formatFullDate(row.customer.openingBalanceDate) : '-'}</td>
-                    <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{formatInrInteger(row.openingBalance)}</td>
-                    <td className="px-3 py-3 text-right font-mono text-sm font-semibold text-slate-900">{formatInrInteger(row.netBalance)}</td>
-                    <td className="px-3 py-3 text-right">
-                      <div className="inline-flex gap-2">
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                          onClick={() => openEditForm(row)}
+                {visibleRows.map((row) => {
+                  const lastActivity = row.lastBillDate > row.lastPaymentDate ? row.lastBillDate : row.lastPaymentDate
+                  return (
+                    <tr key={row.customer.id} className={`transition hover:bg-slate-50/60 ${row.customer.active ? '' : 'opacity-60'}`}>
+                      <td className="px-3 py-2.5">
+                        <Link
+                          to="/ledger"
+                          search={{ customerId: row.customer.id, focus: '' }}
+                          className="font-medium text-blue-700 hover:text-blue-800 hover:underline"
                         >
-                          <Edit3 size={12} />
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                          onClick={() => void toggleMutation.mutateAsync({ id: row.customer.id, nextActive: !row.customer.active })}
-                        >
-                          {row.customer.active ? 'Deactivate' : 'Activate'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {formatCustomerDisplayName(row.customer.companyName, row.customer.name)}
+                        </Link>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {row.customer.name}
+                          {!row.customer.active && <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">Inactive</span>}
+                        </p>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-slate-600">
+                        {row.customer.phone ? (
+                          <a href={`tel:${row.customer.phone}`} className="inline-flex items-center gap-1 hover:text-blue-700">
+                            <Phone size={11} /> {row.customer.phone}
+                          </a>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-700">{formatInrInteger(row.billedTotal)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-700">{formatInrInteger(row.paidTotal)}</td>
+                      <td className="px-3 py-2.5 text-right">
+                        {row.dueAmount > 0 ? (
+                          <span className="font-mono font-semibold tabular-nums text-rose-600">{formatInrInteger(row.dueAmount)}</span>
+                        ) : row.advanceAmount > 0 ? (
+                          <span className="font-mono font-semibold tabular-nums text-emerald-600">-{formatInrInteger(row.advanceAmount)}</span>
+                        ) : (
+                          <span className="text-xs font-medium text-slate-400">Clear</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-xs text-slate-500">{lastActivity ? formatFullDate(lastActivity) : '—'}</td>
+                      <td className="px-3 py-2.5 text-right">
+                        <div className="inline-flex gap-1.5">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            onClick={() => openEditDialog(row)}
+                          >
+                            <Edit3 size={12} /> Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            onClick={() => void toggleMutation.mutateAsync({ id: row.customer.id, nextActive: !row.customer.active })}
+                          >
+                            {row.customer.active ? 'Deactivate' : 'Activate'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         )}
+        <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
+          Showing {visibleRows.length} of {allRows.length} customers
+        </p>
       </section>
 
+      {dialogState && (
+        <CustomerDialog
+          formState={dialogState}
+          isSaving={createOrUpdateMutation.isPending}
+          onChange={setDialogState}
+          onClose={() => setDialogState(null)}
+          onSave={() => void createOrUpdateMutation.mutateAsync(dialogState)}
+        />
+      )}
+    </div>
+  )
+}
+
+function SortableTh({
+  label,
+  active,
+  desc,
+  onClick,
+  align = 'left',
+}: {
+  label: string
+  active: boolean
+  desc: boolean
+  onClick: () => void
+  align?: 'left' | 'right'
+}) {
+  return (
+    <th className={`px-3 py-2.5 ${align === 'right' ? 'text-right' : 'text-left'}`} aria-sort={active ? (desc ? 'descending' : 'ascending') : 'none'}>
+      <button
+        type="button"
+        className={`inline-flex items-center gap-1 uppercase tracking-[0.06em] transition hover:text-slate-800 ${active ? 'text-slate-900' : ''}`}
+        onClick={onClick}
+      >
+        {label}
+        {active && (desc ? <ArrowDown size={11} /> : <ArrowUp size={11} />)}
+      </button>
+    </th>
+  )
+}
+
+function CustomerDialog({
+  formState,
+  isSaving,
+  onChange,
+  onClose,
+  onSave,
+}: {
+  formState: CustomerFormState
+  isSaving: boolean
+  onChange: (next: CustomerFormState) => void
+  onClose: () => void
+  onSave: () => void
+}) {
+  const canSave = formState.companyName.trim().length > 0 && formState.name.trim().length > 0 && !isSaving
+
+  return (
+    <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4" onClick={onClose}>
+      <div
+        className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label={formState.id ? 'Edit customer' : 'Add customer'}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
+          <h3 className="text-base font-semibold text-slate-900">{formState.id ? 'Edit Customer' : 'Add Customer'}</h3>
+          <button type="button" aria-label="Close" className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="space-y-4 px-5 py-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Company Name *">
+              <input className={inputClass} type="text" value={formState.companyName} onChange={(event) => onChange({ ...formState, companyName: event.target.value })} />
+            </Field>
+            <Field label="Customer Name *">
+              <input className={inputClass} type="text" value={formState.name} onChange={(event) => onChange({ ...formState, name: event.target.value })} />
+            </Field>
+            <Field label="Opening Balance">
+              <input className={inputClass} type="number" value={formState.openingBalance || ''} onChange={(event) => onChange({ ...formState, openingBalance: Number(event.target.value || 0) })} />
+            </Field>
+            <Field label="Opening Balance Date">
+              <DateInput className={inputClass} value={formState.openingBalanceDate} onChange={(nextDate) => onChange({ ...formState, openingBalanceDate: nextDate })} />
+            </Field>
+            <Field label="Phone">
+              <input className={inputClass} type="tel" value={formState.phone} onChange={(event) => onChange({ ...formState, phone: event.target.value })} />
+            </Field>
+            <Field label="Status">
+              <select className={inputClass} value={formState.active ? 'yes' : 'no'} onChange={(event) => onChange({ ...formState, active: event.target.value === 'yes' })}>
+                <option value="yes">Active</option>
+                <option value="no">Inactive</option>
+              </select>
+            </Field>
+            <Field label="GSTIN (optional)">
+              <input className={inputClass} type="text" value={formState.gstin} onChange={(event) => onChange({ ...formState, gstin: event.target.value })} />
+            </Field>
+            <Field label="Credit Limit (optional)">
+              <input className={inputClass} type="number" value={formState.creditLimit || ''} onChange={(event) => onChange({ ...formState, creditLimit: parseNonNegativeNumber(event.target.value) })} />
+            </Field>
+            <Field label="Address (optional)">
+              <input className={inputClass} type="text" value={formState.address} onChange={(event) => onChange({ ...formState, address: event.target.value })} />
+            </Field>
+            <Field label="Note (optional)">
+              <input className={inputClass} type="text" value={formState.note} onChange={(event) => onChange({ ...formState, note: event.target.value })} />
+            </Field>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3.5">
+          <button type="button" className="rounded-md border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={onSave}
+            disabled={!canSave}
+          >
+            {isSaving ? 'Saving...' : formState.id ? 'Update Customer' : 'Save Customer'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -314,4 +487,4 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 const inputClass =
-  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100'

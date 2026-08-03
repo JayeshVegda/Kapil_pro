@@ -190,6 +190,12 @@ function PrintBillPage() {
     setSelectedBillId(routeSearch.billId)
   }, [routeSearch.billId, selectedBillId])
 
+  // Land on the most recent bill instead of an empty preview panel.
+  useEffect(() => {
+    if (selectedBillId || routeSearch.billId || routeSearch.billRef || bills.length === 0) return
+    setSelectedBillId(bills[0].id)
+  }, [bills, routeSearch.billId, routeSearch.billRef, selectedBillId])
+
   useEffect(() => {
     if (!routeSearch.billRef) return
     setSearch(routeSearch.billRef)
@@ -314,7 +320,9 @@ function PrintBillPage() {
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-span-5">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-slate-900">Bill List</h3>
+            <h3 className="text-sm font-semibold text-slate-900">
+              Bill List <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">{filteredBills.length}</span>
+            </h3>
             <label className="relative w-[280px] max-w-full">
               <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -329,20 +337,19 @@ function PrintBillPage() {
           {printQuery.isError && <p className="text-sm text-red-600">Unable to load bill data.</p>}
           {!printQuery.isLoading && !printQuery.isError && (
             <div className="max-h-[72vh] overflow-auto rounded-md border border-slate-100 no-scrollbar">
-              <table className="w-full min-w-[640px] sm:min-w-[760px]">
+              <table className="w-full min-w-[420px]">
                 <thead>
                   <tr className="sticky top-0 bg-slate-50">
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Bill</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Date</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Party</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Items</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredBills.length === 0 && (
                     <tr>
-                      <td className="px-3 py-6 text-center text-sm text-slate-500" colSpan={5}>
+                      <td className="px-3 py-6 text-center text-sm text-slate-500" colSpan={4}>
                         No bills found for current search.
                       </td>
                     </tr>
@@ -355,13 +362,13 @@ function PrintBillPage() {
                         className={`cursor-pointer border-t border-slate-100 ${active ? 'border-l-4 border-l-blue-600 bg-blue-50' : index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}
                         onClick={() => setSelectedBillId(bill.id)}
                       >
-                        <td className="px-3 py-2 text-sm font-medium text-slate-800">{bill.bookNo}/{bill.billNo}</td>
-                        <td className="px-3 py-2 text-sm text-slate-700">{formatFullDate(bill.date)}</td>
-                        <td className="px-3 py-2 text-sm text-slate-700">{bill.customerName}</td>
-                        <td className="max-w-[230px] truncate px-3 py-2 text-xs text-slate-600" title={bill.itemSummary}>
-                          {bill.itemSummary}
+                        <td className="px-3 py-2 text-sm font-medium tabular-nums text-slate-800">{bill.bookNo}/{bill.billNo}</td>
+                        <td className="px-3 py-2 text-sm text-slate-600">{formatFullDate(bill.date)}</td>
+                        <td className="max-w-[220px] px-3 py-2">
+                          <span className="block truncate text-sm text-slate-800">{bill.customerName}</span>
+                          <span className="block truncate text-xs text-slate-500" title={bill.itemSummary}>{bill.itemSummary}</span>
                         </td>
-                        <td className="px-3 py-2 text-right text-sm font-mono text-slate-800">{formatInrInteger(bill.total)}</td>
+                        <td className="px-3 py-2 text-right font-mono text-sm tabular-nums text-slate-800">{formatInrInteger(bill.total)}</td>
                       </tr>
                     )
                   })}

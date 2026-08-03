@@ -9,6 +9,7 @@ import { DateInput } from '@/components/ui/date-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
 import { assertBillNumberAvailable, getNextBillNoForBook, saveBillWithItems } from '@/data/bills'
+import { bookNoForBillNo, getBookRange, isBillNoInBook } from '@/domain/bill-books'
 import { savePayment } from '@/data/payments'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billing-calculations'
@@ -23,6 +24,7 @@ import {
   type BillingGstMode,
 } from '@/domain/billing-modes'
 import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
+import { dedupeBillPreviewCredits } from '@/domain/bill-preview'
 import { loadSavedMarketRateForDate, useMarketRate } from '@/domain/market-rate'
 import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
@@ -54,7 +56,7 @@ type BillItemRow = {
   bagWeight: number
 }
 type GstMode = 'none' | 'percent18' | 'manual'
-type CreditAdjustment = { date: string; amount: number }
+type CreditAdjustment = { id: string; date: string; amount: number }
 type QuickPaymentRow = { id: string; date: string; amount: number; amountInput: string; mode: 'Cash' | 'Bank'; note: string }
 type AutoBalanceContext = { previousBalanceDate: string; previousBalanceAmount: number; credits: CreditAdjustment[] }
 type LastCustomerItemRate = { rate: number; mktRate: number; gstRate: number; date: string; billRef: string }
@@ -176,6 +178,7 @@ function NewBillPage() {
   const [quickPayments, setQuickPayments] = useState<QuickPaymentRow[]>([])
   const [quickCommandInput, setQuickCommandInput] = useState('')
   const [pendingCommandPreview, setPendingCommandPreview] = useState(false)
+  const [previewBalanceSnapshot, setPreviewBalanceSnapshot] = useState<AutoBalanceContext | null>(null)
   const { marketRate, refreshMarketRate } = useMarketRate(date)
   const billNoInitializedRef = useRef(false)
   const manualBillNoRef = useRef(false)
@@ -217,6 +220,18 @@ function NewBillPage() {
     queryFn: () => getNextBillNoForBook(bookNo),
     enabled: bookNo > 0,
   })
+  // `null` means every number in the book is used; fall back to the book start so the field stays usable.
+  const isBookFull = !nextBillNoQuery.isLoading && nextBillNoQuery.data === null
+  const resolvedNextBillNo = nextBillNoQuery.data ?? getBookRange(bookNo).firstBillNo
+  // Warnings only — routine info like the book's range or next number would be noise.
+  const billNoHint = useMemo((): { text?: string; tone: 'muted' | 'warning' } => {
+    if (bookNo <= 0) return { tone: 'muted' }
+    if (isBookFull) return { text: `Book ${bookNo} is finished — start the next book`, tone: 'warning' }
+    if (billNo > 0 && !isBillNoInBook(bookNo, billNo)) {
+      return { text: `Bill ${billNo} belongs to book ${bookNoForBillNo(billNo)}, not book ${bookNo}`, tone: 'warning' }
+    }
+    return { tone: 'muted' }
+  }, [billNo, bookNo, isBookFull])
   const autoBalanceQuery = useQuery({
     queryKey: ['customer-auto-balance', customerId, date],
     enabled: Boolean(customerId && date),
@@ -290,9 +305,10 @@ function NewBillPage() {
           entry.amount > 0 &&
           // Credit should be after last bill cutoff.
           (entry.date > lastBillDate ||
-            (entry.date === lastBillDate &&
-              ((entry.createdTs > 0 && lastBillCreatedTs > 0 && entry.createdTs > lastBillCreatedTs) ||
-                (entry.createdTs === 0 || lastBillCreatedTs === 0)))) &&
+            // Same-day: only a payment provably entered after the bill counts as
+            // a credit. Unknown timestamps already sit inside previousBalance —
+            // listing them here again would subtract them twice.
+            (entry.date === lastBillDate && entry.createdTs > 0 && lastBillCreatedTs > 0 && entry.createdTs > lastBillCreatedTs)) &&
           isOnOrBeforeDay(entry.date, date),
       )
 
@@ -363,6 +379,7 @@ function NewBillPage() {
         queryClient.invalidateQueries({ queryKey: ['customers-ledger'] }),
         queryClient.invalidateQueries({ queryKey: ['payment-ledger-context'] }),
         queryClient.invalidateQueries({ queryKey: ['next-bill-no'] }),
+        queryClient.invalidateQueries({ queryKey: ['customer-auto-balance'] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard-data'] }),
         customerId ? invalidateAfterPaymentWrite(queryClient, customerId) : Promise.resolve(),
       ])
@@ -416,13 +433,20 @@ function NewBillPage() {
   const electronicQty = validRows.filter((row) => !isGasBillingItem(row)).reduce((sum, row) => sum + row.qty, 0)
   const qtySummary = formatBillQtySummary(gasQty, electronicQty)
   const previousBalanceDate = autoBalanceQuery.data?.previousBalanceDate ?? date
-  const previousBalanceAmount = autoBalanceQuery.data?.previousBalanceAmount ?? 0
-  const validCredits = (autoBalanceQuery.data?.credits ?? []).filter((entry) => entry.amount > 0)
+  const activeBalance = previewBalanceSnapshot ?? autoBalanceQuery.data
+  const activePreviousBalanceDate = activeBalance?.previousBalanceDate ?? date
+  const previousBalanceAmount = activeBalance?.previousBalanceAmount ?? 0
+  const validCredits = (activeBalance?.credits ?? []).filter((entry) => entry.amount > 0)
   const totalCredits = validCredits.reduce((sum, entry) => sum + entry.amount, 0)
   const validQuickPayments = quickPayments.filter((payment) => payment.amount > 0)
   const quickPaymentTotal = validQuickPayments.reduce((sum, entry) => sum + entry.amount, 0)
   const subTotalBeforeCredits = grandTotal + previousBalanceAmount
   const payableAfterAdjustments = grandTotal + previousBalanceAmount - totalCredits - quickPaymentTotal
+  const previewCreditEntries = [
+    ...validCredits.map((c) => ({ id: c.id, date: c.date, amount: c.amount })),
+    ...validQuickPayments.map((payment) => ({ id: payment.id, date: payment.date, amount: payment.amount })),
+  ]
+  const dedupedPreviewCreditEntries = dedupeBillPreviewCredits(previewCreditEntries)
   const marketPillTitle = [
     marketRate.rateDate ? `Rate date: ${formatFullDate(marketRate.rateDate)}` : '',
     marketRate.previousRate != null ? `Previous: ${formatInrInteger(marketRate.previousRate)}` : '',
@@ -452,11 +476,8 @@ function NewBillPage() {
           gstRate,
           currentBillTotal: grandTotal,
           previousBalance: previousBalanceAmount,
-          previousBillDate: previousBalanceDate,
-          periodCreditEntries: [
-            ...validCredits.map((c) => ({ date: c.date, amount: c.amount })),
-            ...validQuickPayments.map((payment) => ({ date: payment.date, amount: payment.amount })),
-          ],
+          previousBillDate: activePreviousBalanceDate,
+          periodCreditEntries: dedupedPreviewCreditEntries,
           subtotal: subTotalBeforeCredits,
           finalTotal: payableAfterAdjustments,
           totalQty,
@@ -477,10 +498,13 @@ function NewBillPage() {
     setLrInput('')
     setLrList([])
     manualBillNoRef.current = false
-    void getNextBillNoForBook(bookNo).then(setBillNo).catch(() => setBillNo((prev) => prev + 1))
+    void getNextBillNoForBook(bookNo)
+      .then((next) => setBillNo(next ?? getBookRange(bookNo).firstBillNo))
+      .catch(() => setBillNo((prev) => prev + 1))
     setIsQuickEntryOpen(false)
     setQuickCommandInput('')
     setPendingCommandPreview(false)
+    setPreviewBalanceSnapshot(null)
   }
 
   function addLrChip() {
@@ -599,7 +623,12 @@ function NewBillPage() {
   async function openPreview() {
     if (!validateBeforePreview()) return
     try {
+      setStatusText('Preparing preview...')
       await assertBillNumberAvailable(bookNo, billNo)
+      // The preview prints previous balance and credit entries — refetch so it
+      // can never show a stale snapshot (e.g. right after saving another bill).
+      const refreshed = await autoBalanceQuery.refetch()
+      setPreviewBalanceSnapshot(refreshed.data ?? null)
       setStatusText('')
       setIsPreviewOpen(true)
     } catch (error) {
@@ -617,11 +646,20 @@ function NewBillPage() {
     const commandDate = firstPass.ok && firstPass.command.kind === 'bill' ? firstPass.command.date : date
     const savedRate = await loadSavedMarketRateForDate(commandDate)
     const commandMktRate = savedRate?.rate ?? 0
+    const commandCustomerId = firstPass.ok && firstPass.command.kind === 'bill' ? firstPass.command.customer.id : ''
+    const commandLastRates: Record<string, LastCustomerItemRate> = commandCustomerId
+      ? await loadCustomerLastItemRates(commandCustomerId).catch(() => ({}))
+      : {}
+    const parserLastRates: Record<string, { rate: number; mktRate: number; gstRate: number }> = {}
+    for (const [key, value] of Object.entries(commandLastRates)) {
+      parserLastRates[`${commandCustomerId}:${key}`] = value
+    }
     const parsed = parseContextCommand(input, 'bill', {
       customers: customersQuery.data ?? [],
       items: itemsQuery.data ?? [],
       today,
       mktRate: commandMktRate,
+      lastRates: parserLastRates,
     })
     if (!parsed.ok) {
       setStatusText(parsed.error)
@@ -633,7 +671,6 @@ function NewBillPage() {
     }
     const command = parsed.command
     const nextGstMode = command.gstMode === 'manual' ? 'manual' : command.gstRate === 18 ? 'percent18' : 'none'
-    const commandLastRates = await loadCustomerLastItemRates(command.customer.id).catch(() => ({}))
     const itemMasters = itemsQuery.data ?? []
     if (command.bookNo) {
       setBookNo(command.bookNo)
@@ -642,8 +679,8 @@ function NewBillPage() {
         setBillNo(command.billNo)
       } else {
         manualBillNoRef.current = false
-        const nextNo = await getNextBillNoForBook(command.bookNo).catch(() => 1)
-        setBillNo(nextNo)
+        const nextNo = await getNextBillNoForBook(command.bookNo).catch(() => null)
+        setBillNo(nextNo ?? getBookRange(command.bookNo).firstBillNo)
       }
     } else if (command.billNo) {
       manualBillNoRef.current = true
@@ -793,14 +830,14 @@ function NewBillPage() {
   useEffect(() => {
     if (billNoInitializedRef.current) return
     if (nextBillNoQuery.isLoading) return
-    setBillNo(Number(nextBillNoQuery.data ?? 1) || 1)
+    setBillNo(resolvedNextBillNo)
     billNoInitializedRef.current = true
-  }, [nextBillNoQuery.data, nextBillNoQuery.isLoading])
+  }, [resolvedNextBillNo, nextBillNoQuery.isLoading])
 
   useEffect(() => {
     if (!billNoInitializedRef.current || manualBillNoRef.current || nextBillNoQuery.isLoading) return
-    setBillNo(Number(nextBillNoQuery.data ?? 1) || 1)
-  }, [bookNo, nextBillNoQuery.data, nextBillNoQuery.isLoading])
+    setBillNo(resolvedNextBillNo)
+  }, [bookNo, resolvedNextBillNo, nextBillNoQuery.isLoading])
 
   useEffect(() => {
     const items = itemsQuery.data ?? []
@@ -832,7 +869,6 @@ function NewBillPage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold text-slate-900">Bill Details</h3>
-            <p className="mt-1 text-xs text-slate-500">Customer, bill number, market rate, dispatch, and balance context.</p>
           </div>
           <div className="relative flex items-center gap-2">
             <button
@@ -889,7 +925,11 @@ function NewBillPage() {
               }}
             />
           </Field>
-          <Field label="Bill No">
+          <Field
+            label="Bill No"
+            hint={billNoHint.text}
+            hintTone={billNoHint.tone}
+          >
             <input
               className={inputClass}
               type="number"
@@ -996,25 +1036,39 @@ function NewBillPage() {
           </div>
         )}
         <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Credit Entries (auto)</p>
-            {autoBalanceQuery.isFetching && <span className="text-xs text-slate-500">Loading...</span>}
-          </div>
-          <div className="space-y-1 text-sm text-slate-700">
-            {!customerId && <p>Select customer to load credit history.</p>}
-            {customerId && autoBalanceQuery.isSuccess && (
-              <p>
-                Previous balance as on <span className="font-semibold">{previousBalanceDate === 'Opening' ? 'Opening' : formatFullDate(previousBalanceDate)}</span>:{' '}
-                <span className="font-mono font-semibold">{formatInrInteger(previousBalanceAmount)}</span>
-              </p>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Previous Balance & Credits</p>
+            {autoBalanceQuery.isFetching ? (
+              <span className="text-xs text-slate-500">Calculating…</span>
+            ) : (
+              totalCredits > 0 && (
+                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
+                  {validCredits.length} payment{validCredits.length === 1 ? '' : 's'} · -{formatInrInteger(totalCredits)}
+                </span>
+              )
             )}
-            {customerId && !autoBalanceQuery.isFetching && validCredits.length === 0 && <p>No credits found after last bill date.</p>}
+          </div>
+          <div className="space-y-1.5 text-sm text-slate-700">
+            {!customerId && <p className="text-slate-400">Picked automatically once you choose a party.</p>}
+            {customerId && autoBalanceQuery.isSuccess && (
+              <div className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 py-1.5">
+                <span className="text-slate-600">
+                  Balance till {previousBalanceDate === 'Opening' ? 'opening' : formatFullDate(previousBalanceDate)}
+                </span>
+                <span className={`font-mono font-semibold tabular-nums ${previousBalanceAmount > 0 ? 'text-slate-900' : previousBalanceAmount < 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                  {formatInrInteger(previousBalanceAmount)}
+                </span>
+              </div>
+            )}
             {validCredits.map((entry, index) => (
-              <div key={`${entry.date}-${entry.amount}-${index}`} className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-2 py-1.5">
-                <span className="font-medium">{formatFullDate(entry.date)}</span>
-                <span className="font-mono text-slate-900">- {formatInrInteger(entry.amount)}</span>
+              <div key={`${entry.date}-${entry.amount}-${index}`} className="flex items-center justify-between rounded-md border border-emerald-100 bg-white px-2.5 py-1.5">
+                <span className="text-slate-600">Received {formatFullDate(entry.date)}</span>
+                <span className="font-mono font-semibold tabular-nums text-emerald-600">- {formatInrInteger(entry.amount)}</span>
               </div>
             ))}
+            {customerId && !autoBalanceQuery.isFetching && validCredits.length === 0 && (
+              <p className="text-xs text-slate-400">No payments received since the last bill.</p>
+            )}
           </div>
         </div>
       </section>
@@ -1022,8 +1076,7 @@ function NewBillPage() {
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-semibold text-slate-900">Quick Payment</h3>
-            <p className="mt-1 text-xs text-slate-500">Optional payments saved with this bill after confirmation.</p>
+            <h3 className="text-sm font-semibold text-slate-900">Quick Payment <span className="ml-1 text-xs font-normal text-slate-400">optional</span></h3>
           </div>
           <button
             type="button"
@@ -1053,7 +1106,7 @@ function NewBillPage() {
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Mode</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Note</th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
+                  <th className="px-3 py-2"><span className="sr-only">Remove</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -1119,7 +1172,9 @@ function NewBillPage() {
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-slate-900">Items</h3>
+          <h3 className="text-sm font-semibold text-slate-900">
+            Items{validRows.length > 0 && <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">{validRows.length}</span>}
+          </h3>
           <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700" onClick={addItemRow}>
             <Plus size={14} /> Add Row
           </button>
@@ -1141,7 +1196,7 @@ function NewBillPage() {
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Margin / Unit</th>
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Final Rate</th>
                 <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Amount</th>
-                <th className="px-3 py-2.5 text-center text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
+                <th className="px-3 py-2.5"><span className="sr-only">Remove</span></th>
               </tr>
             </thead>
             <tbody>
@@ -1171,11 +1226,6 @@ function NewBillPage() {
                           </option>
                         ))}
                       </select>
-                      {row.itemName && (
-                        <p className="mt-1 text-[11px] font-medium text-slate-500">
-                          {isGasBillingItem(row) ? 'Gas item: qty in kg, margin follows MKT.' : 'Electronic item: qty in pcs, rate is unit price.'}
-                        </p>
-                      )}
                     </td>
                     <td className="px-3 py-2.5 align-middle">
                       <input
@@ -1280,7 +1330,7 @@ function NewBillPage() {
               <CalcMetric label={`Credits (${validCredits.length})`} value={`-${formatInrInteger(totalCredits)}`} />
               <CalcMetric label={`Quick Pay (${validQuickPayments.length})`} value={`-${formatInrInteger(quickPaymentTotal)}`} />
               <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-blue-900 md:text-right">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-blue-600">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-600">
                   {payableAfterAdjustments >= 0 ? 'Amount Due' : 'Advance'}
                 </p>
                 <p className="mt-0.5 truncate font-mono text-base font-bold tabular-nums" title={formatInrInteger(Math.abs(payableAfterAdjustments))}>
@@ -1292,8 +1342,15 @@ function NewBillPage() {
         </div>
 
         <div className="sticky bottom-[calc(3.85rem+env(safe-area-inset-bottom))] z-20 -mx-5 mt-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-5 py-3 backdrop-blur lg:static lg:mx-0 lg:border-t-0 lg:bg-transparent lg:p-0">
-          <span className="text-xs text-slate-500">
-            {helperStatusText} · Bill {formatInrInteger(grandTotal)} · Quick pay {formatInrInteger(quickPaymentTotal)} · {payableAfterAdjustments >= 0 ? 'Due' : 'Advance'} {formatInrInteger(Math.abs(payableAfterAdjustments))}
+          <span className="flex items-baseline gap-2 text-xs text-slate-500">
+            {statusText ? (
+              <span>{helperStatusText}</span>
+            ) : (
+              <>
+                <span>{payableAfterAdjustments >= 0 ? 'Amount due' : 'Advance'}</span>
+                <span className="font-mono text-sm font-bold tabular-nums text-slate-900">{formatInrInteger(Math.abs(payableAfterAdjustments))}</span>
+              </>
+            )}
           </span>
           <div className="flex-1" />
           <button type="button" className="px-1 py-1 text-sm font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline" onClick={resetForm}>
@@ -1406,11 +1463,12 @@ function NewBillPage() {
   )
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, children, hint, hintTone = 'muted' }: { label: string; children: ReactNode; hint?: string; hintTone?: 'muted' | 'warning' }) {
   return (
     <label className="flex flex-col gap-1.5">
       <span className="text-xs font-medium text-slate-600">{label}</span>
       {children}
+      {hint ? <span className={`text-[11px] ${hintTone === 'warning' ? 'text-amber-600' : 'text-slate-500'}`}>{hint}</span> : null}
     </label>
   )
 }
@@ -1418,7 +1476,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-      <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+      <p className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
       <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-slate-900" title={value}>{value}</p>
     </div>
   )
@@ -1427,7 +1485,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 function CalcMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-md border border-slate-200 bg-white px-2.5 py-2">
-      <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+      <p className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
       <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-slate-900" title={value}>{value}</p>
     </div>
   )

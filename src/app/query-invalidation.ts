@@ -11,5 +11,7 @@ export async function invalidateAfterPaymentWrite(queryClient: QueryClient, cust
     queryClient.invalidateQueries({ queryKey: ['company-report'] }),
     queryClient.invalidateQueries({ queryKey: ['print-bill-data'] }),
     queryClient.invalidateQueries({ queryKey: ['customers-ledger'] }),
+    // New Bill previews previous balance + credits from this key.
+    queryClient.invalidateQueries({ queryKey: ['customer-auto-balance'] }),
   ])
 }

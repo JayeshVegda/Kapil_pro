@@ -10,9 +10,12 @@ import {
 } from 'lucide-react'
 import { useMemo, type ReactNode } from 'react'
 import { loadCastingSessions } from '@/data/casting'
+import { useModuleSettings } from '@/lib/use-module-settings'
 import { useDashboardData } from '@/domain/dashboard'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
-import { RankedBarList, SplitProgress, StatusPill } from '@/components/ui/business-dashboard'
+import { formatInrInteger } from '@/lib/inr-format'
+import { RankedBarList, StatusPill } from '@/components/ui/business-dashboard'
+import { SalesCollectionTrendChart } from '@/components/reports/company-charts'
 
 export const Route = createFileRoute('/')({
   component: DashboardPage,
@@ -23,9 +26,13 @@ function DashboardPage() {
   const navigate = useNavigate()
   const today = useMemo(() => getLocalIsoDate(), [])
 
+  const { castingEnabled } = useModuleSettings()
+
   const castingSessionsQuery = useQuery({
     queryKey: ['casting-sessions', today.slice(0, 4) + '-01-01', today],
     queryFn: () => loadCastingSessions({ from: today.slice(0, 4) + '-01-01', to: today }),
+    // Skipping the query when casting is off also saves a PocketBase round trip.
+    enabled: castingEnabled,
   })
 
   const castingStats = useMemo(() => {
@@ -91,8 +98,6 @@ function DashboardPage() {
   if (!data) return null
 
   const collectionGap = data.thisMonthSummary.sales - data.thisMonthSummary.collection
-  const collectionCoverPct =
-    data.thisMonthSummary.sales > 0 ? (data.thisMonthSummary.collection / data.thisMonthSummary.sales) * 100 : 0
   const totalSoldBags = data.itemComparisons.spindle.bags + data.itemComparisons.tapperPlug.bags
   const totalSoldKg = data.itemComparisons.spindle.kg + data.itemComparisons.tapperPlug.kg
   const topSoldRows = data.thisMonthItemBags.slice(0, 5).map((row) => ({
@@ -102,61 +107,105 @@ function DashboardPage() {
     subLabel: `${formatWhole(row.kg)} kg sold this month`,
   }))
 
+  const agingBuckets = buildAgingBuckets(data.actionRequired.riskRows)
+  const trendData = data.monthlyTrend.map((row) => ({ month: row.month, sales: row.sales, collections: row.collection }))
+
   return (
     <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
-      <section className="mb-4 rounded-lg border border-blue-200 bg-blue-700 p-4 text-white shadow-sm">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase text-blue-100">Today Snapshot</p>
-            <h1 className="mt-2 font-mono text-4xl font-bold leading-none tracking-tight sm:text-5xl">
-              {fmtMoneyCompact(data.kpis.outstanding)}
-            </h1>
-            <p className="mt-2 text-sm text-blue-50">
-              Total receivable. {data.actionRequired.pendingParties} parties pending. Month collection cover {collectionCoverPct.toFixed(0)}%.
-            </p>
+      {/* Receivables overview — the number that runs the business, split by age */}
+      <section className="mb-4 rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="grid grid-cols-1 divide-y divide-slate-100 lg:grid-cols-[1.25fr_1fr] lg:divide-x lg:divide-y-0">
+          <div className="p-5">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Total Receivables</p>
+            <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="font-mono text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+                {formatInrInteger(data.kpis.outstanding)}
+              </span>
+              <span className="text-sm text-slate-500">
+                from {data.actionRequired.pendingParties} parties
+              </span>
+            </div>
+            <AgingBar buckets={agingBuckets} />
           </div>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:w-[42rem]">
-            <HeroStat label="Sales" value={fmtMoneyCompact(data.thisMonthSummary.sales)} detail="this month" />
-            <HeroStat label="Collection" value={fmtMoneyCompact(data.thisMonthSummary.collection)} detail="this month" />
-            <HeroStat label="Sold" value={`${formatWhole(totalSoldBags)} bags`} detail={`${formatWhole(totalSoldKg)} kg`} />
-            <HeroStat label="Metal" value={castingStats.avgMetalCost > 0 ? `₹${castingStats.avgMetalCost.toFixed(0)}` : '—'} detail="per kg" />
+
+          <div className="p-5">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">This Month</p>
+            <div className="mt-3 grid grid-cols-3 gap-3">
+              <MonthStat label="Sales" value={fmtMoneyCompact(data.thisMonthSummary.sales)} delta={data.kpis.salesVsLastMonth} />
+              <MonthStat label="Collections" value={fmtMoneyCompact(data.thisMonthSummary.collection)} delta={data.kpis.collectionVsLastMonth} />
+              <MonthStat
+                label="Net"
+                value={`${data.kpis.thisMonthNet >= 0 ? '+' : '-'}${fmtMoneyCompact(Math.abs(data.kpis.thisMonthNet))}`}
+                tone={data.kpis.thisMonthNet >= 0 ? 'emerald' : 'rose'}
+              />
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-3 border-t border-slate-100 pt-3">
+              <MonthStat label="Bills" value={formatWhole(data.kpis.totalBills)} muted />
+              <MonthStat label="Avg bill" value={fmtMoneyCompact(data.kpis.averageBillValue)} muted />
+              <MonthStat label="Sold" value={`${formatWhole(totalSoldBags)} bags`} muted />
+            </div>
           </div>
         </div>
       </section>
 
-      <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.85fr)]">
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
+      {/* Trend + collections worklist */}
+      <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_1fr]">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-2 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-slate-950">Sales vs Collection</h2>
-              <p className="text-xs text-slate-500">
-                This month gap {collectionGap > 0 ? fmtMoneyCompact(collectionGap) : 'covered'} · {collectionCoverPct.toFixed(0)}% collected
-              </p>
+              <h2 className="text-sm font-semibold text-slate-950">Sales vs Collections</h2>
+              <p className="text-xs text-slate-500">Last 6 months · hover for exact amounts</p>
             </div>
             <StatusPill tone={collectionGap > 0 ? 'amber' : 'emerald'}>
-              {collectionGap > 0 ? `${fmtMoneyCompact(collectionGap)} gap` : 'covered'}
+              {collectionGap > 0 ? `${fmtMoneyCompact(collectionGap)} gap this month` : 'collections covered'}
             </StatusPill>
           </div>
-          <SplitProgress
-            leftLabel="Month sales"
-            leftValue={data.thisMonthSummary.sales}
-            rightLabel="Month collection"
-            rightValue={data.thisMonthSummary.collection}
-            leftText={fmtMoneyCompact(data.thisMonthSummary.sales)}
-            rightText={fmtMoneyCompact(data.thisMonthSummary.collection)}
-          />
-          <div className="mt-4">
-            <TrendChart months={data.monthlyTrend} />
-          </div>
+          <SalesCollectionTrendChart data={trendData} />
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-slate-950">Sold Bags / Kg</h2>
-              <p className="text-xs text-slate-500">Selling movement only, no stock-in management</p>
+              <h2 className="text-sm font-semibold text-slate-950">Collect Next</h2>
+              <p className="text-xs text-slate-500">Largest pending balances, oldest first</p>
             </div>
-            <StatusPill tone="emerald">{formatWhole(totalSoldKg)} kg</StatusPill>
+            <StatusPill tone={data.actionRequired.highRiskParties > 0 ? 'amber' : 'emerald'}>
+              {data.actionRequired.highRiskParties > 0 ? `${data.actionRequired.highRiskParties} high` : 'on track'}
+            </StatusPill>
+          </div>
+          {data.actionRequired.riskRows.length === 0 ? (
+            <p className="py-6 text-center text-xs text-slate-400">Nothing pending — all parties are clear.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {data.actionRequired.riskRows.slice(0, 6).map((row) => (
+                <button
+                  key={row.customerId}
+                  type="button"
+                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2 text-left transition hover:border-blue-200 hover:bg-blue-50/50"
+                  onClick={() => navigate({ to: '/ledger', search: { customerId: row.customerId, focus: '' } })}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-[13px] font-medium text-slate-800">{row.customerName}</span>
+                    <span className={`text-[11px] font-semibold ${row.level === 'overdue' ? 'text-rose-600' : row.level === 'due' ? 'text-amber-600' : 'text-slate-500'}`}>
+                      {row.dueDays}d pending
+                    </span>
+                  </span>
+                  <span className="shrink-0 font-mono text-sm font-bold tabular-nums text-slate-900">{fmtMoneyCompact(row.amount)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Movement + operations */}
+      <section className={`mb-4 grid grid-cols-1 gap-4 ${castingEnabled ? 'xl:grid-cols-3' : 'xl:grid-cols-2'}`}>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-950">Sold This Month</h2>
+              <p className="text-xs text-slate-500">Bags by item · {formatWhole(totalSoldKg)} kg total</p>
+            </div>
           </div>
           <RankedBarList
             rows={topSoldRows}
@@ -165,20 +214,41 @@ function DashboardPage() {
             tone="emerald"
           />
         </div>
-      </section>
 
-      <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(24rem,0.72fr)_minmax(0,1.28fr)]">
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-950">Latest Activity</h2>
+          <div className="mt-3 space-y-3">
+            <SmallActivity
+              title="Last bill"
+              value={data.thisMonthSummary.lastSale ? fmtMoneyCompact(data.thisMonthSummary.lastSale.amount) : '—'}
+              detail={data.thisMonthSummary.lastSale ? `${formatFullDate(data.thisMonthSummary.lastSale.date)} · ${data.thisMonthSummary.lastSale.customerName}` : 'No bill this month'}
+              icon={<IndianRupee size={15} />}
+            />
+            <SmallActivity
+              title="Last payment"
+              value={data.thisMonthSummary.lastCollection ? fmtMoneyCompact(data.thisMonthSummary.lastCollection.amount) : '—'}
+              detail={data.thisMonthSummary.lastCollection ? `${formatFullDate(data.thisMonthSummary.lastCollection.date)} · ${data.thisMonthSummary.lastCollection.customerName}` : 'No payment this month'}
+              icon={<Receipt size={15} />}
+            />
+            <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-3">
+              <InfoMetric label="Active parties" value={formatWhole(data.kpis.activeCustomers)} />
+              <InfoMetric label="Collection rate" value={`${Math.round(data.kpis.collectionRate)}%`} />
+            </div>
+          </div>
+        </div>
+
+        {castingEnabled && (
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-slate-950">Casting Cost Signal</h2>
-              <p className="text-xs text-slate-500">Metal-cost view for one-glance pricing decisions</p>
+              <p className="text-xs text-slate-500">Metal-cost view for pricing decisions</p>
             </div>
             <Link to="/casting" className="text-xs font-semibold text-blue-700 hover:text-blue-800">
               Casting
             </Link>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2">
             <CostMetric label="Metal Intake" value={`${formatWhole(castingStats.inputKg)} kg`} icon={<Flame size={15} />} />
             <CostMetric label="Wire Out" value={`${formatWhole(castingStats.wireOut)} kg`} icon={<Activity size={15} />} />
             <CostMetric label="Avg Cost" value={castingStats.avgMetalCost > 0 ? `₹${castingStats.avgMetalCost.toFixed(2)}` : '—'} icon={<IndianRupee size={15} />} />
@@ -196,28 +266,7 @@ function DashboardPage() {
             </p>
           </div>
         </div>
-
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <InfoMetric label="Active parties" value={formatWhole(data.kpis.activeCustomers)} />
-            <InfoMetric label="Bills made" value={formatWhole(data.kpis.totalBills)} />
-            <InfoMetric label="Avg bill value" value={fmtMoneyCompact(data.kpis.averageBillValue)} />
-          </div>
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <SmallActivity
-              title="Last bill"
-              value={data.thisMonthSummary.lastSale ? fmtMoneyCompact(data.thisMonthSummary.lastSale.amount) : '—'}
-              detail={data.thisMonthSummary.lastSale ? `${formatFullDate(data.thisMonthSummary.lastSale.date)} · ${data.thisMonthSummary.lastSale.customerName}` : 'No bill this month'}
-              icon={<IndianRupee size={15} />}
-            />
-            <SmallActivity
-              title="Last payment"
-              value={data.thisMonthSummary.lastCollection ? fmtMoneyCompact(data.thisMonthSummary.lastCollection.amount) : '—'}
-              detail={data.thisMonthSummary.lastCollection ? `${formatFullDate(data.thisMonthSummary.lastCollection.date)} · ${data.thisMonthSummary.lastCollection.customerName}` : 'No payment this month'}
-              icon={<Receipt size={15} />}
-            />
-          </div>
-        </div>
+        )}
       </section>
 
       <section className="grid min-h-[42vh] grid-cols-1 gap-4 xl:grid-cols-2">
@@ -228,15 +277,73 @@ function DashboardPage() {
   )
 }
 
-function HeroStat({ label, value, detail }: { label: string; value: string; detail?: string }) {
+type AgingBucketRow = { label: string; amount: number; color: string; text: string }
+
+function buildAgingBuckets(rows: Array<{ amount: number; dueDays: number }>): AgingBucketRow[] {
+  const buckets: AgingBucketRow[] = [
+    { label: '0-30d', amount: 0, color: 'bg-blue-400', text: 'text-blue-700' },
+    { label: '31-60d', amount: 0, color: 'bg-amber-400', text: 'text-amber-700' },
+    { label: '61-90d', amount: 0, color: 'bg-orange-400', text: 'text-orange-700' },
+    { label: '90d+', amount: 0, color: 'bg-rose-500', text: 'text-rose-700' },
+  ]
+  for (const row of rows) {
+    const index = row.dueDays <= 30 ? 0 : row.dueDays <= 60 ? 1 : row.dueDays <= 90 ? 2 : 3
+    buckets[index].amount += row.amount
+  }
+  return buckets
+}
+
+function AgingBar({ buckets }: { buckets: AgingBucketRow[] }) {
+  const total = buckets.reduce((sum, bucket) => sum + bucket.amount, 0)
+  if (total <= 0) {
+    return <p className="mt-4 text-xs text-slate-400">No pending receivables — everything is collected.</p>
+  }
   return (
-    <div className="rounded-lg bg-white/10 p-3 ring-1 ring-white/15">
-      <p className="text-[10px] font-semibold uppercase text-blue-100">{label}</p>
-      <p className="mt-1 truncate font-mono text-lg font-bold leading-tight text-white">{value}</p>
-      {detail ? <p className="truncate text-[11px] font-medium text-blue-100">{detail}</p> : null}
+    <div className="mt-4">
+      <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100">
+        {buckets.map((bucket) =>
+          bucket.amount > 0 ? (
+            <div
+              key={bucket.label}
+              className={bucket.color}
+              style={{ width: `${(bucket.amount / total) * 100}%` }}
+              title={`${bucket.label}: ${formatInrInteger(bucket.amount)}`}
+            />
+          ) : null,
+        )}
+      </div>
+      <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1">
+        {buckets.map((bucket) => (
+          <span key={bucket.label} className="inline-flex items-center gap-1.5 text-xs">
+            <span className={`h-2 w-2 rounded-full ${bucket.color}`} />
+            <span className="text-slate-500">{bucket.label}</span>
+            <span className={`font-mono font-semibold tabular-nums ${bucket.amount > 0 ? bucket.text : 'text-slate-300'}`}>
+              {bucket.amount > 0 ? fmtMoneyCompact(bucket.amount) : '—'}
+            </span>
+          </span>
+        ))}
+      </div>
     </div>
   )
 }
+
+function MonthStat({ label, value, delta, tone, muted = false }: { label: string; value: string; delta?: number; tone?: 'emerald' | 'rose'; muted?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] font-medium text-slate-500">{label}</p>
+      <p className={`mt-0.5 truncate font-mono text-base font-bold tabular-nums ${muted ? 'text-slate-700' : tone === 'emerald' ? 'text-emerald-600' : tone === 'rose' ? 'text-rose-600' : 'text-slate-900'}`}>
+        {value}
+      </p>
+      {delta !== undefined && delta !== 0 && (
+        <p className={`text-[11px] font-semibold ${delta > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+          {delta > 0 ? '+' : '-'}
+          {fmtMoneyCompact(Math.abs(delta))} vs last month
+        </p>
+      )}
+    </div>
+  )
+}
+
 
 function InfoMetric({ label, value }: { label: string; value: string }) {
   return (
@@ -272,40 +379,7 @@ function CostMetric({ label, value, icon }: { label: string; value: string; icon
   )
 }
 
-function TrendChart({ months }: { months: Array<{ month: string; sales: number; collection: number }> }) {
-  const max = Math.max(1, ...months.map((m) => Math.max(m.sales, m.collection)))
-  return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-      {months.map((item) => {
-        const salesPct = (item.sales / max) * 100
-        const collPct = (item.collection / max) * 100
-        return (
-          <div key={item.month} className="rounded-lg border border-slate-100 bg-white p-3">
-            <p className="mb-2 truncate text-xs font-semibold text-slate-600">{item.month}</p>
-            <div className="space-y-2">
-              <MiniBar label="Sales" value={fmtMoneyCompact(item.sales)} pct={salesPct} color="bg-blue-600" />
-              <MiniBar label="Collection" value={fmtMoneyCompact(item.collection)} pct={collPct} color="bg-emerald-600" />
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
 
-function MiniBar({ label, value, pct, color }: { label: string; value: string; pct: number; color: string }) {
-  return (
-    <div>
-      <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-slate-500">
-        <span>{label}</span>
-        <span className="font-mono font-semibold text-slate-700">{value}</span>
-      </div>
-      <div className="h-1.5 rounded-full bg-slate-100">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.max(3, pct)}%` }} />
-      </div>
-    </div>
-  )
-}
 
 function RecentBillsTable({
   rows,

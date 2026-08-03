@@ -2,6 +2,7 @@ import { formatMonthYear } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 import { Activity, CircleDollarSign, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
 import type { MonthlyItemComparisons } from '@/domain/monthly-item-rollup'
+import type { GasSalesMetrics } from '@/domain/gas-sales-reporting'
 
 export type CalendarMonthOverviewProps = {
   monthKey: string
@@ -15,9 +16,11 @@ export type CalendarMonthOverviewProps = {
   itemComparisons: MonthlyItemComparisons
   soldBags: number
   soldKg: number
+  gas: GasSalesMetrics
+  leadingGasItem: { name: string; kg: number; bags: number } | null
 }
 
-export function CalendarMonthOverview({ monthKey, sales, collections, avgRate, netPosition, topBuyer, topCollection, rateDelta, itemComparisons, soldBags, soldKg }: CalendarMonthOverviewProps) {
+export function CalendarMonthOverview({ monthKey, sales, collections, avgRate, netPosition, topBuyer, topCollection, rateDelta, itemComparisons, soldBags, soldKg, gas, leadingGasItem }: CalendarMonthOverviewProps) {
   return (
     <div className="space-y-5">
       <div className="rounded-xl bg-blue-700 p-4 text-white">
@@ -34,6 +37,8 @@ export function CalendarMonthOverview({ monthKey, sales, collections, avgRate, n
         <OverviewLine icon={ReceiptText} label="Top buyer" value={topBuyer ? topBuyer.customerName : '-'} detail={topBuyer ? `${formatInrInteger(topBuyer.sales)} · ${formatNumber(topBuyer.bags)} bags · avg ${formatInrInteger(topBuyer.avgRate)}` : 'No sales yet'} tone="text-blue-800" iconTone="bg-blue-50 text-blue-700" />
         <OverviewLine icon={CircleDollarSign} label="Top collection" value={topCollection ? topCollection.customerName : '-'} detail={topCollection ? formatInrInteger(topCollection.amount) : 'No collection yet'} tone="text-emerald-800" iconTone="bg-emerald-50 text-emerald-700" />
         <OverviewLine icon={TrendingUp} label="Rate movement" value={avgRate != null ? formatInrInteger(Math.round(avgRate)) : '-'} detail={rateDelta == null ? 'No last-month rate' : `${rateDelta >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(rateDelta))} vs last month`} tone="text-sky-800" iconTone="bg-sky-50 text-sky-700" />
+        <OverviewLine icon={TrendingUp} label="Gas selling rate" value={gas.weightedSellingRate == null ? '-' : `${formatInrInteger(gas.weightedSellingRate)}/kg`} detail={gas.premiumPerKg == null ? 'Bill market comparison unavailable' : `${gas.premiumPerKg >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(gas.premiumPerKg))}/kg vs bill market`} tone="text-blue-800" iconTone="bg-blue-50 text-blue-700" />
+        <OverviewLine icon={ReceiptText} label="Leading gas item" value={leadingGasItem?.name ?? '-'} detail={leadingGasItem ? `${formatNumber(leadingGasItem.kg)} kg · ${formatNumber(leadingGasItem.bags)} bags` : 'No gas sales yet'} tone="text-slate-800" iconTone="bg-slate-100 text-slate-600" />
         <OverviewLine icon={Activity} label="Collection cover" value={sales > 0 ? `${Math.round((collections / sales) * 100)}%` : '-'} detail={netPosition >= 0 ? `${formatInrInteger(netPosition)} surplus` : `${formatInrInteger(Math.abs(netPosition))} gap`} tone={netPosition >= 0 ? 'text-emerald-800' : 'text-red-700'} iconTone={netPosition >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'} />
         <OverviewLine icon={ReceiptText} label="Sold volume" value={`${formatNumber(soldBags)} bags`} detail={`${formatNumber(soldKg)} kg from bills`} tone="text-amber-800" iconTone="bg-amber-50 text-amber-700" />
       </div>

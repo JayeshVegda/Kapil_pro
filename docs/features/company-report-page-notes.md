@@ -20,6 +20,7 @@ The page loads raw data from:
 - `bill_items`
 - `payments`
 - `customers`
+- `items`
 
 Using:
 
@@ -39,6 +40,16 @@ The page builds and reuses these aggregations:
 - `customerLatestBillDate`: last bill date by customer (for aging bucket classification)
 
 ## Key KPI Definitions
+
+### Gas Sales Performance
+
+- **Gas Sales**: sum of gas `bill_items.amount`, excluding GST and transport
+- **Weighted Average Selling Rate**: gas line amount divided by gas quantity in kg
+- **Weighted Bill Market Rate**: each gas line's kg multiplied by its parent bill's saved `mkt` rate, divided by kg with valid market rates
+- **Premium / Discount per kg**: weighted selling rate minus weighted bill market rate
+- Breakdowns are available by month, item, and customer
+- Electronic item lines do not contribute to gas metrics
+- Missing market rates are shown as unavailable rather than treated as zero
 
 ### Executive Summary
 

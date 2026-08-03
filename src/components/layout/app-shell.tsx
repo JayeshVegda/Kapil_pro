@@ -8,9 +8,11 @@ import { useMarketRate } from '@/domain/market-rate'
 import { getAdminControlSettings, subscribeAdminControlSettings } from '@/lib/admin-control'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
-import { PENDING_COMMAND_STORAGE_KEY, splitCommandPrefix, inferCommandKind, getCommandRegistry, parseContextCommand, parseAmountToken } from '@/lib/commands'
+import { PENDING_COMMAND_STORAGE_KEY, splitCommandPrefix, inferCommandKind, getCommandRegistry, parseContextCommand, parseAmountToken, type CommandLastRate } from '@/lib/commands'
 import { rememberQuickSearchResult } from '@/lib/recent-items'
 import { filterRankedNameMatches, findBestNameMatch } from '@/lib/search'
+import { defaultModuleSettings, isPathHiddenByModules, type ModuleSettings } from '@/lib/module-settings'
+import { useModuleSettings } from '@/lib/use-module-settings'
 import { QuickSearchPreview } from './quick-search-preview'
 import { MobileBottomNav, SidebarNavPanel } from './sidebar-nav'
 
@@ -20,8 +22,9 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/new-payment': { title: 'Payments', subtitle: 'Record collections and adjustments' },
   '/transactions': { title: 'Logs', subtitle: 'Manage recent bills and payments with CRUD actions' },
   '/ledger': { title: 'Party', subtitle: 'Single-party ledger and analytics' },
-  '/monthly-report': { title: 'Report', subtitle: 'Company-level performance insights' },
-  '/calendar': { title: 'Calendar', subtitle: 'Month view of sales, collections, and market rate' },
+  '/monthly-report': { title: 'Company Report', subtitle: 'Company-level sales, collections, and gas performance' },
+  '/monthly-sales-calendar': { title: 'Monthly Sales Calendar', subtitle: 'Daily gas selling, market rates, sales, and collections' },
+  '/calendar': { title: 'Monthly Sales Calendar', subtitle: 'Daily gas selling, market rates, sales, and collections' },
   '/export-reports': { title: 'Exports', subtitle: 'Download ledger, company, and backup reports' },
   '/customers': { title: 'Customers', subtitle: 'Manage customer master data' },
   '/items': { title: 'Items', subtitle: 'Manage item master and defaults' },
@@ -58,7 +61,7 @@ const commandRoutes = [
   { label: 'New Payment', path: '/new-payment' },
   { label: 'Transactions', path: '/transactions' },
   { label: 'Ledger', path: '/ledger' },
-  { label: 'Calendar', path: '/calendar' },
+  { label: 'Monthly Sales Calendar', path: '/monthly-sales-calendar' },
   { label: 'Customers', path: '/customers' },
   { label: 'Items', path: '/items' },
   { label: 'Data Health', path: '/data-health' },
@@ -128,16 +131,42 @@ export function AppShell() {
   const activeQuickSearchResult = visibleQuickSearchResults[activeQuickSearchIndex] ?? visibleQuickSearchResults[0]
   const commandRegistry = useMemo(() => getCommandRegistry(), [adminSettings])
   const today = useMemo(() => getLocalIsoDate(), [])
-  const { marketRate } = useMarketRate(today)
+  const moduleSettings = useModuleSettings()
+  const { marketRate, refreshMarketRate } = useMarketRate(today)
   const commandDepsQuery = useQuery({
     queryKey: ['command-bar-deps'],
     enabled: commandOpen || commandInput.trim().length > 0,
     staleTime: 5 * 60_000,
     queryFn: async () => {
-      const [customersRaw, itemsRaw] = await Promise.all([
+      const [customersRaw, itemsRaw, billsRaw, billItemsRaw] = await Promise.all([
         pb.collection('customers').getFullList({ sort: 'company_name,name' }),
         pb.collection('items').getFullList({ sort: 'name' }),
+        pb.collection('bills').getFullList({ sort: 'date,created,bill_no' }),
+        pb.collection('bill_items').getFullList(),
       ])
+      const billById = new Map(billsRaw.map((row) => [row.id, row]))
+      const lastRates: Record<string, CommandLastRate> = {}
+      for (const row of billItemsRaw) {
+        const bill = billById.get(String(row.bill ?? ''))
+        const customerId = String(bill?.customer ?? '')
+        if (!customerId) continue
+        const itemId = String(row.item ?? '')
+        const itemName = String(row.item_name ?? '').trim().toLowerCase()
+        const next = {
+          rate: Number(row.rate ?? 0),
+          mktRate: Number(bill?.mkt ?? 0),
+          gstRate: Number(bill?.gst_rate ?? 0),
+          date: String(bill?.date ?? '').slice(0, 10),
+          created: String(bill?.created ?? ''),
+        }
+        for (const key of [itemId, itemName].filter(Boolean)) {
+          const mapKey = `${customerId}:${key}`
+          const current = (lastRates as Record<string, CommandLastRate & { date?: string; created?: string }>)[mapKey]
+          if (!current || `${next.date}|${next.created}` > `${current.date ?? ''}|${current.created ?? ''}`) {
+            ;(lastRates as Record<string, CommandLastRate & { date?: string; created?: string }>)[mapKey] = next
+          }
+        }
+      }
       return {
         customers: customersRaw.map((r) => ({
           id: r.id,
@@ -153,6 +182,7 @@ export function AppShell() {
           unit: String(r.unit ?? ''),
           bagWeight: Number(r.bag_weight ?? 50),
         })),
+        lastRates,
       }
     },
   })
@@ -165,6 +195,7 @@ export function AppShell() {
       items: commandDepsQuery.data?.items ?? [],
       today,
       mktRate: marketRate.rate,
+      lastRates: commandDepsQuery.data?.lastRates,
     })
   }, [commandDepsQuery.data, effectiveCommandInput, commandMode, marketRate.rate, pathname, today])
   const commandDraft = useMemo(
@@ -182,8 +213,9 @@ export function AppShell() {
         customers: commandDepsQuery.data?.customers ?? [],
         items: commandDepsQuery.data?.items ?? [],
         history: commandHistory,
+        moduleSettings,
       }),
-    [billSession, commandDepsQuery.data, commandHistory, commandInput, commandMode],
+    [billSession, commandDepsQuery.data, commandHistory, commandInput, commandMode, moduleSettings],
   )
 
   useEffect(() => {
@@ -227,8 +259,9 @@ export function AppShell() {
         return
       }
       if (!adminSettings.controlKEnabled) return
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      if ((event.ctrlKey || event.metaKey) && event.code === 'KeyK') {
         event.preventDefault()
+        setQuickSearchOpen(false)
         setCommandOpen(true)
       }
     }
@@ -581,9 +614,19 @@ export function AppShell() {
               }}
               title={adminSettings.controlKEnabled ? 'Command bar (Ctrl+K)' : 'Command bar disabled in Control Room'}
               aria-label="Open command bar"
+              aria-keyshortcuts="Control+K Meta+K"
               disabled={!adminSettings.controlKEnabled}
             >
               <Command size={15} />
+            </button>
+            <button
+              type="button"
+              className="hidden min-h-9 items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 text-xs font-semibold text-amber-800 shadow-sm transition hover:bg-amber-100 sm:inline-flex"
+              title={`${marketRate.status}${marketRate.rateDate ? ` | ${marketRate.rateDate}` : ''}`}
+              onClick={() => void refreshMarketRate()}
+            >
+              <span className="text-[10px] uppercase tracking-[0.08em] text-amber-600">MKT</span>
+              <span className="font-mono tabular-nums">{marketRate.rate > 0 ? formatInrInteger(Math.round(marketRate.rate)) : '—'}</span>
             </button>
             <button
               type="button"
@@ -1171,8 +1214,10 @@ function buildCommandSuggestions(
     customers: Array<{ id: string; name: string; companyName?: string; customerName?: string }>
     items: Array<{ id: string; name: string; defaultRate?: number; type?: string; unit?: string; bagWeight?: number }>
     history: string[]
+    moduleSettings?: ModuleSettings
   },
 ): CommandSuggestion[] {
+  const moduleSettings = deps.moduleSettings ?? defaultModuleSettings
   const raw = input.trim()
   if (!raw && !billSession) {
     return [
@@ -1185,7 +1230,7 @@ function buildCommandSuggestions(
   }
   if (mode === 'search') return buildSearchSuggestions(raw.slice(1).trim(), deps.customers)
   if (mode === 'help') return buildHelpSuggestions(raw)
-  if (mode === 'action') return buildActionSuggestions(raw.slice(1).trim())
+  if (mode === 'action') return buildActionSuggestions(raw.slice(1).trim(), moduleSettings)
 
   if (billSession) {
     const line = raw.trim()
@@ -1327,8 +1372,9 @@ function buildHelpSuggestions(input: string): CommandSuggestion[] {
     .map((topic) => ({ ...topic, kind: 'help' as const }))
 }
 
-function buildActionSuggestions(query: string): CommandSuggestion[] {
-  return filterRankedNameMatches(commandRoutes, query, (route) => `${route.label} ${route.path}`)
+function buildActionSuggestions(query: string, moduleSettings: ModuleSettings): CommandSuggestion[] {
+  const routes = commandRoutes.filter((route) => !isPathHiddenByModules(route.path, moduleSettings))
+  return filterRankedNameMatches(routes, query, (route) => `${route.label} ${route.path}`)
     .slice(0, 8)
     .map((route) => ({
       id: `route-${route.path}`,

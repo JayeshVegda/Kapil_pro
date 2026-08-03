@@ -1,12 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Download, Search, User, AlertTriangle, CheckCircle2, Printer } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, FileText, Printer } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { createRoot } from 'react-dom/client'
-import { jsPDF } from 'jspdf'
-import autoTable from 'jspdf-autotable'
-import JSZip from 'jszip'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
+import { PartyListPanel } from '@/components/ledger/party-list-panel'
+import { PartyTrendChart } from '@/components/ledger/party-trend-chart'
+import { DateInput } from '@/components/ui/date-input'
 import { buildBackupSnapshot, type BackupSnapshot } from '@/data/backup'
 import { loadPartyDashboard, loadPartyStatement } from '@/data/ledger'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
@@ -15,7 +14,8 @@ import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { BILL_PREVIEW_CARD_CLASS, BILL_PRINT_JPEG_QUALITY_DOWNLOAD } from '@/lib/bill-print-export'
 import { formatCompanyName } from '@/lib/customer-display'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
-import { BILL_JPEG_OUTPUT_WIDTH_PX, exportNodeAsJpgBlob } from '@/lib/image-export'
+import { exportNodeAsJpgBlob } from '@/lib/image-export'
+import { BILL_JPEG_OUTPUT_WIDTH_PX } from '@/lib/image-export-config'
 import { formatInQty, formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/ledger')({
@@ -26,10 +26,16 @@ export const Route = createFileRoute('/ledger')({
   component: LedgerPage,
 })
 
+const actionButtonClass =
+  'inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50'
+const dateInputClass =
+  'h-9 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100'
+
 function LedgerPage() {
   const search = Route.useSearch()
   const today = useMemo(() => getLocalIsoDate(), [])
-  const toDate = today
+  const [toDate, setToDate] = useState(today)
+  const [fromDate, setFromDate] = useState('')
   const [selectedCustomerId, setSelectedCustomerId] = useState('')
   const [statementFilter, setStatementFilter] = useState<'all' | 'bills' | 'payments'>('all')
   const [statementPage, setStatementPage] = useState(1)
@@ -135,18 +141,19 @@ function LedgerPage() {
         return
       }
 
+      const { default: JSZip } = await import('jszip')
       const zip = new JSZip()
-      zip.file('Full_Statement.pdf', createLedgerReportPdf(packageData.statementTitle, packageData.subtitle, packageData.statementColumns, packageData.statementRows, packageData.statementSummary).output('arraybuffer'))
+      zip.file('Full_Statement.pdf', (await createLedgerReportPdf(packageData.statementTitle, packageData.subtitle, packageData.statementColumns, packageData.statementRows, packageData.statementSummary)).output('arraybuffer'))
       zip.file('Full_Statement.xlsx', await createSimpleWorkbook([{ name: 'Statement', rows: [packageData.statementColumns, ...packageData.statementRows] }]))
-      zip.file('Quick_Summary.pdf', createLedgerReportPdf(`${packageData.customerName} Quick Summary`, packageData.subtitle, ['Metric', 'Value'], packageData.quickSummaryRows, []).output('arraybuffer'))
+      zip.file('Quick_Summary.pdf', (await createLedgerReportPdf(`${packageData.customerName} Quick Summary`, packageData.subtitle, ['Metric', 'Value'], packageData.quickSummaryRows, [])).output('arraybuffer'))
 
       const billsFolder = zip.folder('Bills') ?? zip
       const billImagesFolder = billsFolder.folder('JPG') ?? billsFolder
-      billsFolder.file('All_Bills.pdf', createLedgerReportPdf('All Bills', packageData.subtitle, packageData.billColumns, packageData.billRows, packageData.billSummary).output('arraybuffer'))
+      billsFolder.file('All_Bills.pdf', (await createLedgerReportPdf('All Bills', packageData.subtitle, packageData.billColumns, packageData.billRows, packageData.billSummary)).output('arraybuffer'))
       billsFolder.file('All_Bills.xlsx', await createSimpleWorkbook([{ name: 'Bills', rows: [packageData.billColumns, ...packageData.billRawRows] }]))
 
       const paymentsFolder = zip.folder('Payments') ?? zip
-      paymentsFolder.file('All_Payments.pdf', createLedgerReportPdf('All Payments', packageData.subtitle, packageData.paymentColumns, packageData.paymentRows, packageData.paymentSummary).output('arraybuffer'))
+      paymentsFolder.file('All_Payments.pdf', (await createLedgerReportPdf('All Payments', packageData.subtitle, packageData.paymentColumns, packageData.paymentRows, packageData.paymentSummary)).output('arraybuffer'))
       paymentsFolder.file('All_Payments.xlsx', await createSimpleWorkbook([{ name: 'Payments', rows: [packageData.paymentColumns, ...packageData.paymentRawRows] }]))
 
       for (const bill of packageData.bills) {
@@ -165,6 +172,66 @@ function LedgerPage() {
     } finally {
       setIsExporting(false)
     }
+  }
+
+  async function downloadStatementPdf() {
+    const statement = statementQuery.data
+    if (!statement) return
+    const { createSimpleTablePdf } = await import('@/lib/exports/pdf-engine')
+    const doc = await createSimpleTablePdf({
+      title: `${statement.customerName} — Party Statement`,
+      subtitle: `${fromDate ? `From ${formatFullDate(fromDate)} ` : ''}As of ${formatFullDate(asOfDate)} | Kapil Products`,
+      columns: ['Date', 'Type', 'Details', 'Debit', 'Credit', 'Balance'],
+      rows: [...filteredEvents].reverse().map((event) => [
+        event.date === '-' ? '—' : formatFullDate(event.date),
+        event.type,
+        event.compactDetails ? `${event.details} — ${event.compactDetails}` : event.details,
+        event.debit > 0 ? formatInrInteger(event.debit) : '',
+        event.credit > 0 ? formatInrInteger(event.credit) : '',
+        formatInrInteger(event.balance),
+      ]),
+      summary: [
+        { label: 'Opening', value: formatInrInteger(selectedRow?.openingBalance ?? 0) },
+        { label: 'Billed', value: formatInrInteger(selectedRow?.billedTotal ?? 0) },
+        { label: 'Paid', value: formatInrInteger(selectedRow?.paidTotal ?? 0) },
+        { label: 'Balance', value: formatInrInteger(selectedRow ? selectedRow.dueAmount || -selectedRow.advanceAmount : 0) },
+      ],
+    })
+    doc.save(`${statement.customerName.replace(/[^\w]+/g, '_')}_statement.pdf`)
+  }
+
+  async function downloadStatementExcel() {
+    const statement = statementQuery.data
+    if (!statement) return
+    const { createXlsxBlob } = await import('@/lib/exports/xlsx-workbook')
+    const blob = await createXlsxBlob([
+      {
+        name: 'Statement',
+        totalsLabel: 'Total',
+        columns: [
+          { header: 'Date', type: 'date' },
+          { header: 'Type', type: 'text' },
+          { header: 'Details', type: 'text' },
+          { header: 'Debit', type: 'currency', total: true },
+          { header: 'Credit', type: 'currency', total: true },
+          { header: 'Balance', type: 'currency' },
+        ],
+        rows: [...filteredEvents].reverse().map((event) => [
+          event.date === '-' ? '' : event.date,
+          event.type,
+          event.compactDetails ? `${event.details} — ${event.compactDetails}` : event.details,
+          event.debit || null,
+          event.credit || null,
+          event.balance,
+        ]),
+      },
+    ])
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${statement.customerName.replace(/[^\w]+/g, '_')}_statement.xlsx`
+    link.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 2000)
   }
 
   const analytics = useMemo(() => {
@@ -267,20 +334,35 @@ function LedgerPage() {
     }
   }, [statementQuery.data, selectedRow, toDate])
 
-  const maxTrendVal = useMemo(() => {
-    let max = 1e-9
-    for (const entry of analytics.monthlyTrend) {
-      max = Math.max(max, entry.debit, entry.credit)
-    }
-    return max
-  }, [analytics.monthlyTrend])
 
   const filteredEvents = useMemo(() => {
-    const events = statementQuery.data?.events ?? []
-    if (statementFilter === 'all') return events
-    if (statementFilter === 'bills') return events.filter((event) => event.type === 'Bill')
-    return events.filter((event) => event.type === 'Payment')
-  }, [statementQuery.data?.events, statementFilter])
+    let events = statementQuery.data?.events ?? []
+    if (fromDate) {
+      // Entries before the range collapse into one brought-forward row so the
+      // running balance still reconciles.
+      const before = events.filter((event) => event.date !== '-' && event.date < fromDate)
+      const inRange = events.filter((event) => event.date === '-' ? false : event.date >= fromDate)
+      const broughtForward = before.length > 0 ? before[before.length - 1].balance : (events[0]?.type === 'Opening' ? events[0].balance : 0)
+      events = [
+        {
+          ...(events[0] ?? { id: 'bf', debit: 0, credit: 0, compactDetails: '' }),
+          type: 'Opening',
+          date: '-',
+          details: `Brought forward (till ${formatFullDate(fromDate)})`,
+          compactDetails: '',
+          debit: 0,
+          credit: 0,
+          balance: broughtForward,
+        },
+        ...inRange,
+      ]
+    }
+    if (statementFilter === 'bills') events = events.filter((event) => event.type === 'Bill')
+    else if (statementFilter === 'payments') events = events.filter((event) => event.type === 'Payment')
+    // Recent entries first — the balance was computed chronologically, so
+    // reversing for display keeps every running balance correct.
+    return [...events].reverse()
+  }, [statementQuery.data?.events, statementFilter, fromDate])
 
   const totalStatementPages = Math.max(1, Math.ceil(filteredEvents.length / statementPageSize))
   const paginatedEvents = useMemo(() => {
@@ -290,434 +372,318 @@ function LedgerPage() {
 
   useEffect(() => {
     setStatementPage(1)
-  }, [statementFilter, selectedCustomerIdResolved])
+  }, [statementFilter, selectedCustomerIdResolved, fromDate, toDate])
 
   useEffect(() => {
     if (statementPage > totalStatementPages) setStatementPage(totalStatementPages)
   }, [statementPage, totalStatementPages])
 
   return (
-    <div className="w-full px-3 pb-10 pt-3 sm:px-4 lg:px-6 space-y-5">
-      {/* Row 1: Party Selector & Actions */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
-          <div className="w-full sm:w-72 relative">
-            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <select
-              className={`${inputClass} pl-8 font-semibold text-xs`}
-              value={selectedCustomerIdResolved}
-              onChange={(event) => setSelectedCustomerId(event.target.value)}
-            >
-              <option value="" disabled>Choose a party...</option>
-              {rows.map((row) => (
-                <option key={row.customerId} value={row.customerId}>
-                  {row.customerName}
-                </option>
-              ))}
-            </select>
-          </div>
-          
-          {selectedRow && (
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Status Badge */}
-              {(() => {
-                const isOverdue = selectedRow.status === 'Overdue' && selectedRow.dueAmount > 0
-                const isAdvance = selectedRow.advanceAmount > 0
-                return isOverdue ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-700 border border-rose-100">
-                    <AlertTriangle size={10} /> {selectedRow.overdueDays}d Overdue
-                  </span>
-                ) : isAdvance ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700 border border-emerald-100">
-                    <CheckCircle2 size={10} /> Advance Balance
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-semibold text-slate-600 border border-slate-100">
-                    Clear Account
-                  </span>
-                )
-              })()}
-              
-              <span className="text-slate-300 font-light hidden sm:inline">|</span>
-              <span className="text-xs text-slate-500 font-medium">
-                Closing Balance: <strong className="font-mono text-slate-800">{formatInrInteger(selectedRow.dueAmount || selectedRow.advanceAmount || 0)}</strong>
-              </span>
+    <div className="w-full px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[290px_minmax(0,1fr)]">
+        <PartyListPanel
+          rows={rows}
+          kpis={dashboardQuery.data?.kpis ?? null}
+          selectedId={selectedCustomerIdResolved}
+          onSelect={setSelectedCustomerId}
+        />
+
+        <div className="min-w-0 space-y-4">
+          {!selectedRow && (
+            <div className="grid min-h-[360px] place-items-center rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+              <div className="max-w-xs space-y-1">
+                <p className="text-sm font-semibold text-slate-700">Select a party</p>
+                <p className="text-xs text-slate-500">Pick a party from the list to see balances, trends, and the full statement.</p>
+              </div>
             </div>
           )}
-        </div>
 
-        {selectedRow && (
-          <div className="flex items-center gap-2 print:hidden shrink-0">
-            <button
-              type="button"
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-3.5 transition shadow-sm"
-              onClick={printStatement}
-            >
-              <Printer size={13} /> Print Statement
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white px-3.5 transition shadow-sm disabled:opacity-60"
-              onClick={() => void exportPartyPackage()}
-              disabled={isExporting}
-            >
-              <Download size={13} /> {isExporting ? 'Exporting...' : 'Export ZIP'}
-            </button>
-          </div>
-        )}
-      </section>
-
-      {exportStatus && <p className="text-[10px] text-slate-455 font-semibold px-1" role="status">{exportStatus}</p>}
-
-      {!selectedRow && (
-        <div className="grid min-h-[400px] place-items-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-center p-6 print:hidden">
-          <div className="max-w-xs space-y-1">
-            <User size={32} className="mx-auto text-slate-400 mb-2" />
-            <p className="text-sm font-bold text-slate-750">Select a Party</p>
-            <p className="text-xs text-slate-400">Choose a party from the selector dropdown in the top row to visualize billing trends, monthly gaps, and full ledger statements.</p>
-          </div>
-        </div>
-      )}
-
-      {selectedRow && (
-        <div className="space-y-5">
-          {/* Row 2: Customer Snapshot Cards */}
-          <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {/* Current Due Card */}
-            {(() => {
-              const isOverdue = selectedRow.status === 'Overdue' && selectedRow.dueAmount > 0
-              const isAdvance = selectedRow.advanceAmount > 0
-              const colorClass = isOverdue
-                ? 'border-rose-200 bg-rose-50/40 text-rose-900'
-                : isAdvance
-                ? 'border-emerald-200 bg-emerald-50/40 text-emerald-900'
-                : 'border-slate-200 bg-slate-50/40 text-slate-900'
-              return (
-                <div className={`rounded-xl border p-4 space-y-2.5 ${colorClass}`}>
-                  <div className="flex justify-between items-center">
-                    <span className={`text-[10px] uppercase font-bold tracking-wider ${isOverdue ? 'text-rose-500' : isAdvance ? 'text-emerald-500' : 'text-slate-400'}`}>
-                      {isAdvance ? 'Advance Balance' : 'Current Due'}
-                    </span>
-                    {isOverdue && (
-                      <span className="rounded bg-rose-100 px-2 py-0.5 text-[8px] font-black text-rose-700 uppercase">
-                        Overdue
-                      </span>
-                    )}
+          {selectedRow && (
+            <>
+              {/* Party header: identity, balance, period, actions */}
+              <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="truncate text-base font-semibold text-slate-900">{selectedRow.customerName}</h2>
+                      {selectedRow.status === 'Overdue' && selectedRow.dueAmount > 0 ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-0.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200">
+                          <AlertTriangle size={11} /> {selectedRow.overdueDays}d overdue
+                        </span>
+                      ) : selectedRow.advanceAmount > 0 ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
+                          <CheckCircle2 size={11} /> Advance
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">Clear</span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Closing balance{' '}
+                      <strong className="font-mono text-sm text-slate-900">
+                        {formatInrInteger(selectedRow.dueAmount || selectedRow.advanceAmount || 0)}
+                      </strong>
+                      {selectedRow.lastPaymentDate && <> · last payment {daysSinceDate(selectedRow.lastPaymentDate, asOfDate)}d ago</>}
+                    </p>
                   </div>
-                  <p className="font-mono text-xl font-bold tracking-tight">
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" className={actionButtonClass} onClick={printStatement}>
+                      <Printer size={13} /> Print
+                    </button>
+                    <button type="button" className={actionButtonClass} onClick={() => void downloadStatementPdf()}>
+                      <FileText size={13} /> PDF
+                    </button>
+                    <button type="button" className={actionButtonClass} onClick={() => void downloadStatementExcel()}>
+                      <FileSpreadsheet size={13} /> Excel
+                    </button>
+                    <button
+                      type="button"
+                      className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+                      onClick={() => void exportPartyPackage()}
+                      disabled={isExporting}
+                    >
+                      <Download size={13} /> {isExporting ? 'Exporting...' : 'Full ZIP'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] font-medium text-slate-500">From (optional)</span>
+                    <DateInput className={dateInputClass} value={fromDate} onChange={setFromDate} />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] font-medium text-slate-500">As of</span>
+                    <DateInput className={dateInputClass} value={toDate} onChange={(next) => setToDate(next || today)} />
+                  </label>
+                  {(fromDate || toDate !== today) && (
+                    <button
+                      type="button"
+                      className="h-9 rounded-md px-2 text-xs font-semibold text-blue-700 hover:underline"
+                      onClick={() => {
+                        setFromDate('')
+                        setToDate(today)
+                      }}
+                    >
+                      Reset to today
+                    </button>
+                  )}
+                  {exportStatus && <p className="text-xs font-medium text-slate-500" role="status">{exportStatus}</p>}
+                </div>
+              </section>
+
+              {/* Snapshot cards */}
+              <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div
+                  className={`rounded-xl border p-4 ${
+                    selectedRow.status === 'Overdue' && selectedRow.dueAmount > 0
+                      ? 'border-rose-200 bg-rose-50/40'
+                      : selectedRow.advanceAmount > 0
+                      ? 'border-emerald-200 bg-emerald-50/40'
+                      : 'border-slate-200 bg-white'
+                  }`}
+                >
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                    {selectedRow.advanceAmount > 0 ? 'Advance balance' : 'Current due'}
+                  </p>
+                  <p className="mt-1 font-mono text-2xl font-bold tracking-tight text-slate-900">
                     {formatInrInteger(selectedRow.dueAmount || selectedRow.advanceAmount || 0)}
                   </p>
-                  <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-dashed border-slate-200/50 text-[9px] font-semibold text-slate-500">
+                  <div className="mt-3 grid grid-cols-3 gap-2 border-t border-dashed border-slate-200 pt-2">
                     <SummaryLine label="Opening" value={formatInrInteger(selectedRow.openingBalance)} />
                     <SummaryLine label="Billed" value={formatInrInteger(selectedRow.billedTotal)} />
                     <SummaryLine label="Paid" value={formatInrInteger(selectedRow.paidTotal)} />
                   </div>
                 </div>
-              )
-            })()}
 
-            {/* Monthly Performance Card */}
-            <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5">
-              <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider">This Month</span>
-              <div className="space-y-1.5 text-[11px] font-medium text-slate-500">
-                <SummaryLine label="Billing" value={formatInrInteger(analytics.monthDebit)} />
-                <SummaryLine label="Collection" value={formatInrInteger(analytics.monthCredit)} />
-                <div className="flex justify-between items-center py-1 border-t border-slate-100 text-xs font-bold text-slate-900">
-                  <span>Net Difference</span>
-                  <span className={analytics.monthCredit - analytics.monthDebit >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
-                    {analytics.monthCredit - analytics.monthDebit >= 0 ? '+' : '-'}
-                    {formatInrInteger(Math.abs(analytics.monthCredit - analytics.monthDebit))}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Purchase Summary Card */}
-            <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5">
-              <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider">Volume Summary</span>
-              <span className="block text-[11px] font-bold text-slate-700 truncate">
-                {statementQuery.data?.itemSummary?.[0]?.itemName ?? 'All Items'}
-              </span>
-              <div className="grid grid-cols-2 gap-x-2.5 gap-y-1 text-[10px] font-medium text-slate-500 pt-0.5">
-                <SummaryLine label="Total Bills" value={String(selectedRow.billCount)} />
-                <SummaryLine label="Total Bags" value={String(Math.round(selectedRow.totalBags))} />
-                <SummaryLine label="Gas Weight" value={`${Math.round(selectedRow.totalWeight)} kg`} />
-                <SummaryLine label="Avg Rate" value={formatInrInteger(selectedRow.averageSellingRate)} />
-              </div>
-            </div>
-          </section>
-
-          {/* Row 3: Visualization & Insights */}
-          <section className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-            {/* Visual vertical grouped bar chart */}
-            <div className="lg:col-span-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-              <div className="flex justify-between items-center">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Billing vs Collection Trend</h3>
-                <div className="flex items-center gap-3 text-[10px] font-bold">
-                  <div className="flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 rounded bg-blue-500 block" />
-                    <span className="text-slate-500">Billed</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 rounded bg-emerald-500 block" />
-                    <span className="text-slate-500">Received</span>
-                  </div>
-                </div>
-              </div>
-
-              {analytics.monthlyTrend.length === 0 ? (
-                <p className="text-xs text-slate-400 italic py-8 text-center">No trend data available.</p>
-              ) : (
-                <div className="space-y-4 pt-1">
-                  {/* Vertical bars container */}
-                  <div className="flex h-48 items-end gap-3 sm:gap-4 border-b border-slate-200 pb-2 pt-4 relative">
-                    {/* Grid lines in background */}
-                    <div className="absolute inset-x-0 top-0 bottom-2 flex flex-col justify-between pointer-events-none text-[8px] text-slate-350 font-bold select-none z-0">
-                      <div className="border-b border-slate-100 w-full pb-0.5"></div>
-                      <div className="border-b border-slate-100 w-full pb-0.5"></div>
-                      <div className="border-b border-slate-100 w-full pb-0.5"></div>
-                      <div className="border-b border-slate-100 w-full pb-0.5"></div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">This month</p>
+                  <div className="mt-2 space-y-1.5 text-sm">
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span>Billing</span>
+                      <span className="font-mono tabular-nums text-slate-900">{formatInrInteger(analytics.monthDebit)}</span>
                     </div>
-                    
-                    {/* Bars */}
-                    {analytics.monthlyTrend.map((entry) => {
-                      const billingHeight = (entry.debit / maxTrendVal) * 100
-                      const collectionHeight = (entry.credit / maxTrendVal) * 100
-                      return (
-                        <div key={entry.month} className="flex-1 flex flex-col items-center h-full justify-end z-10 group">
-                          <div className="flex items-end gap-1 w-full justify-center h-full">
-                            {/* Billing bar */}
-                            <div className="relative group/bar flex justify-center items-end h-full w-4 sm:w-5">
-                              {/* Tooltip */}
-                              <div className="absolute bottom-full mb-1 hidden group-hover/bar:block bg-slate-900 text-white text-[9px] px-1.5 py-0.5 rounded font-mono z-30 whitespace-nowrap shadow-md">
-                                Billed: {formatInrInteger(entry.debit)}
-                              </div>
-                              <div
-                                className="bg-blue-500 rounded-t w-full transition-all duration-500 hover:bg-blue-600 cursor-pointer"
-                                style={{ height: `${billingHeight}%` }}
-                              />
-                            </div>
-                            {/* Collection bar */}
-                            <div className="relative group/bar flex justify-center items-end h-full w-4 sm:w-5">
-                              {/* Tooltip */}
-                              <div className="absolute bottom-full mb-1 hidden group-hover/bar:block bg-slate-900 text-white text-[9px] px-1.5 py-0.5 rounded font-mono z-30 whitespace-nowrap shadow-md">
-                                Received: {formatInrInteger(entry.credit)}
-                              </div>
-                              <div
-                                className="bg-emerald-500 rounded-t w-full transition-all duration-500 hover:bg-emerald-600 cursor-pointer"
-                                style={{ height: `${collectionHeight}%` }}
-                              />
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-bold text-slate-500 mt-2 truncate max-w-full text-center">
-                            {formatMonthYear(entry.month)}
-                          </span>
-                        </div>
-                      )
-                    })}
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span>Collection</span>
+                      <span className="font-mono tabular-nums text-slate-900">{formatInrInteger(analytics.monthCredit)}</span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-slate-100 pt-1.5 font-semibold text-slate-900">
+                      <span>Net</span>
+                      <span className={`font-mono tabular-nums ${analytics.monthCredit - analytics.monthDebit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {analytics.monthCredit - analytics.monthDebit >= 0 ? '+' : '-'}
+                        {formatInrInteger(Math.abs(analytics.monthCredit - analytics.monthDebit))}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              )}
-            </div>
 
-            {/* Insights Panel */}
-            <div className="lg:col-span-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Recent Insights</h3>
-              <div className="text-[10px] text-slate-500 uppercase tracking-wide font-bold space-y-1">
-                <p>Peak Bill: <strong className="text-slate-800">{analytics.highestBillingMonth === '-' ? '—' : formatMonthYear(analytics.highestBillingMonth)}</strong></p>
-                <p>Peak Recv: <strong className="text-slate-800">{analytics.highestCollectionMonth === '-' ? '—' : formatMonthYear(analytics.highestCollectionMonth)}</strong></p>
-                {selectedRow.lastPaymentDate && (
-                  <p>Days since last payment: <strong className="text-slate-800">{daysSinceDate(selectedRow.lastPaymentDate, asOfDate)}</strong></p>
-                )}
-              </div>
-              <div className="space-y-2 pt-3 border-t border-slate-100">
-                {analytics.insights.length === 0 ? (
-                  <p className="text-xs text-slate-400 italic">No urgent insights or anomalies found for this party.</p>
-                ) : (
-                  analytics.insights.map((line, idx) => (
-                    <div key={idx} className="flex gap-2 items-start text-xs text-slate-700 bg-slate-50 p-2.5 rounded-lg border border-slate-150">
-                      <span className="text-blue-500 font-bold">•</span>
-                      <span>{line}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </section>
-
-          {/* Row 4: Item-wise Purchase Summary */}
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Item-wise Purchase Summary</h3>
-              <p className="text-[11px] text-slate-400 font-semibold">Compact purchase mix showing quantities, total values, and average rates.</p>
-            </div>
-            <div className="max-h-[300px] overflow-auto rounded-xl border border-slate-200 no-scrollbar">
-              <table className="w-full min-w-[720px] text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500 text-xs font-bold uppercase tracking-wider text-left bg-slate-50/50">
-                    <th className="px-3 py-2 text-left font-bold text-slate-600">Item Name</th>
-                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-20">Bills</th>
-                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-24">Bags</th>
-                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Qty</th>
-                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-32">Amount</th>
-                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Avg Rate</th>
-                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Last Purchased</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {(statementQuery.data?.itemSummary ?? []).length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="px-3 py-6 text-center text-slate-400 italic">No bill details recorded.</td>
-                    </tr>
-                  )}
-                  {(statementQuery.data?.itemSummary ?? []).map((item, idx) => (
-                    <tr key={`${item.itemName}-${idx}`} className="hover:bg-slate-50/20 transition">
-                      <td className="px-3 py-2.5 font-medium text-slate-900">{item.itemName}</td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums">{item.billCount}</td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums">{Math.round(item.totalBags)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums">{Math.round(item.totalQty)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums font-bold text-slate-900">{formatInrInteger(item.totalAmount)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums">{formatInrInteger(item.averageRate)}</td>
-                      <td className="px-3 py-2.5 text-right text-slate-600">{item.lastDate ? formatFullDate(item.lastDate) : '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          {/* Row 5: Party Statement Ledger Table */}
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-slate-100">
-              <div>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Party Ledger Book</h3>
-                <p className="text-[11px] text-slate-400 font-semibold">Ledger entries for bills and payments.</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
-                  <button
-                    type="button"
-                    className={`rounded-md px-2.5 py-1 transition ${statementFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                    onClick={() => setStatementFilter('all')}
-                  >
-                    All Entries
-                  </button>
-                  <button
-                    type="button"
-                    className={`rounded-md px-2.5 py-1 transition ${statementFilter === 'bills' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                    onClick={() => setStatementFilter('bills')}
-                  >
-                    Bills Only
-                  </button>
-                  <button
-                    type="button"
-                    className={`rounded-md px-2.5 py-1 transition ${statementFilter === 'payments' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                    onClick={() => setStatementFilter('payments')}
-                  >
-                    Payments Only
-                  </button>
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Volume</p>
+                  <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5">
+                    <SummaryLine label="Bills" value={String(selectedRow.billCount)} />
+                    <SummaryLine label="Bags" value={String(Math.round(selectedRow.totalBags))} />
+                    <SummaryLine label="Gas weight" value={formatInQty(Math.round(selectedRow.totalWeight))} />
+                    <SummaryLine label="Avg rate" value={formatInrInteger(selectedRow.averageSellingRate)} />
+                  </div>
                 </div>
-              </div>
-            </div>
+              </section>
 
-            {/* Statement Table */}
-            <div className="overflow-x-auto rounded-xl border border-slate-200 no-scrollbar">
-              <table className="w-full min-w-[720px] text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500 text-xs font-bold uppercase tracking-wider text-left bg-slate-50/50">
-                    <th className="px-3 py-2 text-left font-bold text-slate-600 w-28">Date</th>
-                    <th className="px-3 py-2 text-left font-bold text-slate-600 w-20">Type</th>
-                    <th className="px-3 py-2 text-left font-bold text-slate-600">Details</th>
-                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Debit (Bill)</th>
-                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-28">Credit (Recv)</th>
-                    <th className="px-3 py-2 text-right font-bold text-slate-600 w-32">Running Balance</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {statementQuery.isLoading && (
-                    <tr>
-                      <td colSpan={6} className="px-3 py-6 text-center text-slate-400">Loading statement entries...</td>
-                    </tr>
-                  )}
-                  {statementQuery.data && paginatedEvents.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="px-3 py-6 text-center text-slate-400 italic">No matching entries found.</td>
-                    </tr>
-                  )}
-                  {paginatedEvents.map((event, idx) => {
-                    const isBill = event.type === 'Bill'
-                    const isPayment = event.type === 'Payment'
-                    return (
-                      <tr key={idx} className="hover:bg-slate-50/20 transition">
-                        <td className="px-3 py-2.5 text-slate-650">{event.date === '-' ? '—' : formatFullDate(event.date)}</td>
-                        <td className="px-3 py-2.5">
-                          {isBill ? (
-                            <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-700 border border-blue-100">
-                              BILL
-                            </span>
-                          ) : isPayment ? (
-                            <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-bold text-emerald-700 border border-emerald-100">
-                              RECV
-                            </span>
-                          ) : (
-                            <span className="inline-flex rounded-full bg-slate-50 px-2 py-0.5 text-[9px] font-semibold text-slate-600 border border-slate-100">
-                              START
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <div className="font-semibold text-slate-800">{event.details}</div>
-                          {event.compactDetails && (
-                            <div className="text-[10px] text-slate-450 mt-0.5 font-semibold">{event.compactDetails}</div>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-800 font-medium">
-                          {event.debit > 0 ? formatInrInteger(event.debit) : '—'}
-                        </td>
-                        <td className="px-3 py-2.5 text-right font-mono tabular-nums text-emerald-600 font-bold">
-                          {event.credit > 0 ? formatInrInteger(event.credit) : '—'}
-                        </td>
-                        <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-900 font-extrabold">
-                          {formatInrInteger(event.balance)}
-                        </td>
+              {/* Trend chart + insights */}
+              <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold text-slate-900">Billing vs collection</h3>
+                  <p className="text-xs text-slate-500">
+                    Peak billing {analytics.highestBillingMonth === '-' ? '—' : formatMonthYear(analytics.highestBillingMonth)} · peak collection{' '}
+                    {analytics.highestCollectionMonth === '-' ? '—' : formatMonthYear(analytics.highestCollectionMonth)}
+                  </p>
+                </div>
+                <PartyTrendChart data={analytics.monthlyTrend} />
+                {analytics.insights.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                    {analytics.insights.slice(0, 3).map((line, index) => (
+                      <span key={index} className="rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-600 ring-1 ring-slate-200">
+                        {line}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              {/* Item-wise purchase summary */}
+              <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <h3 className="text-sm font-semibold text-slate-900">Item-wise purchases</h3>
+                <div className="mt-3 max-h-[300px] overflow-auto rounded-lg border border-slate-200 no-scrollbar">
+                  <table className="w-full min-w-[680px] text-sm">
+                    <thead className="sticky top-0 bg-slate-50">
+                      <tr className="text-left text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+                        <th className="px-3 py-2">Item</th>
+                        <th className="px-3 py-2 text-right">Bills</th>
+                        <th className="px-3 py-2 text-right">Bags</th>
+                        <th className="px-3 py-2 text-right">Qty</th>
+                        <th className="px-3 py-2 text-right">Amount</th>
+                        <th className="px-3 py-2 text-right">Avg rate</th>
+                        <th className="px-3 py-2 text-right">Last</th>
                       </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {(statementQuery.data?.itemSummary ?? []).length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-400">No bill details recorded.</td>
+                        </tr>
+                      )}
+                      {(statementQuery.data?.itemSummary ?? []).map((item, index) => (
+                        <tr key={`${item.itemName}-${index}`} className="hover:bg-slate-50/60">
+                          <td className="px-3 py-2 font-medium text-slate-900">{item.itemName}</td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-700">{item.billCount}</td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-700">{Math.round(item.totalBags)}</td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-700">{Math.round(item.totalQty)}</td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold text-slate-900">{formatInrInteger(item.totalAmount)}</td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-700">{formatInrInteger(item.averageRate)}</td>
+                          <td className="px-3 py-2 text-right text-xs text-slate-500">{item.lastDate ? formatFullDate(item.lastDate) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
 
-            {/* Table Pagination */}
-            <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 pt-2 border-t border-slate-100">
-              <p className="font-semibold text-[10px] uppercase tracking-wider text-slate-400">
-                Showing {filteredEvents.length === 0 ? 0 : (statementPage - 1) * statementPageSize + 1}-
-                {Math.min(statementPage * statementPageSize, filteredEvents.length)} of {filteredEvents.length} entries
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setStatementPage((current) => Math.max(1, current - 1))}
-                  disabled={statementPage <= 1}
-                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[10px] font-bold uppercase text-slate-700 px-3 py-1.5 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                <span className="font-mono text-slate-800 font-bold">
-                  {statementPage} / {totalStatementPages}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setStatementPage((current) => Math.min(totalStatementPages, current + 1))}
-                  disabled={statementPage >= totalStatementPages}
-                  className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[10px] font-bold uppercase text-slate-700 px-3 py-1.5 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </section>
+              {/* Statement */}
+              <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                  <h3 className="text-sm font-semibold text-slate-900">Statement</h3>
+                  <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
+                    {([['all', 'All'], ['bills', 'Bills'], ['payments', 'Payments']] as const).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={`rounded-md px-3 py-1 transition ${statementFilter === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                        onClick={() => setStatementFilter(key)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200 no-scrollbar">
+                  <table className="w-full min-w-[700px] text-sm">
+                    <thead className="bg-slate-50">
+                      <tr className="text-left text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+                        <th className="w-28 px-3 py-2">Date</th>
+                        <th className="w-24 px-3 py-2">Type</th>
+                        <th className="px-3 py-2">Details</th>
+                        <th className="w-28 px-3 py-2 text-right">Debit</th>
+                        <th className="w-28 px-3 py-2 text-right">Credit</th>
+                        <th className="w-32 px-3 py-2 text-right">Balance</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {statementQuery.isLoading && (
+                        <tr><td colSpan={6} className="px-3 py-6 text-center text-sm text-slate-400">Loading statement…</td></tr>
+                      )}
+                      {statementQuery.data && paginatedEvents.length === 0 && (
+                        <tr><td colSpan={6} className="px-3 py-6 text-center text-sm text-slate-400">No matching entries.</td></tr>
+                      )}
+                      {paginatedEvents.map((event, index) => (
+                        <tr key={index} className="hover:bg-slate-50/60">
+                          <td className="px-3 py-2.5 text-slate-600">{event.date === '-' ? '—' : formatFullDate(event.date)}</td>
+                          <td className="px-3 py-2.5">
+                            {event.type === 'Bill' ? (
+                              <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700 ring-1 ring-blue-100">Bill</span>
+                            ) : event.type === 'Payment' ? (
+                              <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-100">Received</span>
+                            ) : (
+                              <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">Opening</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <div className="font-medium text-slate-800">{event.details}</div>
+                            {event.compactDetails && <div className="mt-0.5 text-xs text-slate-500">{event.compactDetails}</div>}
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-800">
+                            {event.debit > 0 ? formatInrInteger(event.debit) : '—'}
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono tabular-nums font-semibold text-emerald-600">
+                            {event.credit > 0 ? formatInrInteger(event.credit) : '—'}
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono tabular-nums font-bold text-slate-900">{formatInrInteger(event.balance)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
+                  <p>
+                    Showing {filteredEvents.length === 0 ? 0 : (statementPage - 1) * statementPageSize + 1}–
+                    {Math.min(statementPage * statementPageSize, filteredEvents.length)} of {filteredEvents.length} entries
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setStatementPage((current) => Math.max(1, current - 1))}
+                      disabled={statementPage <= 1}
+                      className="rounded-md border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <span className="font-mono font-semibold text-slate-800">{statementPage} / {totalStatementPages}</span>
+                    <button
+                      type="button"
+                      onClick={() => setStatementPage((current) => Math.min(totalStatementPages, current + 1))}
+                      disabled={statementPage >= totalStatementPages}
+                      className="rounded-md border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              </section>
+            </>
+          )}
         </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -915,70 +881,9 @@ function buildLedgerPartyPackage(snapshot: BackupSnapshot, partyId: string, asOf
   }
 }
 
-function createLedgerReportPdf(title: string, subtitle: string, columns: string[], rows: string[][], summary: Array<{ label: string; value: string }>) {
-  const doc = new jsPDF({ orientation: columns.length > 6 ? 'landscape' : 'portrait', unit: 'pt', format: 'a4' })
-  const pageWidth = doc.internal.pageSize.getWidth()
-  doc.setFillColor(15, 23, 42)
-  doc.rect(0, 0, pageWidth, 74, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setTextColor(255, 255, 255)
-  doc.setFontSize(16)
-  doc.text(title, 28, 30)
-  doc.setFont('helvetica', 'normal')
-  doc.setTextColor(226, 232, 240)
-  doc.setFontSize(9)
-  doc.text(subtitle.slice(0, 130), 28, 48)
-  doc.setTextColor(15, 23, 42)
 
-  let startY = 92
-  if (summary.length > 0) {
-    autoTable(doc, {
-      startY,
-      theme: 'plain',
-      body: [summary.map((row) => `${row.label}\n${row.value}`)],
-      styles: { fontSize: 9, cellPadding: 7, lineColor: [226, 232, 240], lineWidth: 0.5, valign: 'middle' },
-      columnStyles: Object.fromEntries(summary.map((_, index) => [index, { fillColor: [248, 250, 252], halign: 'center' }])),
-      margin: { left: 28, right: 28 },
-    })
-    startY = lastAutoTableY(doc) + 14
-  }
-  autoTable(doc, {
-    startY,
-    head: [columns],
-    body: rows,
-    styles: { fontSize: 8.2, cellPadding: 5, overflow: 'linebreak', valign: 'top', lineColor: [226, 232, 240], lineWidth: 0.3 },
-    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontStyle: 'bold' },
-    alternateRowStyles: { fillColor: [248, 250, 252] },
-    margin: { left: 28, right: 28 },
-    columnStyles: reportColumnStyles(columns),
-    didDrawPage: () => addLedgerPdfFooter(doc),
-  })
-  return doc
-}
 
-function addLedgerPdfFooter(doc: jsPDF) {
-  const pageWidth = doc.internal.pageSize.getWidth()
-  const pageHeight = doc.internal.pageSize.getHeight()
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(8)
-  doc.setTextColor(100, 116, 139)
-  doc.text('Kapil Products | Generated from Kapil Pro', 28, pageHeight - 18)
-  doc.text(`Page ${doc.getNumberOfPages()}`, pageWidth - 28, pageHeight - 18, { align: 'right' })
-  doc.setTextColor(15, 23, 42)
-}
 
-function lastAutoTableY(doc: jsPDF) {
-  return (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 90
-}
-
-function reportColumnStyles(columns: string[]) {
-  const styles: Record<number, { halign?: 'left' | 'center' | 'right'; cellWidth?: number }> = {}
-  columns.forEach((column, index) => {
-    if (['Debit', 'Credit', 'Balance', 'Amount', 'Qty', 'Value'].includes(column)) styles[index] = { halign: 'right' }
-    if (column === 'Details' || column === 'Items') styles[index] = { ...(styles[index] ?? {}), cellWidth: 170 }
-  })
-  return styles
-}
 
 async function createBillJpgBlob(snapshot: BackupSnapshot, bill: PBRecord) {
   const props = buildBillPrintProps(snapshot, bill)
@@ -993,6 +898,7 @@ async function createBillJpgBlob(snapshot: BackupSnapshot, bill: PBRecord) {
   card.style.width = `${BILL_PRINT_PAGE_WIDTH_CM}cm`
   host.appendChild(card)
   document.body.appendChild(host)
+  const { createRoot } = await import('react-dom/client')
   const root = createRoot(card)
   try {
     root.render(<BillPrintLayout {...props} />)
@@ -1088,6 +994,11 @@ function buildBillPrintProps(snapshot: BackupSnapshot, selectedBill: PBRecord): 
   }
 }
 
+async function createLedgerReportPdf(title: string, subtitle: string, columns: string[], rows: string[][], summary: Array<{ label: string; value: string }>) {
+  const { createSimpleTablePdf } = await import('@/lib/exports/pdf-engine')
+  return createSimpleTablePdf({ title, subtitle, columns, rows, summary })
+}
+
 function waitForRenderFrame() {
   return new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
@@ -1095,80 +1006,24 @@ function waitForRenderFrame() {
 }
 
 async function createSimpleWorkbook(workbookSheets: Array<{ name: string; rows: Array<Array<string | number>> }>) {
-  const zip = new JSZip()
-  zip.file('[Content_Types].xml', workbookContentTypes(workbookSheets.length))
-  zip.folder('_rels')?.file('.rels', workbookRootRels())
-  zip.folder('docProps')?.file('core.xml', workbookCoreXml())
-  zip.folder('docProps')?.file('app.xml', workbookAppXml(workbookSheets.map((sheet) => sheet.name)))
-  const xl = zip.folder('xl') ?? zip
-  xl.file('workbook.xml', workbookXml(workbookSheets.map((sheet) => sheet.name)))
-  xl.folder('_rels')?.file('workbook.xml.rels', workbookRels(workbookSheets.length))
-  const sheets = xl.folder('worksheets') ?? xl
-  workbookSheets.forEach((sheet, index) => {
-    sheets.file(`sheet${index + 1}.xml`, worksheetXml(sheet.rows))
-  })
-  return zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const { createXlsxBlob, inferSheetColumns } = await import('@/lib/exports/xlsx-workbook')
+  return createXlsxBlob(
+    workbookSheets.map((sheet) => {
+      const [headers, ...rows] = sheet.rows
+      const headerText = (headers ?? []).map((cell) => String(cell ?? ''))
+      return { name: sheet.name, totalsLabel: 'Total', columns: inferSheetColumns(headerText, rows), rows }
+    }),
+  )
 }
 
-function workbookContentTypes(sheetCount: number) {
-  const sheetOverrides = Array.from({ length: sheetCount }, (_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheetOverrides}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`
-}
 
-function workbookRootRels() {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`
-}
 
-function workbookRels(sheetCount: number) {
-  const rels = Array.from({ length: sheetCount }, (_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`
-}
 
-function workbookXml(sheetNames: string[]) {
-  const sheets = sheetNames.map((name, index) => `<sheet name="${xmlEscape(name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join('')
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets}</sheets></workbook>`
-}
 
-function workbookCoreXml() {
-  const now = new Date().toISOString()
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>Kapil Pro</dc:creator><cp:lastModifiedBy>Kapil Pro</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`
-}
 
-function workbookAppXml(sheetNames: string[]) {
-  const vector = sheetNames.map((name) => `<vt:lpstr>${xmlEscape(name)}</vt:lpstr>`).join('')
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Kapil Pro</Application><TitlesOfParts><vt:vector size="${sheetNames.length}" baseType="lpstr">${vector}</vt:vector></TitlesOfParts></Properties>`
-}
 
-function worksheetXml(rows: Array<Array<string | number>>) {
-  const body = rows
-    .map((row, rowIndex) => {
-      const cells = row
-        .map((cell, columnIndex) => {
-          const ref = `${columnName(columnIndex + 1)}${rowIndex + 1}`
-          if (typeof cell === 'number' && Number.isFinite(cell)) return `<c r="${ref}"><v>${cell}</v></c>`
-          return `<c r="${ref}" t="inlineStr"><is><t>${xmlEscape(String(cell ?? ''))}</t></is></c>`
-        })
-        .join('')
-      return `<row r="${rowIndex + 1}">${cells}</row>`
-    })
-    .join('')
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${body}</sheetData></worksheet>`
-}
 
-function columnName(index: number) {
-  let name = ''
-  let current = index
-  while (current > 0) {
-    const remainder = (current - 1) % 26
-    name = String.fromCharCode(65 + remainder) + name
-    current = Math.floor((current - 1) / 26)
-  }
-  return name
-}
 
-function xmlEscape(value: string) {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
 
 function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob)
@@ -1281,9 +1136,6 @@ function readableDate(value: string) {
 function partyBillFilename(bill: PBRecord) {
   return `Bill_${billRef(bill).replace(/\//g, '-')}_${readableDate(datePart(bill.date))}`
 }
-
-const inputClass =
-  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
 
 function escapeHtml(value: string) {
   return value

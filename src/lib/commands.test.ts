@@ -92,4 +92,21 @@ describe('command parsing', () => {
       },
     })
   })
+
+  it('uses the selected customer last price before the item master default', () => {
+    const parsed = parseContextCommand('b sambhu spindle 2', 'neutral', {
+      customers,
+      items,
+      today: '2026-05-20',
+      mktRate: 845,
+      lastRates: {
+        'c1:i1': { rate: 910, mktRate: 800, gstRate: 0 },
+      },
+    })
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      command: { items: [{ item: { id: 'i1' }, defaultRate: 110, rate: 955 }] },
+    })
+  })
 })

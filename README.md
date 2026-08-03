@@ -81,6 +81,14 @@ For the current VPS deployment path, use the repo deployment script and containe
 - Financial ordering must use: business date, then created timestamp, then id.
 - Inclusion logic is range-based (`<= asOfDate`), not exact-day equality.
 
+### Bill Book Numbering
+
+- A physical book holds 50 bills and its book number is also its first bill number: book 1 covers bills 1-50, book 51 covers 51-100, book 101 covers 101-150.
+- Bill numbers run continuously across books and are never reused.
+- Book/bill logic is centralized in `src/domain/bill-books.ts`; `bills` carries the unique index `idx_bills_book_no_bill_no_unique` on `(book_no, bill_no)` as the final guard.
+- `scripts/apply-bill-number-guards.mjs` verifies that guard on any instance (dry run by default).
+- Numbers skipped between the first and last entered bill of a book are surfaced in Data Health as likely un-entered or cancelled bills.
+
 ### Outstanding and Status Logic
 
 - Outstanding balance calculations must stay centralized in `src/domain/records.ts` through `computeCustomerOutstanding()`.

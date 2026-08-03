@@ -1,5 +1,6 @@
 import html2canvas from 'html2canvas'
 import { toCanvas } from 'html-to-image'
+import { MAX_EXPORT_PIXELS } from '@/lib/image-export-config'
 
 type ExportOptions = {
   filename: string
@@ -10,11 +11,7 @@ type ExportOptions = {
   maxHeightPx?: number
 }
 
-/** Cap raster budget (logical w×h × ratio²) so tall bills don’t exceed canvas limits. */
-const MAX_EXPORT_PIXELS = 52_000_000
-
-/** Default JPG width after capture (px). ~2× a phone full-width screen for readable small type. */
-export const BILL_JPEG_OUTPUT_WIDTH_PX = 2160
+export { BILL_JPEG_OUTPUT_WIDTH_PX } from '@/lib/image-export-config'
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -32,14 +29,21 @@ function measureNode(node: HTMLElement) {
   return { width, height }
 }
 
-/** Higher than screen DPR so exports stay sharp on 1× displays; capped for memory / huge bills. */
-function clampPixelRatio(logicalW: number, logicalH: number) {
+/**
+ * Higher than screen DPR so exports stay sharp on 1x displays; capped for memory.
+ *
+ * Captures at least the requested output width — otherwise the later resample is
+ * an upscale, which softens the very small type on a bill.
+ */
+function clampPixelRatio(logicalW: number, logicalH: number, targetWidthPx?: number) {
   const dpr = window.devicePixelRatio || 1
   const area = logicalW * logicalH
   const maxFromBudget = Math.sqrt(MAX_EXPORT_PIXELS / Math.max(1, area))
-  const desired = Math.min(4, Math.max(3, dpr * 1.25))
-  if (!Number.isFinite(maxFromBudget)) return Math.min(desired, 4)
-  return Math.max(1, Math.min(desired, maxFromBudget, 4))
+  const neededForTarget = targetWidthPx && logicalW > 0 ? targetWidthPx / logicalW : 0
+  const desired = Math.max(3, dpr * 1.25, neededForTarget)
+  const hardMax = 6
+  if (!Number.isFinite(maxFromBudget)) return Math.min(desired, hardMax)
+  return Math.max(1, Math.min(desired, maxFromBudget, hardMax))
 }
 
 async function canvasToJpegBlob(canvas: HTMLCanvasElement, quality: number) {
@@ -93,7 +97,7 @@ export async function exportNodeAsJpgBlob(node: HTMLElement, options: Omit<Expor
   }
 
   const { width: baseW, height: baseH } = measureNode(node)
-  const pixelRatio = clampPixelRatio(baseW, baseH)
+  const pixelRatio = clampPixelRatio(baseW, baseH, options.preferredWidthPx)
 
   let canvas: HTMLCanvasElement | null = null
 

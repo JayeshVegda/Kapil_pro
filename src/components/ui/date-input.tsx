@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { formatFullDate, parseDisplayDate } from '@/lib/date'
+import { formatFullDate, parseSmartDate } from '@/lib/date'
 
 type Props = {
   value: string
@@ -16,7 +16,8 @@ export function DateInput({ value, onChange, className, disabled = false }: Prop
   }, [value])
 
   function commit(nextDisplay = display) {
-    const parsed = parseDisplayDate(nextDisplay)
+    // Smart entry: "13" = 13th this month, "1-31" = 31 Jan, "13-6-25" = 13-06-2025.
+    const parsed = parseSmartDate(nextDisplay)
     if (parsed) {
       onChange(parsed)
       setDisplay(formatFullDate(parsed))
@@ -42,7 +43,7 @@ export function DateInput({ value, onChange, className, disabled = false }: Prop
           commit()
         }
       }}
-      placeholder="DD-MM-YYYY"
+      placeholder="13 · 13-6 · 13-6-25"
       inputMode="numeric"
       disabled={disabled}
     />
