@@ -93,7 +93,10 @@ export type ParsedBillCommand = {
   date: string
   bookNo: number | null
   billNo: number | null
+  attachedPayments: ParsedAttachedPaymentCommand[]
 }
+
+export type ParsedAttachedPaymentCommand = Omit<ParsedPaymentCommand, 'kind' | 'customer'>
 
 export type ParsedPaymentCommand = {
   kind: 'payment'
@@ -146,9 +149,35 @@ export function parseContextCommand(input: string, context: CommandRouteContext,
   if (!raw) return { ok: false, error: 'Type a command first.' }
   const resolved = splitCommandPrefix(raw, context)
   if (!resolved.kind) return { ok: false, error: 'Add a prefix: b for bill, p for payment, or pr for print.' }
-  if (resolved.kind === 'bill') return parseBillCommand(resolved.body, deps.customers ?? [], deps.items ?? [], deps.today, deps.mktRate ?? 0, deps.lastRates)
+  if (resolved.kind === 'bill') return parseCompoundBillCommand(resolved.body, deps.customers ?? [], deps.items ?? [], deps.today, deps.mktRate ?? 0, deps.lastRates)
   if (resolved.kind === 'payment') return parsePaymentCommand(resolved.body, deps.customers ?? [], deps.today)
   return parsePrintCommand(resolved.body)
+}
+
+function parseCompoundBillCommand(
+  input: string,
+  customers: CommandCustomer[],
+  items: CommandItem[],
+  today: string,
+  mktRate: number,
+  lastRates: Record<string, CommandLastRate> = {},
+): CommandParseResult<ParsedBillCommand> {
+  const paymentAliases = getCommandRegistry().payment.aliases.map(escapeRegExp).join('|')
+  const separator = new RegExp(`\\s+\\+\\s+(?:${paymentAliases})\\s+`, 'gi')
+  const matches = [...input.matchAll(separator)]
+  const billBody = matches.length > 0 ? input.slice(0, matches[0].index).trim() : input
+  const bill = parseBillCommand(billBody, customers, items, today, mktRate, lastRates)
+  if (!bill.ok) return bill
+
+  const attachedPayments: ParsedAttachedPaymentCommand[] = []
+  for (let index = 0; index < matches.length; index += 1) {
+    const start = Number(matches[index].index) + matches[index][0].length
+    const end = index + 1 < matches.length ? Number(matches[index + 1].index) : input.length
+    const parsedPayment = parseAttachedPaymentCommand(input.slice(start, end).trim(), today)
+    if (!parsedPayment.ok) return parsedPayment
+    attachedPayments.push(parsedPayment.payment)
+  }
+  return { ok: true, command: { ...bill.command, attachedPayments } }
 }
 
 export function parseBillCommand(
@@ -262,8 +291,37 @@ export function parseBillCommand(
       date,
       bookNo,
       billNo,
+      attachedPayments: [],
     },
   }
+}
+
+function parseAttachedPaymentCommand(
+  input: string,
+  today: string,
+): { ok: true; payment: ParsedAttachedPaymentCommand } | { ok: false; error: string } {
+  const raw = input.trim()
+  const noteMatch = raw.match(/"([^"]*)"/)
+  const note = noteMatch?.[1]?.trim() ?? ''
+  const withoutNote = noteMatch ? raw.replace(noteMatch[0], '').trim() : raw
+  const tokens = withoutNote.split(/\s+/).filter(Boolean)
+  const amount = parseAmountToken(tokens[0] ?? '')
+  if (!(amount > 0)) return { ok: false, error: 'Use attached payment as: + p amount [cash|bank] [date]' }
+
+  let mode: 'Cash' | 'Bank' = 'Cash'
+  let date = today
+  for (const token of tokens.slice(1)) {
+    const lower = token.toLowerCase()
+    if (lower === 'by' || lower === 'via' || lower === 'on' || lower === 'date') continue
+    if (lower === 'cash') mode = 'Cash'
+    else if (lower === 'bank' || lower === 'cheque') mode = 'Bank'
+    else {
+      const maybeDate = parseDateToken(lower, today)
+      if (!isParsedDateToken(lower, maybeDate)) return { ok: false, error: `Unknown attached payment option: ${token}` }
+      date = maybeDate
+    }
+  }
+  return { ok: true, payment: { amount, mode, date, note } }
 }
 
 function parsePositiveInteger(token: string) {
@@ -324,9 +382,16 @@ export function parseAmountToken(token: string) {
 export function parseDateToken(token: string, today: string) {
   const normalized = token.trim().toLowerCase()
   if (normalized === 'today' || normalized === '0') return today
-  if (normalized === 'tomorrow' || normalized === 'tmrw' || normalized === '+1') {
+  if (normalized === 'tomorrow' || normalized === 'tmr' || normalized === 'tmrw' || normalized === '+1') {
     const d = new Date(`${today}T00:00:00`)
     d.setDate(d.getDate() + 1)
+    return getLocalIsoDate(d)
+  }
+  const weekday = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].indexOf(normalized.slice(0, 3))
+  if (weekday >= 0 && /^(sun|mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat)(day)?$/.test(normalized)) {
+    const d = new Date(`${today}T00:00:00`)
+    const daysAhead = (weekday - d.getDay() + 7) % 7
+    d.setDate(d.getDate() + daysAhead)
     return getLocalIsoDate(d)
   }
   if (normalized === '-1' || normalized === 'yday' || normalized === 'yesterday') {
@@ -353,6 +418,10 @@ export function parseDateToken(token: string, today: string) {
     return `${year}-${String(Number(slash[2])).padStart(2, '0')}-${String(Number(slash[1])).padStart(2, '0')}`
   }
   return token
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function parseBillLineCommands(

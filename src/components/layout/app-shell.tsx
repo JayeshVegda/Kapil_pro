@@ -1093,6 +1093,9 @@ function CommandLivePreview({
         previousBalance: currentBalance,
       })
     : null
+  const attachedPaymentTotal = command.kind === 'bill'
+    ? command.attachedPayments.reduce((sum, payment) => sum + payment.amount, 0)
+    : 0
   const paymentSummary = command.kind === 'payment'
     ? buildCommandPaymentSummary({ currentBalance, paymentAmount: command.amount })
     : null
@@ -1127,7 +1130,20 @@ function CommandLivePreview({
             {(command.gstAmount > 0 || command.gstRate > 0) && <PreviewLine label="GST" value={command.gstMode === 'manual' ? `Manual ${formatInrInteger(command.gstAmount)}` : `${command.gstRate}%`} />}
             <PreviewLine label="Bill Total" value={formatInrInteger(billSummary?.grandTotal ?? 0)} />
             <PreviewLine label="Previous Balance" value={formatInrInteger(currentBalance)} />
-            <PreviewLine label="Amount Due" value={formatInrInteger(billSummary?.amountDue ?? 0)} />
+            {command.attachedPayments.map((payment, index) => (
+              <PreviewLine
+                key={`attached-payment-${index}`}
+                label={`Payment ${index + 1}`}
+                value={`${formatInrInteger(payment.amount)} · ${payment.mode} · ${formatFullDate(payment.date)}`}
+              />
+            ))}
+            {attachedPaymentTotal > 0 && <PreviewLine label="Payments Total" value={formatInrInteger(attachedPaymentTotal)} />}
+            <PreviewLine label="Amount Due" value={formatInrInteger((billSummary?.amountDue ?? 0) - attachedPaymentTotal)} />
+            {command.attachedPayments.some((payment) => payment.date > command.date) && (
+              <div className="md:col-span-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-800">
+                Future-dated payment will be saved on its selected date and can be edited later in payment logs.
+              </div>
+            )}
             {bookSelection?.warning && !command.bookNo && (
               <div className="md:col-span-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-800">
                 {bookSelection.warning}
@@ -1504,9 +1520,9 @@ function getCommandHelp(topic: string) {
   return {
     title: 'Bill Command',
     description: 'Creates sale bill drafts through ultra-fast workflow execution.',
-    format: 'b <customer> <item> <qty> [rate|dr default] [gst] [+t amount] [book n|n/m] [date]',
-    example: 'b mukesh spindle 2 book 52 1-04-2026',
-    meaning: 'Mukesh bill, 2 bags spindle, book 52 next bill number, dated 1 Apr 2026',
+    format: 'b <customer> <item> <qty> [+ p amount mode date]...',
+    example: 'b mukesh spindle 2 + p 3l tmr + p 1l bank fri',
+    meaning: 'Creates Mukesh bill with two separately dated attached payments',
   }
 }
 

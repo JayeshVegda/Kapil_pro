@@ -75,6 +75,37 @@ describe('command parsing', () => {
     })
   })
 
+  it('parses multiple bill-attached payments with independent dates and modes', () => {
+    const parsed = parseContextCommand('b sambhu 5 + p 3l tmr + p 1l bank fri', 'neutral', {
+      customers,
+      items,
+      today: '2026-08-03',
+      mktRate: 845,
+    })
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      command: {
+        kind: 'bill',
+        date: '2026-08-03',
+        attachedPayments: [
+          { amount: 300000, mode: 'Cash', date: '2026-08-04', note: '' },
+          { amount: 100000, mode: 'Bank', date: '2026-08-07', note: '' },
+        ],
+      },
+    })
+  })
+
+  it('keeps ordinary plus-separated bill items backward compatible', () => {
+    const parsed = parseContextCommand('b sambhu spindle 2 + tapper 1', 'neutral', {
+      customers,
+      items,
+      today: '2026-08-03',
+      mktRate: 845,
+    })
+    expect(parsed).toMatchObject({ ok: true, command: { kind: 'bill', items: [{ item: { id: 'i1' } }, { item: { id: 'i2' } }], attachedPayments: [] } })
+  })
+
   it('keeps electronic bill commands on unit price instead of market rate', () => {
     const parsed = parseBillCommand('ashish f5 40000', customers, items, '2026-05-20', 801)
     expect(parsed).toMatchObject({

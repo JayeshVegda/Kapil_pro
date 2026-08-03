@@ -746,9 +746,19 @@ function NewBillPage() {
         }
       }),
     )
+    setQuickPayments(
+      command.attachedPayments.map((payment, index) => ({
+        id: `command-payment-${Date.now()}-${index}`,
+        date: payment.date,
+        amount: payment.amount,
+        amountInput: formatInrInteger(payment.amount),
+        mode: payment.mode,
+        note: payment.note,
+      })),
+    )
     setIsQuickEntryOpen(false)
     setStatusText(
-      `Command ready: ${command.customer.name} | ${command.bookNo ? `Bill ${command.bookNo}/${command.billNo ?? 'next'} | ` : ''}${command.items.length} item${command.items.length === 1 ? '' : 's'} | ${command.date} | MKT ${commandMktRate || 'not found'}`,
+      `Command ready: ${command.customer.name} | ${command.bookNo ? `Bill ${command.bookNo}/${command.billNo ?? 'next'} | ` : ''}${command.items.length} item${command.items.length === 1 ? '' : 's'}${command.attachedPayments.length > 0 ? ` | ${command.attachedPayments.length} attached payment${command.attachedPayments.length === 1 ? '' : 's'}` : ''} | ${command.date} | MKT ${commandMktRate || 'not found'}`,
     )
     setPendingCommandPreview(true)
   }
