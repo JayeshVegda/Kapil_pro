@@ -23,8 +23,8 @@ import {
   suggestBillingRate,
   type BillingGstMode,
 } from '@/domain/billing-modes'
-import { computeNetBalance, isOnOrBeforeDay } from '@/domain/financial-math'
-import { dedupeBillPreviewCredits } from '@/domain/bill-preview'
+import { computeNetBalance } from '@/domain/financial-math'
+import { dedupeBillPreviewCredits, partitionPaymentsForNextBill } from '@/domain/bill-preview'
 import { loadSavedMarketRateForDate, useMarketRate } from '@/domain/market-rate'
 import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
@@ -273,6 +273,7 @@ function NewBillPage() {
           amount: num(payment.amount),
           createdTs: toTs(payment.created),
           id: String(payment.id),
+          note: String(payment.note ?? ''),
         }))
       const openingBalance = num(customerRecord.opening_balance)
 
@@ -291,33 +292,25 @@ function NewBillPage() {
       const lastBill = priorBills[priorBills.length - 1]
       const lastBillDate = datePart(lastBill.date)
       const lastBillCreatedTs = toTs(lastBill.created)
+      const priorBillRefs = new Set(
+        priorBills.map((bill) => String(bill.bill_ref ?? `${num(bill.book_no)}/${num(bill.bill_no)}`)),
+      )
       const billTotals = priorBills.map((bill) => ({
         date: datePart(bill.date),
         total: calculateBillTotalFromBase(itemTotalByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount)),
       }))
 
       const billedUntilLastBill = billTotals.reduce((sum, entry) => sum + entry.total, 0)
-      const paidUntilLastBill = payments
-        .filter((entry) => {
-          if (entry.date < lastBillDate) return true
-          if (entry.date > lastBillDate) return false
-          // Same bill day: include only payments entered up to last bill creation time.
-          if (entry.createdTs > 0 && lastBillCreatedTs > 0) return entry.createdTs <= lastBillCreatedTs
-          return true
-        })
+      const partitionedPayments = partitionPaymentsForNextBill(payments, {
+        cutoffDate: lastBillDate,
+        cutoffCreatedTs: lastBillCreatedTs,
+        currentBillDate: date,
+        priorBillRefs,
+      })
+      const paidUntilLastBill = partitionedPayments.previousBalancePayments
         .reduce((sum, entry) => sum + entry.amount, 0)
       const previousBalanceAmount = computeNetBalance(openingBalance, billedUntilLastBill, paidUntilLastBill)
-      const credits = payments.filter(
-        (entry) =>
-          entry.amount > 0 &&
-          // Credit should be after last bill cutoff.
-          (entry.date > lastBillDate ||
-            // Same-day: only a payment provably entered after the bill counts as
-            // a credit. Unknown timestamps already sit inside previousBalance —
-            // listing them here again would subtract them twice.
-            (entry.date === lastBillDate && entry.createdTs > 0 && lastBillCreatedTs > 0 && entry.createdTs > lastBillCreatedTs)) &&
-          isOnOrBeforeDay(entry.date, date),
-      )
+      const credits = partitionedPayments.periodCredits
 
       return {
         previousBalanceDate: lastBillDate || date,
