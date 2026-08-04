@@ -1,0 +1,27 @@
+http://127.0.0.1:4174 {
+	encode zstd gzip
+
+	handle_path /pb/* {
+		reverse_proxy 127.0.0.1:8090
+	}
+
+	handle /api/market-rate {
+		rewrite * /telegram/channel/brassb2b
+		reverse_proxy https://rss.zayu.dev {
+			header_up Host rss.zayu.dev
+		}
+	}
+
+	handle /assets/* {
+		root * {$KAPIL_DIST_DIR}
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	handle {
+		root * {$KAPIL_DIST_DIR}
+		header Cache-Control "no-store, no-cache, must-revalidate"
+		try_files {path} /index.html
+		file_server
+	}
+}

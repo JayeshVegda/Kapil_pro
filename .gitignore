@@ -2,6 +2,11 @@
 .env.*
 .env*
 !.env.example
+!.env.windows.example
+
+# Windows local-primary runtime (business data and downloaded binaries never enter Git)
+runtime/**
+!runtime/.gitkeep
 
 # Logs
 logs
@@ -50,4 +55,3 @@ docs/**/*.xlsm
 data/
 !data/types.d.ts
 Claude_*.json
-

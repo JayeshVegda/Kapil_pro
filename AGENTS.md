@@ -1,5 +1,31 @@
 # Kapil Pro Agent Workflow
 
+## Windows Local-Primary Authority
+
+This `kapil-windows` branch is the Windows-PC-only edition. Read `WINDOWS-SETUP.md`,
+`DATABASE-RUNBOOK.md`, and `TROUBLESHOOTING.md` before changing runtime or database
+behavior.
+
+- The sole writable database is `runtime/data/data.db` on the Windows PC.
+- PocketBase listens only on `127.0.0.1:8090`; Caddy listens only on `127.0.0.1:4174`.
+- Never change either listener to `0.0.0.0` or a LAN address unless the owner explicitly requests a new security design.
+- Never commit anything under `runtime/`, any `.env`, database, backup, executable, log, or credential.
+- Before database-affecting work, run `windows/health-check.ps1` and `windows/backup-kapil.ps1`.
+- Never copy, replace, compress, or edit an active SQLite database. Use the supplied stop/backup/restore scripts.
+- Never create bidirectional synchronization or a second writable database.
+- Do not use VPS deployment scripts on this branch. Windows operations belong in `windows/`.
+- Run `npm run verify` after application changes and inspect `git status --ignored` before committing.
+
+The safe operator commands are:
+
+```powershell
+.\windows\start-kapil.ps1
+.\windows\stop-kapil.ps1
+.\windows\health-check.ps1
+.\windows\backup-kapil.ps1
+.\windows\restore-kapil.ps1 -Archive <verified-zip>
+```
+
 Use the installed skills as part of normal work in this project. Pick the smallest relevant set for the task, read each selected skill before acting, and mention which skills are being used.
 
 ## Project Direction

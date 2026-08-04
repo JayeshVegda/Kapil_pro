@@ -1,6 +1,12 @@
 # Kapil Billing
 
-Production billing and ledger application for Kapil Trading workflows. The stack is a Vite/React frontend backed by PocketBase, with operational scripts and deployment configs kept in-repo for a low-RAM VPS setup.
+Billing and ledger application for Kapil Trading workflows. On the `kapil-windows` branch, the production target is one Windows PC using native PocketBase and Caddy with no Docker requirement.
+
+## Windows Local-Primary Edition
+
+Start with [WINDOWS-SETUP.md](WINDOWS-SETUP.md). Database safety and recovery are documented in [DATABASE-RUNBOOK.md](DATABASE-RUNBOOK.md), and common failures are covered in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+The Windows service is intentionally available only at `http://127.0.0.1:4174`. Live data, backups, binaries, credentials, and logs remain under Git-ignored `runtime/` and must never be pushed to GitHub.
 
 ## What This Repo Contains
 
