@@ -14,10 +14,10 @@ loadEnvFile('.env')
 loadEnvFile('.env.production')
 
 const RSS_URL = process.env.BRASS_RSS_URL || process.env.VITE_MARKET_RATE_URL_PUBLIC || 'https://rss.zayu.dev/telegram/channel/brassb2b'
+// Local-first: only explicitly configured PocketBase URLs are used. Never fall back to a remote host.
 const PB_URL_CANDIDATES = [
   process.env.PB_URL,
   process.env.POCKETBASE_URL,
-  'https://kapil.zayu.dev/pb',
 ].filter(Boolean)
 const PB_ADMIN_EMAIL = process.env.PB_ADMIN_EMAIL || process.env.PB_SUPERUSER_EMAIL
 const PB_ADMIN_PASSWORD = process.env.PB_ADMIN_PASSWORD || process.env.PB_SUPERUSER_PASSWORD

@@ -9,7 +9,7 @@ import { autoTable } from 'jspdf-autotable'
 loadEnvFile('.env')
 loadEnvFile('.env.production')
 
-const PB_URL_CANDIDATES = [process.env.PB_URL, process.env.POCKETBASE_URL, 'https://kapil.zayu.dev/pb'].filter(Boolean)
+const PB_URL_CANDIDATES = [process.env.PB_URL, process.env.POCKETBASE_URL].filter(Boolean)
 const PB_ADMIN_EMAIL = process.env.PB_ADMIN_EMAIL || process.env.PB_SUPERUSER_EMAIL
 const PB_ADMIN_PASSWORD = process.env.PB_ADMIN_PASSWORD || process.env.PB_SUPERUSER_PASSWORD
 const TELEGRAM_BOT_TOKEN = process.env.BRASS_TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN
