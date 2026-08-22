@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, CircleDollarSign, FileSpreadsheet, FileText, Landmark, ReceiptText, TrendingUp } from 'lucide-react'
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, CircleDollarSign, Landmark, ReceiptText, TrendingUp } from 'lucide-react'
 import { CollectionEfficiencyGauge, GasSellingRateTrendChart, ReceivableAgingBars, SalesCollectionTrendChart, WeeklySalesChart } from '@/components/reports/company-charts'
 import { useMemo, useState, type ReactNode } from 'react'
 import { loadDashboardCollections } from '@/data/dashboard'
@@ -374,116 +374,6 @@ function ReportPage() {
   const monthlyCashGap = report.thisMonth.sales - report.thisMonth.collections
   const salesDelta = report.thisMonth.sales - report.lastMonth.sales
   const collectionEfficiencyStatus = getEfficiencyStatus(report.overall.collectionEfficiencyPct)
-  async function downloadReportPdf() {
-    const { createStyledPdf } = await import('@/lib/exports/pdf-engine')
-    const doc = await createStyledPdf({
-      title: 'Company Report',
-      subtitle: `As of ${formatFullDate(today)} | Kapil Products`,
-      summary: [
-        { label: 'Total Sales', value: formatInrInteger(report.overall.totalSales) },
-        { label: 'Collections', value: formatInrInteger(report.overall.totalCollections) },
-        { label: 'Receivable', value: formatInrInteger(report.overall.receivable) },
-        { label: 'Efficiency', value: `${Math.round(report.overall.collectionEfficiencyPct)}%` },
-      ],
-      sections: [
-        {
-          kind: 'table',
-          title: 'Monthly sales vs collections',
-          columns: [
-            { header: 'Month' },
-            { header: 'Sales', align: 'right' },
-            { header: 'Collections', align: 'right' },
-            { header: 'Gap', align: 'right' },
-          ],
-          rows: report.monthlyTrend.map((row) => [
-            formatMonthYear(row.month),
-            formatInrInteger(row.sales),
-            formatInrInteger(row.collections),
-            formatInrInteger(row.sales - row.collections),
-          ]),
-        },
-        {
-          kind: 'table',
-          title: 'Receivable aging',
-          columns: [{ header: 'Bucket' }, { header: 'Outstanding', align: 'right' }, { header: 'Parties', align: 'right' }],
-          rows: [
-            ['0-30 days', formatInrInteger(report.receivableAging.current), report.receivableAgingCustomers.current.length],
-            ['31-60 days', formatInrInteger(report.receivableAging.days31to60), report.receivableAgingCustomers.days31to60.length],
-            ['61-90 days', formatInrInteger(report.receivableAging.days61to90), report.receivableAgingCustomers.days61to90.length],
-            ['Above 90 days', formatInrInteger(report.receivableAging.above90), report.receivableAgingCustomers.above90.length],
-          ],
-        },
-        {
-          kind: 'table',
-          title: 'Top parties by outstanding',
-          columns: [{ header: 'Party' }, { header: 'Outstanding', align: 'right' }],
-          rows: report.topCustomersByOutstanding.map((row) => [row.name, formatInrInteger(row.value)]),
-        },
-      ],
-    })
-    doc.save(`company-report-${today}.pdf`)
-  }
-
-  async function downloadReportExcel() {
-    const { createXlsxBlob } = await import('@/lib/exports/xlsx-workbook')
-    const blob = await createXlsxBlob([
-      {
-        name: 'Monthly Trend',
-        totalsLabel: 'Total',
-        columns: [
-          { header: 'Month', type: 'text' },
-          { header: 'Sales', type: 'currency', total: true },
-          { header: 'Collections', type: 'currency', total: true },
-          { header: 'Gap', type: 'currency' },
-        ],
-        rows: report.monthlyTrend.map((row) => [formatMonthYear(row.month), row.sales, row.collections, row.sales - row.collections]),
-      },
-      {
-        name: 'Receivable Aging',
-        columns: [
-          { header: 'Party', type: 'text' },
-          { header: 'Bucket', type: 'text' },
-          { header: 'Due days', type: 'integer' },
-          { header: 'Outstanding', type: 'currency', total: true },
-        ],
-        totalsLabel: 'Total',
-        rows: (['current', 'days31to60', 'days61to90', 'above90'] as const).flatMap((bucket) =>
-          report.receivableAgingCustomers[bucket].map((row) => [
-            row.name,
-            bucket === 'current' ? '0-30d' : bucket === 'days31to60' ? '31-60d' : bucket === 'days61to90' ? '61-90d' : '90d+',
-            row.dueDays,
-            row.amount,
-          ]),
-        ),
-      },
-      {
-        name: 'Top by Sales',
-        columns: [
-          { header: 'Party', type: 'text' },
-          { header: 'Sales', type: 'currency', total: true },
-        ],
-        totalsLabel: 'Total',
-        rows: report.topCustomersBySales.map((row) => [row.name, row.value]),
-      },
-      {
-        name: 'FY Summary',
-        columns: [
-          { header: 'Financial Year', type: 'text' },
-          { header: 'Sales', type: 'currency', total: true },
-          { header: 'Collections', type: 'currency', total: true },
-          { header: 'Gap', type: 'currency' },
-        ],
-        totalsLabel: 'Total',
-        rows: report.financialYearSummary.map((fy) => [fy.label, fy.sales, fy.collections, fy.gap]),
-      },
-    ])
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `company-report-${today}.xlsx`
-    link.click()
-    window.setTimeout(() => URL.revokeObjectURL(url), 2000)
-  }
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
@@ -492,26 +382,6 @@ function ReportPage() {
 
       {!reportQuery.isLoading && !reportQuery.isError && (
         <>
-          <section className="flex flex-wrap items-center justify-between gap-3" aria-label="Report actions">
-            <h2 className="text-base font-semibold text-slate-900">Company Report</h2>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-                onClick={() => void downloadReportPdf()}
-              >
-                <FileText size={13} /> PDF
-              </button>
-              <button
-                type="button"
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-                onClick={() => void downloadReportExcel()}
-              >
-                <FileSpreadsheet size={13} /> Excel
-              </button>
-            </div>
-          </section>
-
           <section className="space-y-3" aria-label="Executive health overview">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
               <ExecutiveKpiCard title="Total Sales" value={formatInrInteger(report.overall.totalSales)} tone="blue" trend={report.thisMonth.sales - report.lastMonth.sales} trendLabel="vs last month" status={salesDelta >= 0 ? 'Healthy' : 'Warning'} icon={<TrendingUp size={18} />} sparkline={report.monthlyTrend.map((row) => row.sales)} />

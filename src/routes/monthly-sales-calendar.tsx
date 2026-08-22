@@ -251,6 +251,15 @@ function CalendarPage() {
                 </button>
               </div>
             </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-200 bg-slate-50/60 px-3 py-2 text-[10px] font-medium text-slate-500 sm:px-4">
+              <span className="font-semibold uppercase tracking-[0.06em] text-slate-400">Legend:</span>
+              <span><span className="font-bold text-blue-700">Rate</span> — avg selling ₹/kg</span>
+              <span><span className="font-semibold text-amber-700">Mkt</span> — bill market ₹/kg</span>
+              <span><span className="font-bold text-emerald-700">Prem</span> — premium vs market (+green / −red)</span>
+              <span><span className="font-semibold text-emerald-700">Coll</span> — collections ₹</span>
+              <span><span className="font-bold text-slate-900">Sales</span> — billed ₹</span>
+              <span><span className="font-semibold text-slate-700">Kg</span> — gas sold</span>
+            </div>
             <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
               {WEEKDAYS.map((day) => <div key={day} className="py-2 text-center text-[11px] font-semibold tracking-[0.08em] text-slate-500">{day}</div>)}
             </div>
@@ -288,12 +297,16 @@ function CalendarPage() {
                           ) : null}
                         </div>
                         <div className="mt-1.5 space-y-1 text-[11px] leading-tight">
-                          <MetricLine label="Sell" value={formatRate(gas?.weightedSellingRate ?? null)} tone={gas?.weightedSellingRate != null ? 'text-blue-700 font-bold' : 'text-slate-300'} />
-                          <MetricLine label="Mkt" value={formatRate(displayedMarketRate)} tone={displayedMarketRate != null ? 'text-amber-700' : 'text-slate-300'} />
-                          <MetricLine label="Prem" value={formatPremium(gas?.premiumPerKg ?? null)} tone={gas?.premiumPerKg == null ? 'text-slate-300' : gas.premiumPerKg >= 0 ? 'text-emerald-700 font-bold' : 'text-rose-700 font-bold'} />
-                          <MetricLine label="Coll" value={collections > 0 ? formatInrInteger(collections) : '-'} tone={collections > 0 ? 'text-emerald-700' : 'text-slate-300'} />
-                          <MetricLine label="Sales" value={sales > 0 ? formatInrInteger(sales) : '-'} tone={sales > 0 ? 'text-slate-950 font-bold' : 'text-slate-300'} />
-                          <MetricLine label="Gas" value={(gas?.kg ?? 0) > 0 ? `${formatWhole(gas?.kg ?? 0)} kg` : '-'} tone={(gas?.kg ?? 0) > 0 ? 'text-slate-700 font-bold' : 'text-slate-300'} />
+                          {(gas?.weightedSellingRate != null || !!rate) && (
+                            <MetricLine label="Rate" value={formatRate(gas?.weightedSellingRate ?? null)} tone="text-blue-700 font-bold" />
+                          )}
+                          {displayedMarketRate != null && <MetricLine label="Mkt" value={formatRate(displayedMarketRate)} tone="text-amber-700" />}
+                          {gas?.premiumPerKg != null && (
+                            <MetricLine label="Prem" value={formatPremium(gas.premiumPerKg)} tone={gas.premiumPerKg >= 0 ? 'text-emerald-700 font-bold' : 'text-rose-700 font-bold'} />
+                          )}
+                          {collections > 0 && <MetricLine label="Coll" value={formatInrInteger(collections)} tone="text-emerald-700" />}
+                          {sales > 0 && <MetricLine label="Sales" value={formatInrInteger(sales)} tone="text-slate-950 font-bold" />}
+                          {(gas?.kg ?? 0) > 0 && <MetricLine label="Kg" value={`${formatWhole(gas?.kg ?? 0)} kg`} tone="text-slate-700 font-bold" />}
                         </div>
                       </button>
                     )
@@ -383,9 +396,19 @@ function ItemSignalsKpi({ itemComparisons }: { itemComparisons: MonthlyItemCompa
       </div>
       <div className="space-y-1.5">
         <ItemSignalLine
-          label="Spindle"
+          label="Spindle 7.5GM"
+          value={formatWhole(itemComparisons.spindle75.bags)}
+          detail={formatVsLastMonth(itemComparisons.spindle75.bags, itemComparisons.spindle75.previousBags, 'bags')}
+        />
+        <ItemSignalLine
+          label="Spindle 8.5GM"
+          value={formatWhole(itemComparisons.spindle85.bags)}
+          detail={formatVsLastMonth(itemComparisons.spindle85.bags, itemComparisons.spindle85.previousBags, 'bags')}
+        />
+        <ItemSignalLine
+          label="Spindle total"
           value={formatWhole(itemComparisons.spindle.bags)}
-          detail={formatVsLastMonth(itemComparisons.spindle.bags, itemComparisons.spindle.previousBags, 'bags')}
+          detail={`${formatWhole(itemComparisons.spindle.kg)} kg · ${formatVsLastMonth(itemComparisons.spindle.bags, itemComparisons.spindle.previousBags, 'bags')}`}
         />
         <ItemSignalLine
           label="Tapper Plug"

@@ -13,7 +13,10 @@ export type MonthlyItemMetric = {
 }
 
 export type MonthlyItemComparisons = {
+  /** All Spindle variants combined (7.5GM + 8.5GM + any other). */
   spindle: MonthlyItemMetric
+  spindle75: MonthlyItemMetric
+  spindle85: MonthlyItemMetric
   tapperPlug: MonthlyItemMetric
 }
 
@@ -33,11 +36,16 @@ const num = (value: unknown) => {
 
 const str = (value: unknown) => String(value ?? '')
 
-function classifyItem(name: string): keyof MonthlyItemComparisons | null {
+function classifyItem(name: string): Array<keyof MonthlyItemComparisons> {
   const normalized = name.trim().toLowerCase()
-  if (normalized.includes('spindle')) return 'spindle'
-  if (normalized.includes('tapper') && normalized.includes('plug')) return 'tapperPlug'
-  return null
+  if (normalized.includes('spindle')) {
+    // Variant detection from the item name; the combined "spindle" bucket always accumulates too.
+    if (normalized.includes('7.5')) return ['spindle', 'spindle75']
+    if (normalized.includes('8.5')) return ['spindle', 'spindle85']
+    return ['spindle']
+  }
+  if (normalized.includes('tapper') && normalized.includes('plug')) return ['tapperPlug']
+  return []
 }
 
 function billLookup(bills: BillLike[], monthKey?: string, maxDate?: string) {
@@ -51,32 +59,36 @@ function billLookup(bills: BillLike[], monthKey?: string, maxDate?: string) {
 }
 
 function addItems(
-  target: { spindle: MonthlyItemMetric; tapperPlug: MonthlyItemMetric },
+  target: MonthlyItemComparisons,
   bills: Map<string, { customerId: string }>,
   items: BillItemLike[],
   mode: 'current' | 'previous',
 ) {
-  const parties = {
+  const parties: Record<keyof MonthlyItemComparisons, Set<string>> = {
     spindle: new Set<string>(),
+    spindle75: new Set<string>(),
+    spindle85: new Set<string>(),
     tapperPlug: new Set<string>(),
   }
 
   for (const item of items) {
     const bill = bills.get(str(item.bill))
     if (!bill) continue
-    const category = classifyItem(str(item.item_name))
-    if (!category) continue
-    const metric = target[category]
+    const categories = classifyItem(str(item.item_name))
+    if (!categories) continue
     const bags = num(item.bags)
     const kg = num(item.qty)
-    if (mode === 'current') {
-      metric.bags += bags
-      metric.kg += kg
-    } else {
-      metric.previousBags += bags
-      metric.previousKg += kg
+    for (const category of categories) {
+      const metric = target[category]
+      if (mode === 'current') {
+        metric.bags += bags
+        metric.kg += kg
+      } else {
+        metric.previousBags += bags
+        metric.previousKg += kg
+      }
+      if (bill.customerId) parties[category].add(bill.customerId)
     }
-    if (bill.customerId) parties[category].add(bill.customerId)
   }
 
   for (const category of Object.keys(parties) as Array<keyof MonthlyItemComparisons>) {
@@ -102,8 +114,10 @@ export function buildMonthlyItemComparisons({
   previousMonthKey?: string
   maxCurrentDate?: string
 }): MonthlyItemComparisons {
-  const comparisons = {
+  const comparisons: MonthlyItemComparisons = {
     spindle: emptyMetric(),
+    spindle75: emptyMetric(),
+    spindle85: emptyMetric(),
     tapperPlug: emptyMetric(),
   }
   addItems(comparisons, billLookup(currentBills, currentMonthKey, maxCurrentDate), currentItems, 'current')

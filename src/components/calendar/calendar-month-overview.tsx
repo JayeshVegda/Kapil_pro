@@ -27,7 +27,8 @@ export function CalendarMonthOverview({ monthKey, sales, collections, avgRate, n
         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-blue-100/85">Month signals</p>
         <h2 className="mt-1 text-xl font-bold leading-tight">{formatMonthYear(monthKey)}</h2>
         <div className="mt-3 space-y-1.5">
-          <SignalLine label="Spindle" value={`${formatNumber(itemComparisons.spindle.bags)} bags`} detail={formatVsLastMonth(itemComparisons.spindle.bags, itemComparisons.spindle.previousBags, 'bags')} />
+          <SignalLine label="Spindle 7.5GM" value={`${formatNumber(itemComparisons.spindle75.bags)} bags`} detail={formatVsLastMonth(itemComparisons.spindle75.bags, itemComparisons.spindle75.previousBags, 'bags')} />
+          <SignalLine label="Spindle 8.5GM" value={`${formatNumber(itemComparisons.spindle85.bags)} bags`} detail={formatVsLastMonth(itemComparisons.spindle85.bags, itemComparisons.spindle85.previousBags, 'bags')} />
           <SignalLine label="Tapper Plug" value={`${formatNumber(itemComparisons.tapperPlug.bags)} bags`} detail={formatVsLastMonth(itemComparisons.tapperPlug.bags, itemComparisons.tapperPlug.previousBags, 'bags')} />
           <SignalLine label="Tapper Plug Parties" value={`${formatNumber(itemComparisons.tapperPlug.partyCount)}`} detail={formatVsLastMonth(itemComparisons.tapperPlug.partyCount, itemComparisons.tapperPlug.previousPartyCount, 'party')} />
         </div>

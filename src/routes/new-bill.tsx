@@ -10,7 +10,6 @@ import { PaymentAmountInput } from '@/components/ui/payment-amount-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
 import { assertBillNumberAvailable, getCustomerBookSelection, getNextBillNoForBook, saveBillWithItems } from '@/data/bills'
-import { createCustomer } from '@/data/customers'
 import { createItem, suggestItemGroup } from '@/data/items'
 import { bookNoForBillNo, getBookRange, isBillNoInBook } from '@/domain/bill-books'
 import { pb } from '@/data/pocketbase'
@@ -181,8 +180,6 @@ function NewBillPage() {
   const [previewPrintProps, setPreviewPrintProps] = useState<BillPrintLayoutProps | null>(null)
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
   const [marketPillOpen, setMarketPillOpen] = useState(false)
-  const [isQuickCustomerOpen, setIsQuickCustomerOpen] = useState(false)
-  const [quickCustomer, setQuickCustomer] = useState({ name: '', companyName: '', custType: '' })
   const [isQuickItemOpen, setIsQuickItemOpen] = useState(false)
   const [quickItem, setQuickItem] = useState({ name: '', type: '', group: '', groupEdited: false, defaultRate: 0 })
   const firstItemRef = useRef<HTMLSelectElement | null>(null)
@@ -694,32 +691,6 @@ function NewBillPage() {
     }
   }, [getAutoRate, mktRate, gstMode])
 
-  const quickCustomerMutation = useMutation({
-    mutationFn: async () => {
-      const name = quickCustomer.name.trim()
-      if (!name) throw new Error('Customer name is required')
-      return createCustomer({
-        companyName: quickCustomer.companyName.trim() || name,
-        name,
-        active: true,
-        openingBalance: 0,
-        custType: quickCustomer.custType,
-      })
-    },
-    onSuccess: async (newId) => {
-      setIsQuickCustomerOpen(false)
-      setQuickCustomer({ name: '', companyName: '', custType: '' })
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['customers-options'] }),
-        queryClient.invalidateQueries({ queryKey: ['payment-customers'] }),
-        queryClient.invalidateQueries({ queryKey: ['customers-ledger'] }),
-      ])
-      setCustomerId(newId)
-      setStatusText('Customer added.')
-    },
-    onError: (error) => setStatusText(toUserMessage(error)),
-  })
-
   const quickItemMutation = useMutation({
     mutationFn: async () => {
       const name = quickItem.name.trim()
@@ -1153,8 +1124,7 @@ function NewBillPage() {
             <DateInput className={inputClass} value={date} onChange={setDate} />
           </Field>
           <Field label="Customer">
-            <div className="flex items-center gap-1.5">
-              <SearchableCombobox
+            <SearchableCombobox
                 options={(customersQuery.data ?? []).map((customer) => ({
                   id: customer.id,
                   name: customer.name,
@@ -1178,16 +1148,6 @@ function NewBillPage() {
                 autoFocus
                 onSelectionComplete={() => firstItemRef.current?.focus()}
               />
-              <button
-                type="button"
-                aria-label="Add new customer"
-                title="Add new customer"
-                className="inline-grid h-10 w-8 shrink-0 place-items-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-                onClick={() => setIsQuickCustomerOpen(true)}
-              >
-                <Plus size={14} />
-              </button>
-            </div>
           </Field>
           <Field label="MKT Rate">
             <input className={inputClass} type="number" value={mktRate} onChange={(e) => { mktManuallyEditedRef.current = true; setMktRate(parseNonNegativeNumber(e.target.value)) }} />
@@ -1659,62 +1619,6 @@ function NewBillPage() {
                 {saveMutation.isPending ? 'Saving...' : 'Confirm & Save'}
               </button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-      {isQuickCustomerOpen && (
-        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <h3 className="text-base font-semibold text-slate-900">Add Customer</h3>
-              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickCustomerOpen(false)}>
-                Close
-              </button>
-            </div>
-            <div className="grid grid-cols-1 gap-3 px-4 py-4 sm:grid-cols-2">
-              <Field label="Customer Name *">
-                <input
-                  autoFocus
-                  className={inputClass}
-                  type="text"
-                  value={quickCustomer.name}
-                  onChange={(e) => setQuickCustomer((prev) => ({ ...prev, name: e.target.value }))}
-                />
-              </Field>
-              <Field label="Company Name">
-                <input
-                  className={inputClass}
-                  type="text"
-                  value={quickCustomer.companyName}
-                  onChange={(e) => setQuickCustomer((prev) => ({ ...prev, companyName: e.target.value }))}
-                />
-              </Field>
-              <Field label="Type">
-                <select
-                  className={inputClass}
-                  value={quickCustomer.custType}
-                  onChange={(e) => setQuickCustomer((prev) => ({ ...prev, custType: e.target.value }))}
-                >
-                  <option value="">Not set</option>
-                  <option value="gas">Gas Parts</option>
-                  <option value="electronic">Electronic Parts</option>
-                  <option value="both">Both</option>
-                </select>
-              </Field>
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
-              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsQuickCustomerOpen(false)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={() => void quickCustomerMutation.mutateAsync()}
-                disabled={!quickCustomer.name.trim() || quickCustomerMutation.isPending}
-              >
-                {quickCustomerMutation.isPending ? 'Saving...' : 'Save Customer'}
-              </button>
             </div>
           </div>
         </div>
