@@ -1,6 +1,7 @@
 /// <reference path="../pb_data/types.d.ts" />
 migrate((app) => {
-  const collection = app.findCollectionByNameOrId("pbc_767253123")
+  let collection
+  try { collection = app.findCollectionByNameOrId("pbc_767253123") } catch { return }
 
   // update collection data
   unmarshal({
