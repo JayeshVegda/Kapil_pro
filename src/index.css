@@ -1,0 +1,65 @@
+@import "tailwindcss";
+@import "./components/billing/bill-print.css";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: "Geist Variable", sans-serif;
+}
+
+@layer base {
+  body {
+    margin: 0;
+    background: #f1f5f9;
+    color: #0f172a;
+  }
+
+  html {
+    font-family: "Geist Variable", sans-serif;
+  }
+}
+
+@layer utilities {
+  @keyframes quick-search-fade {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer base {
+  @media (max-width: 1023px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+
+    button,
+    a,
+    input,
+    select,
+    textarea {
+      -webkit-tap-highlight-color: rgba(37, 99, 235, 0.12);
+    }
+  }
+}

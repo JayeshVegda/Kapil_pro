@@ -1,0 +1,57 @@
+.env
+.env.*
+.env*
+!.env.example
+!.env.windows.example
+
+# Windows local-primary runtime (business data and downloaded binaries never enter Git)
+runtime/**
+!runtime/.gitkeep
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules/
+dist/
+dist-ssr/
+pb_data/
+import-backups/
+logs/
+archive/runtime-snapshots/**
+!archive/runtime-snapshots/.gitkeep
+
+*.zip
+*.tar
+*.tar.gz
+*.db
+*.db-shm
+*.db-wal
+
+db-export-*.json
+docs/data/
+docs/**/*.csv
+docs/**/*.xls
+docs/**/*.xlsx
+docs/**/*.xlsm
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Project data
+data/
+!data/types.d.ts
+Claude_*.json

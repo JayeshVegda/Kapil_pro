@@ -1,0 +1,23 @@
+{
+  "createdAt": "2026-08-04T08:46:29.933Z",
+  "encryptedArchive": "kapil-production-20260804.zip.enc",
+  "encryptedSizeBytes": 34249104,
+  "encryptedSha256": "0f5d64fbbc37370355d331182c64f431a7d70f553ddd1dcd4f9b01d2d1a55c62",
+  "decryptedSha256": "59c27ed55352a121ac5e01d8ad32263c28e4eb71c054d0fa49f66a23fd56449d",
+  "recordTotal": 905,
+  "counts": {
+    "users": 2,
+    "customers": 13,
+    "items": 14,
+    "bills": 148,
+    "bill_items": 208,
+    "payments": 173,
+    "brass_rates": 129,
+    "casting_sessions": 9,
+    "casting_materials": 5,
+    "stock_in": 16,
+    "stock_openings": 3,
+    "casting_batches": 34,
+    "casting_batch_inputs": 151
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "generated_at_utc": "2026-04-25T16:23:52.848454+00:00",
+  "database": "/home/ubuntu/Billing/pb_data/data.db",
+  "readonly_mode": true,
+  "reason_not_applied": "pb_data is root-owned; write operations rejected",
+  "duplicate_book_bill": [],
+  "existing_indexes_count": 33,
+  "table_counts": {
+    "_authOrigins": 1,
+    "_collections": 12,
+    "_externalAuths": 0,
+    "_mfas": 0,
+    "_migrations": 8,
+    "_otps": 0,
+    "_params": 1,
+    "_superusers": 1,
+    "bill_items": 32,
+    "bills": 27,
+    "customers": 9,
+    "items": 2,
+    "misc_expenses": 9,
+    "payments": 23,
+    "users": 0
+  },
+  "artifacts": {
+    "schema_snapshot": "docs/db-migrations/20260425_162352_schema_snapshot.sql",
+    "proposed_indexes": "docs/db-migrations/20260425_162352_proposed_indexes.sql"
+  }
+}

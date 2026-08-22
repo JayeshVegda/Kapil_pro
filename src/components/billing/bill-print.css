@@ -1,0 +1,174 @@
+/* On-screen preview + print popup (embedded). Narrow phone/receipt width. */
+.bill-print-root {
+  font-size: 11px;
+  line-height: 1.35;
+  color: #0f172a;
+}
+
+.bill-print-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.bill-print-header-brand {
+  min-width: 0;
+}
+
+.bill-print-market-line {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #475569;
+}
+
+.bill-print-market-separator {
+  margin: 0 5px;
+  color: #94a3b8;
+}
+
+.bill-print-gst-label {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.bill-print-header-meta {
+  flex: 0 0 auto;
+  text-align: right;
+  font-size: 10px;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.bill-print-header-meta strong {
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.bill-print-party {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.bill-print-party strong {
+  color: #0f172a;
+}
+
+.bill-print-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 10px;
+}
+
+.bill-print-table th,
+.bill-print-table td {
+  border: 1px solid #94a3b8;
+  padding: 4px 4px;
+  vertical-align: top;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.bill-print-table th {
+  background: #f1f5f9;
+  font-weight: 600;
+  text-align: left;
+}
+
+.bill-print-col-qty,
+.bill-print-col-rate,
+.bill-print-col-amt {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-print-col-amt {
+  font-weight: 500;
+}
+
+.bill-print-divider {
+  border: 0;
+  border-top: 1px solid #94a3b8;
+  margin: 10px 0;
+}
+
+.bill-print-summary {
+  font-size: 10px;
+}
+
+.bill-print-summary-line {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  margin: 5px 0;
+}
+
+.bill-print-summary-label {
+  color: #334155;
+  min-width: 0;
+}
+
+.bill-print-summary-value {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bill-print-credits {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 10px;
+}
+
+.bill-print-credit-line {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  margin: 3px 0;
+  color: #475569;
+}
+
+.bill-print-total {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #64748b;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.bill-print-total .bill-print-summary-value {
+  font-weight: 700;
+}
+
+.bill-print-footer {
+  display: grid;
+  grid-template-columns: repeat(3, max-content);
+  column-gap: 44px;
+  justify-content: start;
+  margin-top: 10px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.bill-print-footer-label {
+  color: #64748b;
+  margin: 0 0 2px;
+}
+
+.bill-print-footer-value {
+  font-weight: 600;
+  color: #0f172a;
+  margin: 0;
+}

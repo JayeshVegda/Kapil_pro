@@ -1,0 +1,19 @@
+{
+  "applied_at_utc": "2026-04-25T16:25:34.477222+00:00",
+  "database": "/home/ubuntu/Billing/pb_data/data.db",
+  "applied": [
+    "CREATE UNIQUE INDEX idx_bills_book_bill ON bills(book_no, bill_no);",
+    "CREATE INDEX idx_bills_date ON bills(date);",
+    "CREATE INDEX idx_payments_date ON payments(date);",
+    "CREATE INDEX idx_bill_items_item_name ON bill_items(item_name);",
+    "CREATE INDEX idx_misc_expenses_type_date ON misc_expenses(type, date);"
+  ],
+  "skipped": [],
+  "index_status": {
+    "idx_bills_book_bill": true,
+    "idx_bills_date": true,
+    "idx_payments_date": true,
+    "idx_bill_items_item_name": true,
+    "idx_misc_expenses_type_date": true
+  }
+}

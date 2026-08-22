@@ -1,0 +1,8 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Complete Cloud backup to encrypted Backblaze plus local standby refresh.
+15 6,12,18 * * * root /opt/stacks/sites/kapil/scripts/run-cloud-backup.sh six-hour >> /opt/stacks/sites/kapil/replica_state/backup-cron.log 2>&1
+
+# The midnight run also sends an encrypted archive to Telegram.
+15 0 * * * root /opt/stacks/sites/kapil/scripts/run-cloud-backup.sh daily >> /opt/stacks/sites/kapil/replica_state/backup-cron.log 2>&1

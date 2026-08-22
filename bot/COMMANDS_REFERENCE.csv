@@ -1,0 +1,30 @@
+Category,Command/Syntax,Type,Description,Example,Optional Parameters,Notes
+Start,/start,Command,Compact menu and safe write boundaries,,,Shows common commands first
+Help,/help,Command,Command guide by workflow,,,Same as help
+Help,help <topic>,Text,Focused help for one command family,help payment,,Topics: payment stock bill day rate party dates amounts
+Health,/ping,Command,Health check,/ping,,Returns bot status
+Payment,p <party> <amount>,Write,Save payment to PocketBase,p sambhu 2.4l,,Cash is default
+Payment,p <party> <amount> bank,Write,Save bank payment,p sambhu 0.2l bank,,
+Payment,p <party> <amount> cash,Write,Save cash payment,p sambhu 20k cash,,
+Payment,p <party> <amount> <date>,Write,Back-date payment,p sambhu 50000 yday,,Supports yday today DD-MM-YYYY 23-may
+Payment,p <party> <amount> "note",Write,Save payment note,p sambhu 1l "upi received",,
+Stock In,s <qty>,Write,Save General Spindle stock-in,s 2,,2 means 2 bags for gas item
+Stock In,s <item> <qty>,Write,Save General stock-in for item,s tapper 4,,
+Stock In,s <item> <qty> <date>,Write,Back-date stock-in,s spindle 2 yday,,
+Stock In,s <qty>kg,Write,Save kilogram quantity,s 100kg,,Without kg small numbers are treated as bags
+Stock Report,stock,Read,Default General Spindle stock report,stock,,Read-only
+Stock Report,stock <item/customer>,Read,Fuzzy stock bucket report,stock tapper,,Can include customer/bucket words
+Rate,rate,Read,Latest saved brass rate,rate,,
+Rate,rate <date>,Read,Nearest saved rate on or before date,rate 23-may,,Read-only
+Day,day,Read,Today summary split into 4 messages,day,,Summary sales payments stock
+Day,day <date>,Read,Date summary split into 4 messages,day yday,,Summary sales payments stock
+Bill,bill,Read,Recent bills,bill,,Read-only
+Bill,bill <book>/<bill>,Read,Exact bill lookup,bill 52/14,,Read-only
+Bill,bill <party>,Read,Fuzzy party bills,bill sambhu,,Read-only
+Bill,bill <date>,Read,Bills on date,bill 23-may,,Read-only
+Bill,bill <party> <date>,Read,Party bills on date,bill sambhu 23-may,,Read-only
+Party,<party>,Read,Quick party ledger summary,sambhu,,Fuzzy match
+Amounts,2.4l / 0.2l / 20k / 40,Format,Indian amount shorthand,p sambhu 2.4l,,40 means 40 rupees
+Dates,today / yday / -1 / 23-may / DD-MM-YYYY,Format,Date shortcuts,day yday,,
+Boundary,bills,Rule,Bills are read-only in Telegram,,,Create and edit bills only in Kapil Pro
+Boundary,writes,Rule,Only payments and stock_in are writable,,,No customer item bill adjustment opening writes

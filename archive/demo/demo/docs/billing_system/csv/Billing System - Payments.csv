@@ -1,0 +1,24 @@
+Date,Customer,Amount,Mode,Note
+2026-01-06,D.E.,100000,Bank,Part payment against 51-001
+2026-01-15,Aaleshbhai,25000,Cash,Advance adjusted
+2026-01-20,Naveenbhai,30000,Bank,RTGS
+2026-01-26,Diwan Enterprise,50000,Bank,UTR 901122
+2026-02-03,Shree Brass Works,20000,Cash,Cash received
+2026-02-09,Patel Industries,15000,Bank,NEFT
+2026-02-18,Royal Turnings,18000,Cash,Counter payment
+2026-02-21,Kiran Traders,10000,Bank,First payment
+2026-03-01,D.E.,65000,Bank,Against old balance
+2026-03-12,Aaleshbhai,50000,Cash,Part payment
+2026-03-14,Mehta Metals,12000,Bank,UPI settlement
+2026-03-18,Naveenbhai,30000,Cash,Cash
+2026-03-25,Diwan Enterprise,25000,Bank,NEFT
+2026-03-30,D.E.,50000,Cash,Cash collection
+2026-04-02,D.E.,65000,Bank,April payment
+2026-04-07,Diwan Enterprise,15000,Cash,Hand to hand
+2026-04-09,Diwan Enterprise,50000,Bank,UTR 992701
+2026-04-12,Diwan Enterprise,30000,Bank,UTR 992744
+2026-04-14,Diwan Enterprise,25000,Cash,Office collection
+2026-04-16,Diwan Enterprise,100000,Bank,Large adjustment
+2026-04-18,Shree Brass Works,22000,Bank,IMPS
+2026-04-21,Patel Industries,10000,Cash,Part settlement
+2026-04-22,Kiran Traders,5000,Bank,Small transfer
