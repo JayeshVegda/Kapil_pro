@@ -1,3 +1,5 @@
+import { roundPaise } from '@/domain/financial-math'
+
 export type BillStatus = 'pending' | 'partial' | 'paid'
 
 type BillStatusBillInput = {
@@ -40,10 +42,11 @@ export function computeBillStatuses(params: {
 
   const statusByBillId = new Map<string, BillStatus>()
   for (const bill of sortedBills) {
-    const billAmount = Math.max(0, bill.amount)
+    const billAmount = Math.max(0, roundPaise(bill.amount))
     const appliedToBill = Math.min(billAmount, remainingPayments)
     remainingPayments -= appliedToBill
-    const status: BillStatus = appliedToBill <= 0 ? 'pending' : appliedToBill < billAmount ? 'partial' : 'paid'
+    // Half-paise tolerance: a payment matching the displayed (rounded) total must count as paid.
+    const status: BillStatus = appliedToBill <= 0 ? 'pending' : appliedToBill < billAmount - 0.005 ? 'partial' : 'paid'
     statusByBillId.set(bill.id, status)
   }
 

@@ -1,4 +1,4 @@
-import { getLocalIsoDate } from '@/lib/date'
+import { getLocalIsoDate, isValidCalendarDay } from '@/lib/date'
 import { findBestNameMatch } from '@/lib/search'
 import { getAdminControlSettings } from '@/lib/admin-control'
 import { calculateGasDefaultRateFromFinal, calculateGasFinalRate, isGasBillingItem } from '@/domain/billing-modes'
@@ -224,14 +224,18 @@ export function parseBillCommand(
       continue
     }
     if ((token === '+t' || token === 't' || token === '+transport' || token === 'transport') && i + 1 < tokens.length) {
-      transport = parseAmountToken(tokens[i + 1]) || transport
+      const next = parseAmountToken(tokens[i + 1])
+      if (next > 0) transport = next
       i += 1
       continue
     }
     if ((token === 'cgst' || token === 'customgst' || token === 'manualgst' || token === 'gstamt') && i + 1 < tokens.length) {
-      gstRate = 0
-      gstAmount = parseAmountToken(tokens[i + 1]) || 0
-      gstMode = 'manual'
+      const next = parseAmountToken(tokens[i + 1])
+      if (next > 0) {
+        gstRate = 0
+        gstAmount = next
+        gstMode = 'manual'
+      }
       i += 1
       continue
     }
@@ -263,11 +267,16 @@ export function parseBillCommand(
       continue
     }
     if ((token === 'date' || token === 'on') && i + 1 < tokens.length) {
-      const maybeDate = parseDateToken(tokens[i + 1].toLowerCase(), today)
-      if (isParsedDateToken(tokens[i + 1].toLowerCase(), maybeDate)) {
+      const rawNext = tokens[i + 1].toLowerCase()
+      const maybeDate = parseDateToken(rawNext, today)
+      if (isParsedDateToken(rawNext, maybeDate)) {
         date = maybeDate
         i += 1
         continue
+      }
+      // Looks like a date attempt but isn't a real calendar day — fail loudly.
+      if (/^\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?$/.test(rawNext)) {
+        return { ok: false, error: `Invalid date: ${rawNext}` }
       }
     }
     const maybeDate = parseDateToken(token, today)
@@ -335,7 +344,9 @@ function parseAttachedPaymentCommand(
 }
 
 function parsePositiveInteger(token: string) {
-  const value = Number(String(token ?? '').replace(/\D/g, ''))
+  const normalized = String(token ?? '').trim()
+  if (!/^\d+$/.test(normalized)) return 0
+  const value = Number(normalized)
   return Number.isInteger(value) && value > 0 ? value : 0
 }
 
@@ -354,15 +365,29 @@ export function parsePaymentCommand(input: string, customers: CommandCustomer[],
   const note = noteMatch?.[1]?.trim() ?? ''
   const withoutNote = noteMatch ? raw.replace(noteMatch[0], '').trim() : raw
   const tokens = withoutNote.split(/\s+/).filter(Boolean)
-  const amountIndex = tokens.findIndex((token) => parseAmountToken(token) > 0)
-  if (amountIndex <= 0) return { ok: false, error: 'Use: party amount [mode] [date]' }
-  const customerQuery = tokens.slice(0, amountIndex).join(' ')
-  const customer = findBestNameMatch(customers, customerQuery, customerSearchText)
-  if (!customer) return { ok: false, error: `Party not found: ${customerQuery}` }
+
+  // Longest customer-name prefix wins, so parties whose names contain numbers
+  // ("No 1 Traders") are never mistaken for an amount token.
+  const resolved = resolveBestPrefix(customers, withoutNote, customerSearchText)
+  let customer = resolved.record
+  let restTokens = tokens.slice(resolved.usedWords)
+  if (!customer) {
+    // Fallback to the classic "first number is the amount" split.
+    const amountIndex = tokens.findIndex((token) => parseAmountToken(token) > 0)
+    if (amountIndex <= 0) return { ok: false, error: 'Use: party amount [mode] [date]' }
+    const customerQuery = tokens.slice(0, amountIndex).join(' ')
+    customer = findBestNameMatch(customers, customerQuery, customerSearchText)
+    restTokens = tokens.slice(amountIndex + 1)
+    if (!customer) return { ok: false, error: `Party not found: ${customerQuery}` }
+  }
+
+  const amountIndex = restTokens.findIndex((token) => parseAmountToken(token) > 0)
+  if (!(amountIndex >= 0)) return { ok: false, error: 'Use: party amount [mode] [date]' }
+  const amount = parseAmountToken(restTokens[amountIndex])
 
   let mode: 'Cash' | 'Bank' = 'Cash'
   let date = today
-  for (const token of tokens.slice(amountIndex + 1)) {
+  for (const token of restTokens.slice(amountIndex + 1)) {
     const lower = token.toLowerCase()
     if (lower === 'by' || lower === 'via' || lower === 'on' || lower === 'date') continue
     if (lower === 'cash') mode = 'Cash'
@@ -372,7 +397,7 @@ export function parsePaymentCommand(input: string, customers: CommandCustomer[],
       if (isParsedDateToken(lower, maybeDate)) date = maybeDate
     }
   }
-  return { ok: true, command: { kind: 'payment', customer, amount: parseAmountToken(tokens[amountIndex]), mode, date, note } }
+  return { ok: true, command: { kind: 'payment', customer, amount, mode, date, note } }
 }
 
 export function parsePrintCommand(input: string): CommandParseResult<ParsedPrintCommand> {
@@ -410,7 +435,13 @@ export function parseDateToken(token: string, today: string) {
     return getLocalIsoDate(d)
   }
   const m = normalized.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/)
-  if (m) return `${m[3]}-${String(Number(m[2])).padStart(2, '0')}-${String(Number(m[1])).padStart(2, '0')}`
+  if (m) {
+    const day = Number(m[1])
+    const month = Number(m[2])
+    const year = Number(m[3])
+    if (!isValidCalendarDay(year, month, day)) return token
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  }
   const shortMonth = normalized.match(/^(\d{1,2})[-/ ]([a-z]{3,9})(?:[-/ ](\d{2,4}))?$/)
   if (shortMonth) {
     const month = monthNumber(shortMonth[2])
@@ -418,14 +449,23 @@ export function parseDateToken(token: string, today: string) {
       const todayYear = Number(today.slice(0, 4))
       const yearRaw = shortMonth[3]
       const year = yearRaw ? normalizeYear(yearRaw) : todayYear
-      return `${year}-${month}-${String(Number(shortMonth[1])).padStart(2, '0')}`
+      const day = Number(shortMonth[1])
+      if (!isValidCalendarDay(year, Number(month), day)) return token
+      return `${year}-${month}-${String(day).padStart(2, '0')}`
     }
   }
   const slash = normalized.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/)
   if (slash) {
     const todayYear = Number(today.slice(0, 4))
     const year = slash[3] ? normalizeYear(slash[3]) : todayYear
-    return `${year}-${String(Number(slash[2])).padStart(2, '0')}-${String(Number(slash[1])).padStart(2, '0')}`
+    const day = Number(slash[1])
+    const month = Number(slash[2])
+    // Day-first house convention; swap when the month slot is impossible.
+    if (!isValidCalendarDay(year, month, day) && isValidCalendarDay(year, day, month)) {
+      return `${year}-${String(day).padStart(2, '0')}-${String(month).padStart(2, '0')}`
+    }
+    if (!isValidCalendarDay(year, month, day)) return token
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
   }
   return token
 }

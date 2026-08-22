@@ -1,3 +1,5 @@
+import { roundPaise, safeNumber } from '@/domain/financial-math'
+
 export type BillItemInput = {
   qty: number
   rate: number
@@ -10,22 +12,19 @@ export type BillTotalsInput = {
   gstAmountOverride?: number | null
 }
 
-const toFiniteNumber = (value: unknown) => {
-  const num = Number(value)
-  return Number.isFinite(num) ? num : 0
-}
+const toFiniteNumber = (value: unknown) => safeNumber(value)
 
 export function calculateLineAmount(item: BillItemInput): number {
-  return toFiniteNumber(item.qty) * toFiniteNumber(item.rate)
+  return roundPaise(toFiniteNumber(item.qty) * toFiniteNumber(item.rate))
 }
 
 export function calculateBillTotals(input: BillTotalsInput) {
-  const itemsTotal = input.items.reduce((sum, item) => sum + calculateLineAmount(item), 0)
+  const itemsTotal = roundPaise(input.items.reduce((sum, item) => sum + calculateLineAmount(item), 0))
   const transport = toFiniteNumber(input.transport)
   const gstRate = toFiniteNumber(input.gstRate)
   const fixedGstAmount = toFiniteNumber(input.gstAmountOverride)
-  const gstAmount = fixedGstAmount > 0 ? fixedGstAmount : (itemsTotal * gstRate) / 100
-  const grandTotal = itemsTotal + transport + gstAmount
+  const gstAmount = fixedGstAmount > 0 ? roundPaise(fixedGstAmount) : roundPaise((itemsTotal * gstRate) / 100)
+  const grandTotal = roundPaise(itemsTotal + transport + gstAmount)
   const totalQty = input.items.reduce((sum, item) => sum + toFiniteNumber(item.qty), 0)
 
   return {

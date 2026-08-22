@@ -43,7 +43,7 @@ export function parseDisplayDate(dateText: string): string {
   return iso
 }
 
-const isValidCalendarDay = (year: number, month: number, day: number) => {
+export const isValidCalendarDay = (year: number, month: number, day: number) => {
   if (month < 1 || month > 12 || day < 1 || day > 31) return false
   const probe = new Date(year, month - 1, day)
   return probe.getFullYear() === year && probe.getMonth() === month - 1 && probe.getDate() === day

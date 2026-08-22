@@ -325,6 +325,7 @@ function NewPaymentPage() {
     function onKeyDown(event: KeyboardEvent) {
       if (event.ctrlKey && event.key === 'Enter') {
         event.preventDefault()
+        if (saveMutation.isPending) return
         void confirmCommandPayment()
       }
     }

@@ -11,7 +11,6 @@ import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
 import { assertBillNumberAvailable, getCustomerBookSelection, getNextBillNoForBook, saveBillWithItems } from '@/data/bills'
 import { bookNoForBillNo, getBookRange, isBillNoInBook } from '@/domain/bill-books'
-import { savePayment } from '@/data/payments'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billing-calculations'
 import {
@@ -365,17 +364,13 @@ function NewBillPage() {
         gstAmount,
         lrList,
         items: validRows,
-      })
-      for (const payment of validQuickPayments) {
-        await savePayment({
-          customerId: customer.id,
-          customerName: customer.companyName,
+        payments: validQuickPayments.map((payment) => ({
           date: payment.date,
           amount: payment.amount,
           mode: payment.mode,
           note: payment.note || `Quick payment with bill ${bookNo}/${billNo}`,
-        })
-      }
+        })),
+      })
     },
     onSuccess: async () => {
       await Promise.all([
@@ -385,6 +380,7 @@ function NewBillPage() {
         queryClient.invalidateQueries({ queryKey: ['next-bill-no'] }),
         queryClient.invalidateQueries({ queryKey: ['customer-auto-balance'] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard-data'] }),
+        queryClient.invalidateQueries({ queryKey: ['customer-last-item-rates'] }),
         customerId ? invalidateAfterPaymentWrite(queryClient, customerId) : Promise.resolve(),
       ])
       const savedQuickPaymentCount = quickPayments.filter((payment) => payment.amount > 0).length
@@ -793,6 +789,7 @@ function NewBillPage() {
     function onKeyDown(event: KeyboardEvent) {
       if (event.ctrlKey && event.key === 'Enter') {
         event.preventDefault()
+        if (saveMutation.isPending) return
         void confirmAndSave()
       }
     }

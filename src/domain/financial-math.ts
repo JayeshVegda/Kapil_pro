@@ -5,6 +5,12 @@ export function safeNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+/** Round money to whole paise — kills binary-float drift at every calculation boundary. */
+export function roundPaise(value: unknown) {
+  const num = safeNumber(value)
+  return Math.round((num + Number.EPSILON) * 100) / 100
+}
+
 export function computeNetBalance(openingBalance: number, billedTotal: number, paidTotal: number) {
   return safeNumber(openingBalance) + safeNumber(billedTotal) - safeNumber(paidTotal)
 }

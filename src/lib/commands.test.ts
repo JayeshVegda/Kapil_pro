@@ -202,4 +202,34 @@ describe('command parsing', () => {
       command: { mktRate: 900, items: [{ defaultRate: 40, rate: 940 }] },
     })
   })
+
+  it('rejects negative transport and gst amounts', () => {
+    const negativeTransport = parseBillCommand('ashish spindle 2 +t -500', customers, items, '2026-05-20', 500)
+    expect(negativeTransport).toMatchObject({ ok: true, command: { transport: 0 } })
+
+    const negativeGst = parseBillCommand('ashish spindle 2 cgst -300', customers, items, '2026-05-20', 500)
+    expect(negativeGst).toMatchObject({ ok: true, command: { gstAmount: 0, gstMode: 'none' } })
+  })
+
+  it('handles ambiguous numeric dates safely', () => {
+    // Day/month swap keeps 6/13 usable (June 13) instead of producing month 13.
+    const swapped = parseBillCommand('ashish spindle 2 on 6/13', customers, items, '2026-05-20', 500)
+    expect(swapped).toMatchObject({ ok: true, command: { date: '2026-06-13' } })
+
+    // Impossible in both orders fails the command with a clear error.
+    const impossible = parseBillCommand('ashish spindle 2 on 32/2', customers, items, '2026-05-20', 500)
+    expect(impossible).toMatchObject({ ok: false, error: 'Invalid date: 32/2' })
+  })
+
+  it('keeps parties with numbers in their names out of the amount slot', () => {
+    const numberedParties = [
+      { id: 'n1', name: 'No 1 Traders', companyName: 'No 1 Traders', customerName: 'No 1 Traders' },
+      ...customers,
+    ]
+    const parsed = parsePaymentCommand('no 1 traders 500 cash', numberedParties, '2026-05-20')
+    expect(parsed).toMatchObject({
+      ok: true,
+      command: { kind: 'payment', customer: { id: 'n1' }, amount: 500, mode: 'Cash' },
+    })
+  })
 })
