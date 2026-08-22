@@ -30,6 +30,8 @@ const submitPaymentSchema = z.object({
   note: z.string().optional(),
 })
 
+const PAYMENT_DRAFT_STORAGE_KEY = 'kapil-new-payment-draft-v1'
+
 function NewPaymentPage() {
   const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
@@ -45,6 +47,39 @@ function NewPaymentPage() {
   const [isCommandConfirmOpen, setIsCommandConfirmOpen] = useState(false)
   const amountInputRef = useRef<HTMLInputElement | null>(null)
   const noteInputRef = useRef<HTMLInputElement | null>(null)
+  const draftHydratedRef = useRef(false)
+
+  // Restore an in-progress payment draft left over from navigating away.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(PAYMENT_DRAFT_STORAGE_KEY)
+      if (raw) {
+        const d = JSON.parse(raw) as Partial<{ date: string; customerId: string; mode: 'Cash' | 'Bank'; amount: number; note: string }>
+        if (d.date) setDate(d.date)
+        if (d.customerId) setCustomerId(d.customerId)
+        if (d.mode === 'Cash' || d.mode === 'Bank') setMode(d.mode)
+        if (Number(d.amount) > 0) setAmount(Number(d.amount))
+        if (d.note) setNote(d.note)
+      }
+    } catch {
+      // Corrupt draft — ignore and start fresh.
+    } finally {
+      draftHydratedRef.current = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!draftHydratedRef.current) return
+    try {
+      if (!customerId && !(amount > 0)) {
+        window.localStorage.removeItem(PAYMENT_DRAFT_STORAGE_KEY)
+        return
+      }
+      window.localStorage.setItem(PAYMENT_DRAFT_STORAGE_KEY, JSON.stringify({ date, customerId, mode, amount, note }))
+    } catch {
+      // Storage full/blocked — drafting still works in-memory.
+    }
+  }, [date, customerId, mode, amount, note])
 
   const customersQuery = useQuery({
     queryKey: ['payment-customers'],
@@ -183,6 +218,11 @@ function NewPaymentPage() {
       })
       setAmount(0)
       setNote('')
+      try {
+        window.localStorage.removeItem(PAYMENT_DRAFT_STORAGE_KEY)
+      } catch {
+        // Ignore storage failures.
+      }
       await invalidateAfterPaymentWrite(queryClient, customerId)
       const refreshed = await ledgerQuery.refetch()
       const visibleAfterRefresh = refreshed.data?.payments?.some((payment) => payment.id === savedPayment.id) ?? false

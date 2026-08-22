@@ -58,6 +58,7 @@ type BillItemRow = {
   bagWeight: number
 }
 type GstMode = 'none' | 'percent18' | 'manual'
+const BILL_DRAFT_STORAGE_KEY = 'kapil-new-bill-draft-v2'
 type CreditAdjustment = { id: string; date: string; amount: number }
 type QuickPaymentRow = { id: string; date: string; amount: number; mode: 'Cash' | 'Bank'; note: string }
 type AutoBalanceContext = { previousBalanceDate: string; previousBalanceAmount: number; credits: CreditAdjustment[] }
@@ -188,7 +189,82 @@ function NewBillPage() {
   const manualBookRef = useRef(false)
   const manualBillNoRef = useRef(false)
   const mktManuallyEditedRef = useRef(false)
+  const draftHydratedRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
+
+  // Restore an in-progress draft left over from navigating away (or a refresh).
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(BILL_DRAFT_STORAGE_KEY)
+      if (raw) {
+        const d = JSON.parse(raw) as Partial<{
+          date: string
+          customerId: string
+          bookNo: number
+          billNo: number
+          mktRate: number
+          transport: number
+          gstMode: GstMode
+          manualGstAmount: number
+          rows: BillItemRow[]
+          quickPayments: QuickPaymentRow[]
+          lrInput: string
+          lrList: string[]
+        }>
+        if (d.date) setDate(d.date)
+        if (d.customerId) setCustomerId(d.customerId)
+        if (Number(d.bookNo) > 0) {
+          setBookNo(Number(d.bookNo))
+          manualBookRef.current = true
+        }
+        if (Number(d.billNo) > 0) {
+          setBillNo(Number(d.billNo))
+          manualBillNoRef.current = true
+          billNoInitializedRef.current = true
+        }
+        if (Number(d.mktRate) > 0) {
+          setMktRate(Number(d.mktRate))
+          mktManuallyEditedRef.current = true
+        }
+        if (Number(d.transport) > 0) setTransport(Number(d.transport))
+        if (d.gstMode) setGstMode(d.gstMode)
+        if (Number(d.manualGstAmount) > 0) setManualGstAmount(Number(d.manualGstAmount))
+        if (Array.isArray(d.rows) && d.rows.some((row) => row?.itemName)) setRows(d.rows)
+        if (Array.isArray(d.quickPayments) && d.quickPayments.length > 0) setQuickPayments(d.quickPayments)
+        if (d.lrInput) setLrInput(d.lrInput)
+        if (Array.isArray(d.lrList) && d.lrList.length > 0) setLrList(d.lrList)
+      }
+    } catch {
+      // Corrupt draft — ignore and start fresh.
+    } finally {
+      draftHydratedRef.current = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount, before the autosave effect is armed
+  }, [])
+
+  // Autosave the working draft so leaving the page never loses entered data.
+  useEffect(() => {
+    if (!draftHydratedRef.current) return
+    const isEmpty =
+      !customerId &&
+      rows.every((row) => !row.itemName && !(row.qty > 0)) &&
+      quickPayments.length === 0 &&
+      !(transport > 0) &&
+      gstMode === 'none' &&
+      lrList.length === 0
+    try {
+      if (isEmpty) {
+        window.localStorage.removeItem(BILL_DRAFT_STORAGE_KEY)
+        return
+      }
+      window.localStorage.setItem(
+        BILL_DRAFT_STORAGE_KEY,
+        JSON.stringify({ date, customerId, bookNo, billNo, mktRate, transport, gstMode, manualGstAmount, rows, quickPayments, lrInput, lrList }),
+      )
+    } catch {
+      // Storage full/blocked — drafting still works in-memory.
+    }
+  }, [date, customerId, bookNo, billNo, mktRate, transport, gstMode, manualGstAmount, rows, quickPayments, lrInput, lrList])
 
   const customersQuery = useQuery({
     queryKey: ['customers-options'],
@@ -516,6 +592,11 @@ function NewBillPage() {
     setLrList([])
     manualBookRef.current = false
     manualBillNoRef.current = false
+    try {
+      window.localStorage.removeItem(BILL_DRAFT_STORAGE_KEY)
+    } catch {
+      // Ignore storage failures.
+    }
     void getNextBillNoForBook(bookNo)
       .then((next) => setBillNo(next ?? getBookRange(bookNo).firstBillNo))
       .catch(() => setBillNo((prev) => prev + 1))
