@@ -14,6 +14,7 @@ import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { compareBusinessDateThenCreatedDesc } from '@/domain/records'
 import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 import { formatFullDate } from '@/lib/date'
+import { formatCustomerTypeLabel } from '@/lib/customer-display'
 import { buildPaymentPreview } from '@/domain/payment-ledger'
 import { getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
@@ -397,7 +398,11 @@ function NewPaymentPage() {
             </Field>
             <Field label="Customer">
               <SearchableCombobox
-                options={customersQuery.data ?? []}
+                options={(customersQuery.data ?? []).map((customer) => ({
+                  id: customer.id,
+                  name: customer.name,
+                  suffix: formatCustomerTypeLabel(customer.custType),
+                }))}
                 value={customerId}
                 onChange={(nextId) => {
                   setCustomerId(nextId)
@@ -568,7 +573,7 @@ function NewPaymentPage() {
                   return (
                     <tr key={`${line.dueRef}-${line.dueDate}`} className="border-t border-slate-100 align-top">
                       <td className="px-3 py-2 text-sm font-medium text-slate-800">{line.dueRef}</td>
-                      <td className="px-3 py-2 text-sm text-slate-600">{line.dueDate}</td>
+                      <td className="px-3 py-2 text-sm text-slate-600">{formatFullDate(line.dueDate)}</td>
                       <td className="max-w-[420px] px-3 py-2">
                         <p className="text-xs text-slate-700">{line.compactDetails}</p>
                         <div className="mt-2 h-1.5 rounded-full bg-slate-100">

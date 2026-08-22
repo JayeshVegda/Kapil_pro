@@ -8,7 +8,7 @@ import { DateInput } from '@/components/ui/date-input'
 import { createCustomer, loadCustomersWithLedgerContext, toggleCustomerActive, updateCustomer } from '@/data/customers'
 import type { CustomerLedgerSummary } from '@/domain/customers'
 import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
-import { formatCustomerDisplayName } from '@/lib/customer-display'
+import { formatCustomerDisplayName, formatCustomerTypeLabel } from '@/lib/customer-display'
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 
@@ -29,6 +29,7 @@ const customerSchema = z.object({
   address: z.string().optional(),
   creditLimit: z.number().optional(),
   note: z.string().optional(),
+  custType: z.string().optional(),
 })
 
 type CustomerFormState = {
@@ -43,6 +44,7 @@ type CustomerFormState = {
   address: string
   creditLimit: number
   note: string
+  custType: string
 }
 
 const defaultCustomerFormState = (): CustomerFormState => ({
@@ -57,9 +59,11 @@ const defaultCustomerFormState = (): CustomerFormState => ({
   address: '',
   creditLimit: 0,
   note: '',
+  custType: '',
 })
 
 type BalanceFilter = 'all' | 'due' | 'advance' | 'inactive'
+type TypeFilter = 'all' | 'unset' | 'gas' | 'electronic' | 'both'
 type SortKey = 'name' | 'outstanding' | 'billed' | 'activity'
 
 const FILTER_LABEL: Record<BalanceFilter, string> = {
@@ -74,6 +78,7 @@ function CustomersPage() {
   const [statusText, setStatusText] = useState('')
   const [query, setQuery] = useState('')
   const [balanceFilter, setBalanceFilter] = useState<BalanceFilter>('all')
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const [sortKey, setSortKey] = useState<SortKey>('outstanding')
   const [sortDesc, setSortDesc] = useState(true)
   const [dialogState, setDialogState] = useState<CustomerFormState | null>(null)
@@ -106,6 +111,9 @@ function CustomersPage() {
     if (balanceFilter === 'due') rows = rows.filter((row) => row.dueAmount > 0)
     else if (balanceFilter === 'advance') rows = rows.filter((row) => row.advanceAmount > 0)
     else if (balanceFilter === 'inactive') rows = rows.filter((row) => !row.customer.active)
+    if (typeFilter !== 'all') {
+      rows = rows.filter((row) => (row.customer.custType ?? '') === (typeFilter === 'unset' ? '' : typeFilter))
+    }
 
     const direction = sortDesc ? -1 : 1
     const lastActivity = (row: CustomerLedgerSummary) =>
@@ -118,7 +126,7 @@ function CustomersPage() {
       if (sortKey === 'activity') return direction * lastActivity(a).localeCompare(lastActivity(b))
       return direction * (a.netBalance - b.netBalance)
     })
-  }, [allRows, balanceFilter, query, sortDesc, sortKey])
+  }, [allRows, balanceFilter, typeFilter, query, sortDesc, sortKey])
 
   const createOrUpdateMutation = useMutation({
     mutationFn: async (formState: CustomerFormState) => {
@@ -141,6 +149,7 @@ function CustomersPage() {
         address: parsed.data.address ?? '',
         creditLimit: parsed.data.creditLimit ?? 0,
         note: parsed.data.note ?? '',
+        custType: parsed.data.custType ?? '',
       }
       if (formState.id) await updateCustomer(formState.id, payload)
       else await createCustomer(payload)
@@ -183,6 +192,7 @@ function CustomersPage() {
       address: row.customer.address ?? '',
       creditLimit: row.customer.creditLimit ?? 0,
       note: row.customer.note ?? '',
+      custType: row.customer.custType ?? '',
     })
   }
 
@@ -239,6 +249,18 @@ function CustomersPage() {
               </button>
             ))}
           </div>
+          <select
+            aria-label="Filter by customer type"
+            className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            value={typeFilter}
+            onChange={(event) => setTypeFilter(event.target.value as TypeFilter)}
+          >
+            <option value="all">All types</option>
+            <option value="unset">Not set</option>
+            <option value="gas">Gas Parts</option>
+            <option value="electronic">Electronic Parts</option>
+            <option value="both">Both</option>
+          </select>
           {statusText && <p className="text-xs text-slate-500" role="status" aria-live="polite">{statusText}</p>}
         </div>
       </section>
@@ -287,13 +309,20 @@ function CustomersPage() {
                   return (
                     <tr key={row.customer.id} className={`transition hover:bg-slate-50/60 ${row.customer.active ? '' : 'opacity-60'}`}>
                       <td className="px-3 py-2.5">
-                        <Link
-                          to="/ledger"
-                          search={{ customerId: row.customer.id, focus: '' }}
-                          className="font-medium text-blue-700 hover:text-blue-800 hover:underline"
-                        >
-                          {formatCustomerDisplayName(row.customer.companyName, row.customer.name)}
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <Link
+                            to="/ledger"
+                            search={{ customerId: row.customer.id, focus: '' }}
+                            className="font-medium text-blue-700 hover:text-blue-800 hover:underline"
+                          >
+                            {formatCustomerDisplayName(row.customer.companyName, row.customer.name)}
+                          </Link>
+                          {row.customer.custType && (
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">
+                              {formatCustomerTypeLabel(row.customer.custType)}
+                            </span>
+                          )}
+                        </div>
                         <p className="mt-0.5 text-xs text-slate-500">
                           {row.customer.name}
                           {!row.customer.active && <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">Inactive</span>}
@@ -442,6 +471,14 @@ function CustomerDialog({
               <select className={inputClass} value={formState.active ? 'yes' : 'no'} onChange={(event) => onChange({ ...formState, active: event.target.value === 'yes' })}>
                 <option value="yes">Active</option>
                 <option value="no">Inactive</option>
+              </select>
+            </Field>
+            <Field label="Type">
+              <select className={inputClass} value={formState.custType} onChange={(event) => onChange({ ...formState, custType: event.target.value })}>
+                <option value="">Not set</option>
+                <option value="gas">Gas Parts</option>
+                <option value="electronic">Electronic Parts</option>
+                <option value="both">Both</option>
               </select>
             </Field>
             <Field label="GSTIN (optional)">

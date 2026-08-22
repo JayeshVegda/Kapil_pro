@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Activity, ArrowUpRight, ArrowDownRight, Coins, Flame, TrendingUp } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { loadCastingSessions, loadMonthlyAverageMarketRate } from '@/data/casting'
-import { getLocalIsoDate } from '@/lib/date'
+import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/casting/')({
@@ -493,7 +493,7 @@ function SignalCard({
         {session ? `₹${session.costPerKg.toFixed(2)}` : '—'}
       </p>
       <p className="mt-0.5 text-xs font-medium text-slate-600">
-        {session ? `${session.date} · ${formatMass(session.totalWireOut)} output` : 'No session data yet'}
+        {session ? `${formatFullDate(session.date)} · ${formatMass(session.totalWireOut)} output` : 'No session data yet'}
       </p>
     </div>
   )

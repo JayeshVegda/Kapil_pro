@@ -13,6 +13,7 @@ export type CustomerRecord = {
   address?: string
   creditLimit?: number
   note?: string
+  custType?: string
 }
 
 export type BillRecord = {

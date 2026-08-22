@@ -10,6 +10,8 @@ import { PaymentAmountInput } from '@/components/ui/payment-amount-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
 import { assertBillNumberAvailable, getCustomerBookSelection, getNextBillNoForBook, saveBillWithItems } from '@/data/bills'
+import { createCustomer } from '@/data/customers'
+import { createItem, suggestItemGroup } from '@/data/items'
 import { bookNoForBillNo, getBookRange, isBillNoInBook } from '@/domain/bill-books'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase, calculateBillTotals } from '@/domain/billing-calculations'
@@ -28,7 +30,7 @@ import { dedupeBillPreviewCredits, partitionPaymentsForNextBill } from '@/domain
 import { loadSavedMarketRateForDate, useMarketRate } from '@/domain/market-rate'
 import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
-import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
+import { formatCompanyName, formatCustomerDisplayName, formatCustomerTypeLabel } from '@/lib/customer-display'
 import {
   BILL_PREVIEW_CARD_CLASS,
   BILL_PRINT_DOCUMENT_TITLE,
@@ -42,7 +44,7 @@ export const Route = createFileRoute('/new-bill')({
   component: NewBillPage,
 })
 
-type CustomerOption = { id: string; name: string; companyName: string; customerName: string }
+type CustomerOption = { id: string; name: string; companyName: string; customerName: string; custType: string }
 type ItemOption = { id: string; name: string; defaultRate: number; type: string; unit: string; bagWeight: number }
 type BillRateMode = 'automatic' | 'explicit_default' | 'explicit_final'
 type BillItemRow = {
@@ -179,6 +181,10 @@ function NewBillPage() {
   const [previewPrintProps, setPreviewPrintProps] = useState<BillPrintLayoutProps | null>(null)
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false)
   const [marketPillOpen, setMarketPillOpen] = useState(false)
+  const [isQuickCustomerOpen, setIsQuickCustomerOpen] = useState(false)
+  const [quickCustomer, setQuickCustomer] = useState({ name: '', companyName: '', custType: '' })
+  const [isQuickItemOpen, setIsQuickItemOpen] = useState(false)
+  const [quickItem, setQuickItem] = useState({ name: '', type: '', group: '', groupEdited: false, defaultRate: 0 })
   const firstItemRef = useRef<HTMLSelectElement | null>(null)
   const [quickPayments, setQuickPayments] = useState<QuickPaymentRow[]>([])
   const [quickCommandInput, setQuickCommandInput] = useState('')
@@ -278,6 +284,7 @@ function NewBillPage() {
           name: formatCustomerDisplayName(companyName, customerName),
           companyName,
           customerName,
+          custType: String(r.cust_type ?? ''),
         }
       })
     },
@@ -631,6 +638,18 @@ function NewBillPage() {
     setRows((prev) => [...prev, newBillItemRow()])
   }
 
+  function applyCreatedItemToEmptyRow(item: ItemOption) {
+    setRows((prev) => {
+      const emptyIndex = prev.findIndex((row) => !row.itemName)
+      if (emptyIndex === -1) return [...prev, { ...newBillItemRow(), ...getSuggestedRowPatch(item) }]
+      return prev.map((row, i) => (i === emptyIndex ? { ...row, ...getSuggestedRowPatch(item) } : row))
+    })
+  }
+
+  function updateQuickItemName(name: string) {
+    setQuickItem((prev) => ({ ...prev, name, group: prev.groupEdited ? prev.group : suggestItemGroup(name) }))
+  }
+
   function removeItemRow(index: number) {
     setRows((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)))
   }
@@ -674,6 +693,66 @@ function NewBillPage() {
       bagWeight: item.bagWeight,
     }
   }, [getAutoRate, mktRate, gstMode])
+
+  const quickCustomerMutation = useMutation({
+    mutationFn: async () => {
+      const name = quickCustomer.name.trim()
+      if (!name) throw new Error('Customer name is required')
+      return createCustomer({
+        companyName: quickCustomer.companyName.trim() || name,
+        name,
+        active: true,
+        openingBalance: 0,
+        custType: quickCustomer.custType,
+      })
+    },
+    onSuccess: async (newId) => {
+      setIsQuickCustomerOpen(false)
+      setQuickCustomer({ name: '', companyName: '', custType: '' })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['customers-options'] }),
+        queryClient.invalidateQueries({ queryKey: ['payment-customers'] }),
+        queryClient.invalidateQueries({ queryKey: ['customers-ledger'] }),
+      ])
+      setCustomerId(newId)
+      setStatusText('Customer added.')
+    },
+    onError: (error) => setStatusText(toUserMessage(error)),
+  })
+
+  const quickItemMutation = useMutation({
+    mutationFn: async () => {
+      const name = quickItem.name.trim()
+      if (!name) throw new Error('Item name is required')
+      if (!quickItem.type) throw new Error('Item type is required')
+      return createItem({
+        name,
+        defaultRate: quickItem.defaultRate,
+        type: quickItem.type,
+        unit: quickItem.type === 'gas' ? 'kg' : 'piece',
+        bagWeight: quickItem.type === 'gas' ? 50 : 0,
+        group: quickItem.group.trim() || suggestItemGroup(name),
+      })
+    },
+    onSuccess: async (newId) => {
+      const name = quickItem.name.trim()
+      const type = quickItem.type
+      const defaultRate = quickItem.defaultRate
+      setIsQuickItemOpen(false)
+      setQuickItem({ name: '', type: '', group: '', groupEdited: false, defaultRate: 0 })
+      await queryClient.invalidateQueries({ queryKey: ['items-options'] })
+      applyCreatedItemToEmptyRow({
+        id: newId,
+        name,
+        defaultRate,
+        type,
+        unit: type === 'gas' ? 'kg' : 'piece',
+        bagWeight: type === 'gas' ? 50 : 0,
+      })
+      setStatusText('Item added.')
+    },
+    onError: (error) => setStatusText(toUserMessage(error)),
+  })
 
   function updateGstMode(nextMode: GstMode) {
     setGstMode(nextMode)
@@ -1074,26 +1153,41 @@ function NewBillPage() {
             <DateInput className={inputClass} value={date} onChange={setDate} />
           </Field>
           <Field label="Customer">
-            <SearchableCombobox
-              options={customersQuery.data ?? []}
-              value={customerId}
-              onChange={(nextId) => {
-                // Preserve a book/bill the operator entered before choosing the customer.
-                // The form displays these fields first, and clearing the flags here allowed
-                // the customer's automatic fallback book (usually 69) to overwrite them.
-                if (!manualBookRef.current) manualBillNoRef.current = false
-                setCustomerId(nextId)
-                setRows([newBillItemRow()])
-                setStatusText('')
-              }}
-              inputClassName={inputClass}
-              placeholder={customersQuery.isLoading ? 'Loading customers...' : 'Search customer...'}
-              disabled={customersQuery.isLoading || customersQuery.isError}
-              emptyText="No matching customer found."
-              maxResults={25}
-              autoFocus
-              onSelectionComplete={() => firstItemRef.current?.focus()}
-            />
+            <div className="flex items-center gap-1.5">
+              <SearchableCombobox
+                options={(customersQuery.data ?? []).map((customer) => ({
+                  id: customer.id,
+                  name: customer.name,
+                  suffix: formatCustomerTypeLabel(customer.custType),
+                }))}
+                value={customerId}
+                onChange={(nextId) => {
+                  // Preserve a book/bill the operator entered before choosing the customer.
+                  // The form displays these fields first, and clearing the flags here allowed
+                  // the customer's automatic fallback book (usually 69) to overwrite them.
+                  if (!manualBookRef.current) manualBillNoRef.current = false
+                  setCustomerId(nextId)
+                  setRows([newBillItemRow()])
+                  setStatusText('')
+                }}
+                inputClassName={inputClass}
+                placeholder={customersQuery.isLoading ? 'Loading customers...' : 'Search customer...'}
+                disabled={customersQuery.isLoading || customersQuery.isError}
+                emptyText="No matching customer found."
+                maxResults={25}
+                autoFocus
+                onSelectionComplete={() => firstItemRef.current?.focus()}
+              />
+              <button
+                type="button"
+                aria-label="Add new customer"
+                title="Add new customer"
+                className="inline-grid h-10 w-8 shrink-0 place-items-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                onClick={() => setIsQuickCustomerOpen(true)}
+              >
+                <Plus size={14} />
+              </button>
+            </div>
           </Field>
           <Field label="MKT Rate">
             <input className={inputClass} type="number" value={mktRate} onChange={(e) => { mktManuallyEditedRef.current = true; setMktRate(parseNonNegativeNumber(e.target.value)) }} />
@@ -1308,9 +1402,20 @@ function NewBillPage() {
           <h3 className="text-sm font-semibold text-slate-900">
             Items{validRows.length > 0 && <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">{validRows.length}</span>}
           </h3>
-          <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700" onClick={addItemRow}>
-            <Plus size={14} /> Add Row
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              aria-label="Add new item"
+              title="Add new item"
+              className="inline-grid h-8 w-8 place-items-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+              onClick={() => setIsQuickItemOpen(true)}
+            >
+              <Plus size={14} />
+            </button>
+            <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm text-slate-700" onClick={addItemRow}>
+              <Plus size={14} /> Add Row
+            </button>
+          </div>
         </div>
         <div className="overflow-x-auto no-scrollbar">
           <table className="w-full min-w-[900px] table-fixed border-separate border-spacing-x-2 border-spacing-y-0">
@@ -1554,6 +1659,132 @@ function NewBillPage() {
                 {saveMutation.isPending ? 'Saving...' : 'Confirm & Save'}
               </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {isQuickCustomerOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h3 className="text-base font-semibold text-slate-900">Add Customer</h3>
+              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickCustomerOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-3 px-4 py-4 sm:grid-cols-2">
+              <Field label="Customer Name *">
+                <input
+                  autoFocus
+                  className={inputClass}
+                  type="text"
+                  value={quickCustomer.name}
+                  onChange={(e) => setQuickCustomer((prev) => ({ ...prev, name: e.target.value }))}
+                />
+              </Field>
+              <Field label="Company Name">
+                <input
+                  className={inputClass}
+                  type="text"
+                  value={quickCustomer.companyName}
+                  onChange={(e) => setQuickCustomer((prev) => ({ ...prev, companyName: e.target.value }))}
+                />
+              </Field>
+              <Field label="Type">
+                <select
+                  className={inputClass}
+                  value={quickCustomer.custType}
+                  onChange={(e) => setQuickCustomer((prev) => ({ ...prev, custType: e.target.value }))}
+                >
+                  <option value="">Not set</option>
+                  <option value="gas">Gas Parts</option>
+                  <option value="electronic">Electronic Parts</option>
+                  <option value="both">Both</option>
+                </select>
+              </Field>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsQuickCustomerOpen(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void quickCustomerMutation.mutateAsync()}
+                disabled={!quickCustomer.name.trim() || quickCustomerMutation.isPending}
+              >
+                {quickCustomerMutation.isPending ? 'Saving...' : 'Save Customer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {isQuickItemOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h3 className="text-base font-semibold text-slate-900">Add Item</h3>
+              <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickItemOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-3 px-4 py-4 sm:grid-cols-2">
+              <Field label="Item Name *">
+                <input
+                  autoFocus
+                  className={inputClass}
+                  type="text"
+                  value={quickItem.name}
+                  onChange={(e) => updateQuickItemName(e.target.value)}
+                />
+              </Field>
+              <Field label="Type *">
+                <select
+                  className={inputClass}
+                  value={quickItem.type}
+                  onChange={(e) => setQuickItem((prev) => ({ ...prev, type: e.target.value }))}
+                >
+                  <option value="">Select type…</option>
+                  <option value="gas">Gas</option>
+                  <option value="electronic">Electronic</option>
+                </select>
+              </Field>
+              <Field label="Report Group">
+                <input
+                  className={inputClass}
+                  type="text"
+                  value={quickItem.group}
+                  onChange={(e) => setQuickItem((prev) => ({ ...prev, group: e.target.value, groupEdited: true }))}
+                  placeholder={suggestItemGroup(quickItem.name) || 'Auto from name'}
+                />
+              </Field>
+              <Field label="Default Rate">
+                <input
+                  className={inputClass}
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={quickItem.defaultRate || ''}
+                  onChange={(e) => setQuickItem((prev) => ({ ...prev, defaultRate: parseNonNegativeNumber(e.target.value) }))}
+                  placeholder="0"
+                />
+              </Field>
+            </div>
+            <p className="px-4 pb-3 text-xs text-slate-500">
+              Unit is set automatically ({quickItem.type === 'gas' ? 'kg' : 'piece'}{quickItem.type === 'gas' ? ', bag weight 50' : ''}).
+            </p>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setIsQuickItemOpen(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void quickItemMutation.mutateAsync()}
+                disabled={!quickItem.name.trim() || !quickItem.type || quickItemMutation.isPending}
+              >
+                {quickItemMutation.isPending ? 'Saving...' : 'Save Item'}
+              </button>
             </div>
           </div>
         </div>

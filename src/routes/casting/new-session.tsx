@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { toUserMessage } from '@/app/errors'
 import { loadLatestCastingDefaults, loadMarketRateForDate, saveCastingSession } from '@/data/casting'
 import { calculateCastingCost, type CastingBatchCostInput } from '@/domain/casting-calculations'
-import { getLocalIsoDate } from '@/lib/date'
+import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/casting/new-session')({
@@ -422,7 +422,7 @@ function CastingNewSessionPage() {
             <span className="block font-bold text-slate-400 uppercase tracking-wider text-[10px]">Vilaity Market Rate</span>
             <span className="font-mono text-sm font-semibold text-slate-900 mt-0.5 block">
               {marketRateQuery.data?.rate ? `₹${marketRateQuery.data.rate.toFixed(2)}` : '—'}
-              {marketRateQuery.data?.rateDate && <span className="text-slate-400 font-normal"> ({marketRateQuery.data.rateDate.slice(0, 10)})</span>}
+              {marketRateQuery.data?.rateDate && <span className="text-slate-400 font-normal"> ({formatFullDate(marketRateQuery.data.rateDate)})</span>}
             </span>
           </div>
           <div className="text-xs">

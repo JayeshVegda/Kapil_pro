@@ -4,6 +4,7 @@ import { filterRankedNameMatches } from '@/lib/search'
 export type SearchableComboboxOption = {
   id: string
   name: string
+  suffix?: string
 }
 
 type Props = {
@@ -160,7 +161,12 @@ export function SearchableCombobox({
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => selectOption(option.id)}
             >
-              {option.name}
+              <span className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate">{option.name}</span>
+                {option.suffix && (
+                  <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">{option.suffix}</span>
+                )}
+              </span>
             </button>
           ))}
         </div>

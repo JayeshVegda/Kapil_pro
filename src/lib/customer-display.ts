@@ -15,3 +15,13 @@ export function formatCustomerDisplayName(companyName: unknown, customerName: un
   if (company.toLowerCase() === customer.toLowerCase()) return company
   return `${company} (${customer})`
 }
+
+const CUSTOMER_TYPE_LABEL: Record<string, string> = {
+  gas: 'Gas',
+  electronic: 'Electronic',
+  both: 'Both',
+}
+
+export function formatCustomerTypeLabel(custType: unknown) {
+  return CUSTOMER_TYPE_LABEL[clean(custType)] ?? ''
+}
