@@ -51,7 +51,8 @@ docs/**/*.xlsm
 *.sln
 *.sw?
 
-# Project data
-data/
+# Project data (PocketBase runtime dirs — NOT the src/data source folder)
+/runtime/data/
+/pb_data/data/
 !data/types.d.ts
 Claude_*.json
