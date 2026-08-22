@@ -4,6 +4,8 @@ import { Edit3, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { AlertDialog } from 'radix-ui'
+import { toUserMessage } from '@/app/errors'
+import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
 import {
   deleteBillWithItems,
   deletePayment,
@@ -13,7 +15,6 @@ import {
   updateBillWithItems,
   updatePayment,
 } from '@/data/transactions'
-import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
 import { cleanupExpiredTrash, type BillItemSnapshot, type BillSnapshot, type PaymentSnapshot, buildTransactionRows, matchesTransactionSearch, type TransactionRow, type TrashEntry } from '@/domain/transactions'
 import { formatDateTime, toDateTimeLocalInputValue, toStoredDateTimeValue } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
@@ -93,6 +94,7 @@ function TransactionsPage() {
   const [kindFilter, setKindFilter] = useState<'all' | 'bill' | 'payment'>('all')
   const [viewMode, setViewMode] = useState<'active' | 'deleted'>('active')
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>(() => readTrashEntries())
+  const [statusText, setStatusText] = useState('')
   const [editing, setEditing] = useState<TransactionRow | null>(null)
   const [pendingDelete, setPendingDelete] = useState<TransactionRow | null>(null)
   const [billDraft, setBillDraft] = useState<Omit<BillSnapshot, 'id'> | null>(null)
@@ -157,8 +159,11 @@ function TransactionsPage() {
       writeTrashEntries(next)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
+        invalidateAfterPaymentWrite(queryClient, row.customerId),
       ])
+    },
+    onError: (error) => {
+      setStatusText(`Delete failed: ${toUserMessage(error)}`)
     },
   })
 
@@ -174,8 +179,11 @@ function TransactionsPage() {
       writeTrashEntries(next)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
+        invalidateAfterPaymentWrite(queryClient, entry.snapshot.customerId),
       ])
+    },
+    onError: (error) => {
+      setStatusText(`Restore failed: ${toUserMessage(error)}`)
     },
   })
 
@@ -194,13 +202,17 @@ function TransactionsPage() {
       }
     },
     onSuccess: async () => {
+      const affectedCustomerId = editing?.customerId ?? ''
       setEditing(null)
       setBillDraft(null)
       setPaymentDraft(null)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
+        affectedCustomerId ? invalidateAfterPaymentWrite(queryClient, affectedCustomerId) : Promise.resolve(),
       ])
+    },
+    onError: (error) => {
+      setStatusText(`Update failed: ${toUserMessage(error)}`)
     },
   })
 
@@ -235,6 +247,11 @@ function TransactionsPage() {
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+      {statusText && (
+        <p className="text-xs text-slate-500" role="status" aria-live="polite">
+          {statusText}
+        </p>
+      )}
       <section className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
           <div className="relative min-w-[260px] flex-1">

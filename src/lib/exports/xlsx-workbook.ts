@@ -76,6 +76,7 @@ export function xmlEscape(value: string) {
     .replace(/"/g, '&quot;')
     // Control characters are illegal in XML 1.0 and would corrupt the file.
     // Tab, newline and carriage return are the only ones allowed through.
+    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
 }
 

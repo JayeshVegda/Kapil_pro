@@ -78,12 +78,14 @@ function parseExpression(val: string | number): number {
   const clean = String(val ?? '').replace(/\s+/g, '')
   if (!clean) return 0
   try {
-    if (/^[0-9.+\-*\/()]+$/.test(clean)) {
+    if (/^[0-9.+\-*/()]+$/.test(clean)) {
       const fn = new Function(`return (${clean})`)
       const result = Number(fn())
       return Number.isFinite(result) && result >= 0 ? result : 0
     }
-  } catch {}
+  } catch {
+    // Fall through to plain number parsing below.
+  }
   const parsed = Number(clean)
   return Number.isFinite(parsed) ? parsed : 0
 }

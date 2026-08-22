@@ -160,7 +160,7 @@ function findLastRateForItem(rateMap: Record<string, LastCustomerItemRate>, item
 function NewBillPage() {
   const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
-  const [bookNo, setBookNo] = useState<number>(51)
+  const [bookNo, setBookNo] = useState<number>(0)
   const [billNo, setBillNo] = useState<number>(1)
   const [date, setDate] = useState(today)
   const [customerId, setCustomerId] = useState('')
@@ -187,6 +187,7 @@ function NewBillPage() {
   const billNoInitializedRef = useRef(false)
   const manualBookRef = useRef(false)
   const manualBillNoRef = useRef(false)
+  const mktManuallyEditedRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
 
   const customersQuery = useQuery({
@@ -225,6 +226,21 @@ function NewBillPage() {
     queryFn: () => getNextBillNoForBook(bookNo),
     enabled: bookNo > 0,
   })
+  // Default the book to whatever pad the most recent bill was written in,
+  // until the operator picks a customer (which switches to that party's book) or types one manually.
+  const latestBookQuery = useQuery({
+    queryKey: ['latest-bill-book'],
+    queryFn: async (): Promise<number> => {
+      const latest = await pb.collection('bills').getList(1, 1, { fields: 'id,book_no', sort: '-created,-id' })
+      return Number(latest.items[0]?.book_no ?? 0)
+    },
+    staleTime: 30_000,
+  })
+  useEffect(() => {
+    if (manualBookRef.current || customerId) return
+    const latest = latestBookQuery.data ?? 0
+    if (latest > 0 && bookNo === 0) setBookNo(latest)
+  }, [latestBookQuery.data, customerId, bookNo])
   const customerBookQuery = useQuery({
     queryKey: ['customer-book-selection', customerId],
     queryFn: () => getCustomerBookSelection(customerId),
@@ -490,6 +506,7 @@ function NewBillPage() {
     setDate(today)
     setCustomerId('')
     setMktRate(0)
+    mktManuallyEditedRef.current = false
     setTransport(0)
     setGstMode('none')
     setManualGstAmount(0)
@@ -693,6 +710,7 @@ function NewBillPage() {
     }
     setCustomerId(command.customer.id)
     setDate(command.date)
+    mktManuallyEditedRef.current = false
     setMktRate(commandMktRate)
     setTransport(command.transport)
     setGstMode(nextGstMode)
@@ -839,7 +857,7 @@ function NewBillPage() {
   }
 
   useEffect(() => {
-    if (marketRate.rate > 0) {
+    if (marketRate.rate > 0 && !mktManuallyEditedRef.current) {
       setMktRate(marketRate.rate)
     }
   }, [marketRate.rate])
@@ -997,7 +1015,7 @@ function NewBillPage() {
             />
           </Field>
           <Field label="MKT Rate">
-            <input className={inputClass} type="number" value={mktRate} onChange={(e) => setMktRate(parseNonNegativeNumber(e.target.value))} />
+            <input className={inputClass} type="number" value={mktRate} onChange={(e) => { mktManuallyEditedRef.current = true; setMktRate(parseNonNegativeNumber(e.target.value)) }} />
           </Field>
           <Field label="Transport (INR) (optional)">
             <input className={inputClass} type="number" value={transport} onChange={(e) => setTransport(parseNonNegativeNumber(e.target.value))} />

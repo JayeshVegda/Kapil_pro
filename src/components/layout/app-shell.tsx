@@ -300,6 +300,9 @@ export function AppShell() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      // Never steal focus from an open modal dialog (e.g. the transaction editor):
+      // the palette would render underneath and the app would appear frozen.
+      if (document.querySelector('[role="dialog"]')) return
       if (event.ctrlKey && event.key === '/') {
         event.preventDefault()
         setQuickSearchOpen(true)
@@ -714,7 +717,7 @@ export function AppShell() {
       </main>
       {!mobileNavOpen && !quickSearchOpen && !commandOpen && <MobileBottomNav onMore={() => setMobileNavOpen(true)} />}
       {commandOpen && (
-        <div className="fixed inset-0 z-[90] flex items-start justify-center bg-slate-950/45 px-0 pt-0 backdrop-blur-[2px] sm:px-3 sm:pt-[8vh]" onMouseDown={() => setCommandOpen(false)}>
+        <div className="fixed inset-0 z-[110] flex items-start justify-center bg-slate-950/45 px-0 pt-0 backdrop-blur-[2px] sm:px-3 sm:pt-[8vh]" onMouseDown={() => setCommandOpen(false)}>
           <div className="flex h-dvh w-full max-w-6xl flex-col overflow-hidden rounded-none border border-slate-200 bg-white shadow-2xl sm:h-auto sm:max-h-[84dvh] sm:rounded-xl" onMouseDown={(event) => event.stopPropagation()}>
             <div className="border-b border-slate-100 p-3">
               <CommandVerificationPills
@@ -824,7 +827,7 @@ export function AppShell() {
         </div>
       )}
       {quickSearchOpen && (
-        <div className="fixed inset-0 z-[85] flex items-start justify-center bg-slate-950/45 px-0 pt-0 backdrop-blur-[2px] sm:px-3 sm:pt-20" onMouseDown={() => setQuickSearchOpen(false)}>
+        <div className="fixed inset-0 z-[105] flex items-start justify-center bg-slate-950/45 px-0 pt-0 backdrop-blur-[2px] sm:px-3 sm:pt-20" onMouseDown={() => setQuickSearchOpen(false)}>
           <div ref={quickSearchPaletteRef} className="flex h-dvh w-full max-w-6xl flex-col overflow-hidden rounded-none border border-slate-200 bg-white shadow-2xl sm:h-auto sm:max-h-[calc(100dvh-6rem)] sm:rounded-xl" onMouseDown={(event) => event.stopPropagation()}>
             <div className="border-b border-slate-100 p-3">
               <div className="relative">

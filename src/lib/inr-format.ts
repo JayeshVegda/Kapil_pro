@@ -72,7 +72,7 @@ type AmountShorthandResult = number
  *  - ₹ or thousands-separators make the value literal: ₹350 -> 350
  *  - Results above ₹1.5 crore are rejected (0) so typos fail loudly.
  */
-function parseAmountShorthand(raw: string, defaultUnit: 'k' | 'lakh'): AmountShorthandResult {
+function parseAmountShorthand(raw: string): AmountShorthandResult {
   const original = String(raw ?? '')
   const hasLiteralMarkers = /[₹,]/.test(original)
   const normalized = original
@@ -115,12 +115,12 @@ function parseAmountShorthand(raw: string, defaultUnit: 'k' | 'lakh'): AmountSho
  * Payment entry shorthand. See parseAmountShorthand for the full rule set.
  */
 export function parseIndianPaymentAmountInput(raw: string): number {
-  return parseAmountShorthand(raw, 'lakh')
+  return parseAmountShorthand(raw)
 }
 
 /**
  * Bill quick-payment shorthand. Same rule set as payment entry.
  */
 export function parseBillQuickPaymentAmountInput(raw: string): number {
-  return parseAmountShorthand(raw, 'k')
+  return parseAmountShorthand(raw)
 }

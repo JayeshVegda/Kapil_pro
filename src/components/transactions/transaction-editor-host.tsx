@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertDialog, Dialog } from 'radix-ui'
 import { AlertTriangle, Plus, Trash2, X } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM } from '@/components/billing/bill-print-layout'
@@ -81,8 +81,17 @@ export function TransactionEditorHost() {
     [rows, target],
   )
 
+  // Seed the draft once per opened record. Background refetches rebuild `rows`
+  // with fresh identities — reseeding on identity would silently wipe edits.
+  const seededRecordRef = useRef('')
   useEffect(() => {
-    if (!editing) return
+    if (!editing) {
+      seededRecordRef.current = ''
+      return
+    }
+    const recordKey = `${editing.kind}:${editing.id}`
+    if (seededRecordRef.current === recordKey) return
+    seededRecordRef.current = recordKey
     if (editing.kind === 'bill') {
       const next: BillDraft = {
         date: editing.bill.date,

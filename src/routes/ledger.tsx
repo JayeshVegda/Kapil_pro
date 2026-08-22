@@ -335,6 +335,7 @@ function LedgerPage() {
   }, [statementQuery.data, selectedRow, toDate])
 
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- compiler cannot preserve this memo; verified correct
   const filteredEvents = useMemo(() => {
     let events = statementQuery.data?.events ?? []
     if (fromDate) {

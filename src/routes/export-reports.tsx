@@ -64,14 +64,6 @@ const SECONDARY_EXPORTS: Array<{ id: Exclude<ReportKind, 'party'>; title: string
 const EXPORTS_PAGE_SECTIONS = ['party-statement', 'monthly-summary', 'sales-register', 'rate-analysis', 'outstanding', 'more-exports'] as const
 const PRIMARY_STATEMENT_ACTIONS = ['download-pdf', 'download-excel', 'download-csv', 'download-package'] as const
 
-async function loadPdfTools() {
-  const [{ jsPDF }, autoTableModule] = await Promise.all([
-    import('jspdf'),
-    import('jspdf-autotable'),
-  ])
-  return { jsPDF, autoTable: autoTableModule.default }
-}
-
 /** Yield to the browser event loop + GC between heavy canvas renders in ZIP loops. */
 function yieldToGC() {
   return new Promise<void>((resolve) => setTimeout(resolve, 30))
@@ -1324,24 +1316,6 @@ async function createBillDetailPdfBuffer(snapshot: BackupSnapshot, bill: PBRecor
   const props = buildBillPrintProps(snapshot, bill)
   const { createBillDetailPdf } = await import('@/lib/exports/report-pdf')
   return createBillDetailPdf(props)
-}
-
-function blobToDataUrl(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result ?? ''))
-    reader.onerror = () => reject(reader.error ?? new Error('Unable to read image.'))
-    reader.readAsDataURL(blob)
-  })
-}
-
-function imageDimensions(src: string) {
-  return new Promise<{ width: number; height: number }>((resolve, reject) => {
-    const image = new Image()
-    image.onload = () => resolve({ width: image.naturalWidth || image.width, height: image.naturalHeight || image.height })
-    image.onerror = () => reject(new Error('Unable to measure image.'))
-    image.src = src
-  })
 }
 
 async function createPartyWorkbook(packageData: PartyPackage) {

@@ -369,7 +369,7 @@ export function parsePaymentCommand(input: string, customers: CommandCustomer[],
   // Longest customer-name prefix wins, so parties whose names contain numbers
   // ("No 1 Traders") are never mistaken for an amount token.
   const resolved = resolveBestPrefix(customers, withoutNote, customerSearchText)
-  let customer = resolved.record
+  let customer: CommandCustomer | undefined = resolved.record ?? undefined
   let restTokens = tokens.slice(resolved.usedWords)
   if (!customer) {
     // Fallback to the classic "first number is the amount" split.

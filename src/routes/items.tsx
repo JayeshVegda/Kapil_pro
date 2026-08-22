@@ -1,10 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Edit3, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
-import { createItem, deleteItem, loadItemsWithUsage, updateItem } from '@/data/items'
+import { createItem, deleteItem, loadItemsWithUsage, suggestItemGroup, updateItem } from '@/data/items'
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 
@@ -17,9 +17,10 @@ const ITEMS_QUERY_KEY = ['items-master'] as const
 const itemSchema = z.object({
   name: z.string().trim().min(1, 'Item name is required'),
   defaultRate: z.number().nonnegative('Rate cannot be negative'),
-  type: z.enum(['', 'electronic', 'gas']),
+  type: z.enum(['electronic', 'gas'], { message: 'Item type is required' }),
   unit: z.enum(['', 'piece', 'kg']),
   bagWeight: z.number().nonnegative('Bag weight cannot be negative'),
+  group: z.string().trim(),
 }).refine((value) => !value.type || value.unit, {
   message: 'Unit is required',
   path: ['unit'],
@@ -31,9 +32,12 @@ const itemSchema = z.object({
 function ItemsPage() {
   const queryClient = useQueryClient()
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [defaultRateInput, setDefaultRateInput] = useState('0')
   const [type, setType] = useState('')
+  const [groupInput, setGroupInput] = useState('')
+  const groupManuallyEditedRef = useRef(false)
   const [unit, setUnit] = useState('')
   const [bagWeightInput, setBagWeightInput] = useState('50')
   const [statusText, setStatusText] = useState('')
@@ -48,9 +52,10 @@ function ItemsPage() {
       const parsed = itemSchema.safeParse({
         name,
         defaultRate: parseNonNegativeNumber(defaultRateInput),
-        type,
+        type: type as 'electronic' | 'gas' | '',
         unit,
         bagWeight: type === 'gas' ? parseNonNegativeNumber(bagWeightInput || '50') : 0,
+        group: groupInput,
       })
       if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid item')
       if (editingId) {
@@ -89,6 +94,8 @@ function ItemsPage() {
     setName('')
     setDefaultRateInput('0')
     setType('')
+    setGroupInput('')
+    groupManuallyEditedRef.current = false
     setUnit('')
     setBagWeightInput('50')
   }
@@ -98,6 +105,8 @@ function ItemsPage() {
     setName(item.name)
     setDefaultRateInput(String(item.defaultRate))
     setType(item.type)
+    setGroupInput(item.group || suggestItemGroup(item.name))
+    groupManuallyEditedRef.current = true
     setUnit(item.unit)
     setBagWeightInput(String(item.bagWeight || 50))
   }
@@ -125,22 +134,26 @@ function ItemsPage() {
             </button>
           )}
         </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_160px_170px_130px_160px_auto]">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_160px_170px_150px_130px_160px_auto]">
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-slate-600">Item Name *</span>
-            <input className={inputClass} value={name} onChange={(event) => setName(event.target.value)} />
+            <input className={inputClass} value={name} onChange={(event) => { setName(event.target.value); if (!groupManuallyEditedRef.current) setGroupInput(suggestItemGroup(event.target.value)) }} />
           </label>
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-slate-600">Default Rate</span>
             <input className={inputClass} type="number" value={defaultRateInput} onChange={(event) => setDefaultRateInput(event.target.value)} />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-600">Type</span>
+            <span className="text-xs font-medium text-slate-600">Type *</span>
             <select className={inputClass} value={type} onChange={(event) => updateType(event.target.value)}>
               <option value="">Select type</option>
               <option value="electronic">Electronic Part</option>
               <option value="gas">Gas Part</option>
             </select>
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-slate-600" title="Variants with the same group are totalled together in reports (e.g. Spindle 7.5GM + 8.5GM)">Report Group</span>
+            <input className={inputClass} value={groupInput} onChange={(event) => { groupManuallyEditedRef.current = true; setGroupInput(event.target.value) }} placeholder="Spindle" />
           </label>
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-slate-600">Unit</span>
@@ -179,6 +192,7 @@ function ItemsPage() {
               <thead>
                 <tr className="bg-slate-50">
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Item</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Group</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Default Rate</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Type</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Unit</th>
@@ -190,7 +204,7 @@ function ItemsPage() {
               <tbody>
                 {(itemsQuery.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500">
+                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-slate-500">
                       No items yet. Add your first item to speed up bill entry.
                     </td>
                   </tr>
@@ -198,6 +212,7 @@ function ItemsPage() {
                 {(itemsQuery.data ?? []).map((item, index) => (
                   <tr key={item.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                     <td className="px-3 py-3 text-sm font-medium text-slate-800">{item.name}</td>
+                    <td className="px-3 py-3 text-sm text-slate-600">{item.group || '-'}</td>
                     <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{formatInrInteger(item.defaultRate)}</td>
                     <td className="px-3 py-3 text-sm text-slate-700">{formatItemType(item.type)}</td>
                     <td className="px-3 py-3 text-sm text-slate-700">{item.unit || '-'}</td>
@@ -211,13 +226,25 @@ function ItemsPage() {
                         </button>
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
-                          onClick={() => void deleteMutation.mutateAsync(item.id)}
+                          className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-60 ${
+                            pendingDeleteId === item.id
+                              ? 'border-rose-600 bg-rose-600 text-white hover:bg-rose-700'
+                              : 'border-rose-300 bg-white text-rose-700 hover:bg-rose-50'
+                          }`}
+                          onClick={() => {
+                            if (pendingDeleteId === item.id) {
+                              setPendingDeleteId(null)
+                              void deleteMutation.mutateAsync(item.id)
+                              return
+                            }
+                            setPendingDeleteId(item.id)
+                            window.setTimeout(() => setPendingDeleteId((current) => (current === item.id ? null : current)), 4000)
+                          }}
                           disabled={deleteMutation.isPending || item.usageCount > 0}
                           title={item.usageCount > 0 ? 'Cannot delete item used in bills' : 'Delete item'}
                         >
                           <Trash2 size={12} />
-                          Delete
+                          {pendingDeleteId === item.id ? 'Confirm delete?' : 'Delete'}
                         </button>
                       </div>
                     </td>
