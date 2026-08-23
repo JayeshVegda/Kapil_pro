@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, ArrowDown, ChevronLeft, ChevronRight, CircleDollarSign, PackageCheck, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
+import { Activity, ChevronLeft, ChevronRight, CircleDollarSign, PackageCheck, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarDaySidebar, type CalendarDaySidebarData, type CalendarSidebarBill, type CalendarSidebarPayment } from '@/components/calendar/calendar-day-sidebar'
 import { CalendarMonthOverview } from '@/components/calendar/calendar-month-overview'
@@ -9,8 +9,9 @@ import type { PBRecord } from '@/data/dashboard'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { buildGasSalesReport, type GasSalesMetrics } from '@/domain/gas-sales-reporting'
 import { buildMonthlyItemComparisons, emptyMonthlyItemComparisons } from '@/domain/monthly-item-rollup'
-import { bestSalesDay, buildRateSeries, dayDotState, premiumTint, topMover } from '@/domain/calendar-visuals'
-import { RateTrendStrip } from '@/components/calendar/rate-trend-strip'
+import { bestSalesDay, dayDotState, premiumTint } from '@/domain/calendar-visuals'
+import type { GasSalesGroup } from '@/domain/gas-sales-reporting'
+import { GasSellingStrip } from '@/components/calendar/gas-selling-strip'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatInrInteger } from '@/lib/inr-format'
@@ -92,11 +93,6 @@ function mergeBillItemLines(rows: Array<{ itemName: string; qty: number; bags: n
   return [...merged.entries()].map(([itemName, qty]) => ({ itemName, qty, bags: bags.get(itemName) ?? 0 }))
 }
 
-function formatSignedMoney(value: number) {
-  if (value === 0) return 'No gap'
-  return `${value > 0 ? '+' : '-'}${formatInrInteger(Math.abs(value))}`
-}
-
 function compactNumber(value: number, suffix: string) {
   if (!(value > 0)) return ''
   return `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: value >= 10 ? 0 : 1 }).format(value)} ${suffix}`
@@ -154,14 +150,27 @@ function CalendarPage() {
   }, [monthKey, navigate, selectedDay])
 
   const aggregates = useMemo(() => buildCalendarAggregates(calendarQuery.data, monthKey, today), [calendarQuery.data, monthKey, today])
-  const rateTrendSeries = useMemo(() => buildRateSeries(aggregates.dailyGasByDate, aggregates.rateByDate, monthKey), [aggregates, monthKey])
-  const mover = useMemo(() => topMover(aggregates.itemComparisons), [aggregates])
   const bestDay = useMemo(() => bestSalesDay(aggregates.dailySales, monthKey), [aggregates, monthKey])
-  const contextRef = useRef<HTMLDivElement | null>(null)
   const gridWeeks = useMemo(() => {
     const [year, month] = monthKey.split('-').map(Number)
     return chunkWeeks(eachDayInclusive(startOfWeekSunday(new Date(year, month - 1, 1)), endOfWeekSaturday(new Date(year, month, 0))))
   }, [monthKey])
+
+  const monthBills = [...aggregates.dailyBillCount.values()].reduce((sum, value) => sum + value, 0)
+  const avgBillSize = monthBills > 0 ? aggregates.monthSales / monthBills : 0
+  const gas = aggregates.monthGas
+  const rateLines: Array<{ label: string; value: string }> = []
+  if (gas.nonGst) rateLines.push({ label: 'non-GST', value: formatRate(gas.nonGst.weightedSellingRate) })
+  if (gas.gst) rateLines.push({ label: 'GST incl.', value: formatRate(gas.gst.weightedSellingRateWithGst) })
+  const headlineRate = rateLines[0]?.value ?? formatRate(gas.weightedSellingRate)
+  const rateHelper = rateLines.length > 1
+    ? rateLines.map((line) => `${line.label} ${line.value}`).join(' · ')
+    : gas.premiumPerKg == null
+      ? 'Bill market comparison unavailable'
+      : `${formatPremium(gas.premiumPerKg)}/kg vs bill market`
+
+  const soldBagsDelta = Math.round(aggregates.monthGas.bags - aggregates.previousMonthGas.bags)
+  const soldBagsHelper = `${formatWhole(aggregates.monthGas.kg)} gas kg sold · ${soldBagsDelta >= 0 ? '+' : '-'}${formatWhole(Math.abs(soldBagsDelta))} vs last month`
 
   const topCards = [
     {
@@ -182,24 +191,24 @@ function CalendarPage() {
     },
     {
       label: 'Avg Selling Rate',
-      value: formatRate(aggregates.monthGas.weightedSellingRate),
-      helper: aggregates.monthGas.premiumPerKg == null ? 'Bill market comparison unavailable' : `${formatPremium(aggregates.monthGas.premiumPerKg)}/kg vs bill market`,
+      value: headlineRate,
+      helper: rateHelper,
       tone: 'text-blue-700',
       icon: TrendingUp,
       chip: 'bg-sky-50 text-sky-700',
     },
     {
-      label: 'Net Position',
-      value: formatInrInteger(aggregates.monthCollections - aggregates.monthSales),
-      helper: aggregates.monthSales > 0 ? `${Math.round((aggregates.monthCollections / aggregates.monthSales) * 100)}% collected · ${formatSignedMoney(aggregates.monthCollections - aggregates.monthSales)}` : 'No sales base',
-      tone: aggregates.monthCollections - aggregates.monthSales >= 0 ? 'text-emerald-700' : 'text-red-700',
+      label: 'Avg Bill Size',
+      value: monthBills > 0 ? formatInrInteger(Math.round(avgBillSize)) : '-',
+      helper: monthBills > 0 ? `${formatWhole(monthBills)} bills this month` : 'No bills yet',
+      tone: 'text-slate-950',
       icon: Activity,
-      chip: aggregates.monthCollections - aggregates.monthSales >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700',
+      chip: 'bg-violet-50 text-violet-700',
     },
     {
       label: 'Sold Bags',
       value: formatWhole(aggregates.monthGas.bags),
-      helper: `${formatWhole(aggregates.monthGas.kg)} gas kg sold`,
+      helper: soldBagsHelper,
       tone: 'text-amber-700',
       icon: PackageCheck,
       chip: 'bg-amber-50 text-amber-700',
@@ -221,9 +230,8 @@ function CalendarPage() {
 
   return (
     <div className="w-full px-3 pb-6 pt-3 sm:px-4 lg:px-6">
-      <section className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+      <section className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
         {topCards.map((card) => <TopKpiCard key={card.label} {...card} />)}
-        <TopMoverCard mover={mover} onJump={() => contextRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })} />
       </section>
 
       {calendarQuery.isLoading ? <section className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">Loading calendar...</section> : null}
@@ -232,7 +240,7 @@ function CalendarPage() {
       {!calendarQuery.isLoading && !calendarQuery.isError ? (
         <div className="grid gap-4 xl:grid-cols-[minmax(0,7.4fr)_minmax(340px,2.6fr)]">
           <section ref={calendarRef} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="flex flex-col gap-3 border-b border-slate-200 bg-white px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+            <div className="flex flex-col gap-3 border-b border-slate-200 bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-4">
               <div className="flex items-center gap-2">
                 <button type="button" aria-label="Previous month" className={navButtonClass} onClick={() => changeMonth(shiftMonth(monthKey, -1))}>
                   <ChevronLeft size={17} />
@@ -250,19 +258,9 @@ function CalendarPage() {
                 </button>
               </div>
             </div>
-            <RateTrendStrip series={rateTrendSeries} />
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-200 bg-slate-50/60 px-3 py-2 text-[10px] font-medium text-slate-500 sm:px-4">
-              <span className="font-semibold uppercase tracking-[0.06em] text-slate-400">Legend:</span>
-              <span><span className="font-bold text-slate-900">Sales</span> — billed ₹</span>
-              <span><span className="font-semibold text-amber-700">Mkt</span> — bill market ₹/kg</span>
-              <span><span className="font-bold text-emerald-700">Prem</span> — premium vs market (+green / −red)</span>
-              <span><span className="font-semibold text-emerald-700">Coll</span> — collections ₹</span>
-              <span>green wash — sold above market, red wash — below</span>
-              <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> collected ≥ billed</span>
-              <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> partial collection</span>
-            </div>
+            <GasSellingStrip items={aggregates.gasByItem} />
             <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
-              {WEEKDAYS.map((day) => <div key={day} className="py-2 text-center text-[11px] font-semibold tracking-[0.08em] text-slate-500">{day}</div>)}
+              {WEEKDAYS.map((day) => <div key={day} className="py-1.5 text-center text-[11px] font-semibold tracking-[0.08em] text-slate-500">{day}</div>)}
             </div>
             <div className="grid bg-slate-100" style={{ gap: 1 }}>
               {gridWeeks.map((week, weekIndex) => (
@@ -277,29 +275,35 @@ function CalendarPage() {
                     const soldBags = aggregates.dailySoldBags.get(iso) ?? 0
                     const rate = aggregates.rateByDate.get(iso)
                     const gas = aggregates.dailyGasByDate.get(iso)
-                    const displayedMarketRate = gas?.weightedMarketRate ?? rate ?? null
-                    const premium = gas?.premiumPerKg ?? null
+                    // Rates never blend across GST streams: show the dominant bucket of the day.
+                    const dayBuckets = [gas?.gst, gas?.nonGst].filter((basis): basis is NonNullable<typeof basis> => !!basis && basis.kg > 0)
+                    const dominant = dayBuckets.sort((a, b) => b.kg - a.kg)[0] ?? null
+                    const bucketTag = dayBuckets.length > 1 && dominant ? (dominant === gas?.gst ? ' (GST)' : ' (non-GST)') : ''
+                    const displayedMarketRate = dominant?.weightedMarketRate ?? gas?.weightedMarketRate ?? rate ?? null
+                    const premium = dominant?.premiumPerKg ?? gas?.premiumPerKg ?? null
                     const hasActivity = sales > 0 || collections > 0 || soldBags > 0 || !!rate || (gas?.kg ?? 0) > 0
                     const dotState = dayDotState(sales, collections)
                     const tint = inMonth && hasActivity ? premiumTint(premium) : ''
-                    const title = `${formatFullDate(iso)}\nSelling rate: ${formatRate(gas?.weightedSellingRate ?? null)}\nBill market: ${formatRate(displayedMarketRate)}\nPremium: ${formatPremium(premium)}/kg\nCollections: ${formatInrInteger(collections)}\nSales: ${formatInrInteger(sales)}\nGas: ${formatWhole(gas?.kg ?? 0)} kg`
+                    const bucketLine = (label: string, basis: NonNullable<typeof dominant>) =>
+                      `${label}: ${formatRate(basis.weightedSellingRate)} (incl. GST ${formatRate(basis.weightedSellingRateWithGst)}) · market ${formatRate(basis.weightedMarketRate)} · premium ${formatPremium(basis.premiumPerKg)}/kg`
+                    const title = `${formatFullDate(iso)}\n${dayBuckets.map((basis) => bucketLine(dayBuckets.length > 1 ? (basis === gas?.gst ? 'GST' : 'non-GST') : 'Selling rate', basis)).join('\n')}\nCollections: ${formatInrInteger(collections)}\nSales: ${formatInrInteger(sales)}\nGas: ${formatWhole(gas?.kg ?? 0)} kg`
                     return (
                       <button
                         key={iso}
                         type="button"
                         title={title}
                         onClick={() => setSelectedDay((current) => (current === iso ? null : iso))}
-                        className={`group min-h-[8rem] p-1.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 sm:p-2 ${
+                        className={`group min-h-[6.75rem] p-1.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 sm:p-2 ${
                           isSelected ? 'bg-blue-50 ring-2 ring-inset ring-blue-500' : hasActivity ? `${tint || 'bg-white'} hover:bg-blue-50/60` : 'bg-slate-50/80 hover:bg-white'
                         } ${!inMonth ? 'opacity-45' : ''}`}
                       >
                         <div className="flex items-center justify-between">
-                          <span className={`inline-flex h-7 min-w-7 items-center justify-center rounded-lg px-1 text-sm font-bold tabular-nums ${isToday ? 'bg-blue-700 text-white' : isSelected ? 'bg-white text-blue-700' : 'text-slate-900'}`}>{date.getDate()}</span>
+                          <span className={`inline-flex h-6 min-w-6 items-center justify-center rounded-lg px-1 text-sm font-bold tabular-nums ${isToday ? 'bg-blue-700 text-white' : isSelected ? 'bg-white text-blue-700' : 'text-slate-900'}`}>{date.getDate()}</span>
                           {dotState ? (
                             <span className={`h-1.5 w-1.5 rounded-full ${dotState === 'covered' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
                           ) : null}
                         </div>
-                        <div className="mt-1 flex min-h-[4.6rem] flex-col">
+                        <div className="mt-1 flex min-h-[3.6rem] flex-col">
                           {sales > 0 ? (
                             <p className="font-mono text-base font-bold leading-tight text-slate-950 tabular-nums" title={formatInrInteger(sales)}>₹{formatInrInteger(sales)}</p>
                           ) : (
@@ -311,6 +315,7 @@ function CalendarPage() {
                               {premium != null && (
                                 <span className={`font-semibold ${premium >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}> · Prem {formatPremium(premium)}</span>
                               )}
+                              {bucketTag && <span className="text-slate-400">{bucketTag}</span>}
                             </p>
                           )}
                           <div className="mt-auto flex flex-wrap items-center gap-1 pt-1">
@@ -330,7 +335,7 @@ function CalendarPage() {
             </div>
           </section>
 
-          <aside className="hidden xl:block" ref={contextRef}>
+          <aside className="hidden xl:block">
             <div className="sticky top-20 max-h-[calc(100dvh-6rem)] overflow-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm transition">
               {selectedSidebarData ? (
                 <CalendarDaySidebar data={selectedSidebarData} />
@@ -381,43 +386,15 @@ function TopKpiCard({
   chip: string
 }) {
   return (
-    <div className="min-h-[7rem] rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
-      <div className="mb-2 flex items-center justify-between gap-2">
+    <div className="min-h-[5.75rem] rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
         <p className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
         <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${chip}`}>
           <Icon size={15} />
         </span>
       </div>
       <p className={`truncate font-mono text-lg font-bold leading-tight tabular-nums ${tone}`} title={value}>{value}</p>
-      {helper ? <p className="mt-1.5 line-clamp-2 text-xs font-medium leading-snug text-slate-500" title={helper}>{helper}</p> : null}
-    </div>
-  )
-}
-
-function TopMoverCard({ mover, onJump }: { mover: ReturnType<typeof topMover>; onJump: () => void }) {
-  return (
-    <div className="flex min-h-[7rem] flex-col rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Top Mover</p>
-        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
-          <PackageCheck size={15} />
-        </span>
-      </div>
-      {mover ? (
-        <>
-          <p className="truncate font-mono text-lg font-bold leading-tight text-slate-950 tabular-nums">{formatWhole(mover.bags)}</p>
-          <p className="mt-0.5 truncate text-xs font-medium text-slate-500">{mover.label} · {mover.deltaBags >= 0 ? '+' : '-'}{formatWhole(Math.abs(mover.deltaBags))} vs last month</p>
-          <button type="button" className="mt-auto inline-flex items-center gap-1 pt-2 text-left text-xs font-semibold text-blue-700 hover:text-blue-900" onClick={onJump}>
-            See breakdown
-            <ArrowDown size={12} />
-          </button>
-        </>
-      ) : (
-        <>
-          <p className="font-mono text-lg font-bold leading-tight text-slate-300">-</p>
-          <p className="mt-0.5 text-xs font-medium text-slate-400">No item sales yet</p>
-        </>
-      )}
+      {helper ? <p className="mt-1 line-clamp-2 text-xs font-medium leading-snug text-slate-500" title={helper}>{helper}</p> : null}
     </div>
   )
 }
@@ -444,6 +421,7 @@ function buildCalendarAggregates(data: Awaited<ReturnType<typeof loadCalendarMon
     monthGas: emptyGasReport.overall,
     previousMonthGas: emptyGasReport.overall,
     dailyGasByDate: new Map<string, GasSalesMetrics>(),
+    gasByItem: [] as Array<GasSalesGroup>,
     leadingGasItem: null as null | { name: string; kg: number; bags: number },
     itemComparisons: emptyMonthlyItemComparisons(),
     topBuyer: null as null | { customerName: string; sales: number; bags: number; qty: number; avgRate: number },
@@ -467,6 +445,8 @@ function buildCalendarAggregates(data: Awaited<ReturnType<typeof loadCalendarMon
         customerId: str(bill.customer),
         customerName: customerDisplayById.get(str(bill.customer)) ?? str(bill.customer_name) ?? 'Unknown customer',
         marketRate: num(bill.mkt),
+        gstRate: num(bill.gst_rate),
+        gstAmount: num(bill.gst_amount),
       }))
     const billIds = new Set(bills.map((bill) => bill.id))
     const lines = billItemsRaw
@@ -610,6 +590,7 @@ function buildCalendarAggregates(data: Awaited<ReturnType<typeof loadCalendarMon
     monthGas: currentGasReport.overall,
     previousMonthGas: previousGasReport.overall,
     dailyGasByDate,
+    gasByItem: currentGasReport.byItem,
     leadingGasItem,
     itemComparisons,
     topBuyer,

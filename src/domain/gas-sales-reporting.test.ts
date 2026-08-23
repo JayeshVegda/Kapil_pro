@@ -78,4 +78,71 @@ describe('buildGasSalesReport', () => {
       premiumPct: null,
     })
   })
+
+  it('splits GST and non-GST streams so rates never blend', () => {
+    const report = buildGasSalesReport({
+      bills: [
+        // Non-GST bill: 100 kg at 600 = 60,000, market 500.
+        { id: 'bill-plain', date: '2026-08-02', customerId: 'c1', customerName: 'Plain Party', marketRate: 500 },
+        // GST bill: 200 kg at 640 = 128,000 base, 18% GST = 23,040, market 520.
+        { id: 'bill-gst', date: '2026-08-03', customerId: 'c2', customerName: 'GST Party', marketRate: 520, gstRate: 18 },
+      ],
+      lines: [
+        { billId: 'bill-plain', itemId: 'spindle', itemName: 'Spindle', itemType: 'gas', qty: 100, bags: 2, amount: 60_000 },
+        { billId: 'bill-gst', itemId: 'spindle', itemName: 'Spindle', itemType: 'gas', qty: 200, bags: 4, amount: 128_000 },
+      ],
+    })
+
+    // Combined volumes blend; combined rates still ex-GST weighted.
+    expect(report.overall.kg).toBe(300)
+    expect(report.overall.bags).toBe(6)
+
+    // Non-GST bucket: own rate and own premium.
+    expect(report.overall.nonGst).toMatchObject({
+      sales: 60_000,
+      kg: 100,
+      weightedSellingRate: 600,
+      weightedSellingRateWithGst: 600,
+      weightedMarketRate: 500,
+      premiumPerKg: 100,
+    })
+    // GST bucket: ex-GST 640, incl-GST (128000+23040)/200 = 755.2.
+    expect(report.overall.gst).toMatchObject({
+      sales: 128_000,
+      kg: 200,
+      weightedSellingRate: 640,
+      weightedSellingRateWithGst: 755.2,
+      weightedMarketRate: 520,
+      premiumPerKg: 120,
+    })
+  })
+
+  it('uses the bill gst amount override when present', () => {
+    const report = buildGasSalesReport({
+      bills: [
+        { id: 'bill-gst', date: '2026-08-03', customerId: 'c2', customerName: 'GST Party', marketRate: 0, gstRate: 0, gstAmount: 10_000 },
+      ],
+      lines: [
+        { billId: 'bill-gst', itemId: 'spindle', itemName: 'Spindle', itemType: 'gas', qty: 100, bags: 2, amount: 60_000 },
+      ],
+    })
+    expect(report.overall.gst?.salesWithGst).toBe(70_000)
+    expect(report.overall.gst?.weightedSellingRateWithGst).toBe(700)
+  })
+
+  it('allocates gst proportionally across two lines of one gst bill', () => {
+    const report = buildGasSalesReport({
+      bills: [
+        { id: 'bill-gst', date: '2026-08-03', customerId: 'c2', customerName: 'GST Party', marketRate: 0, gstRate: 18 },
+      ],
+      lines: [
+        { billId: 'bill-gst', itemId: 'spindle', itemName: 'Spindle', itemType: 'gas', qty: 100, bags: 2, amount: 60_000 },
+        { billId: 'bill-gst', itemId: 'plug', itemName: 'Tapper Plug', itemType: 'gas', qty: 100, bags: 2, amount: 40_000 },
+      ],
+    })
+    // Total GST = 18% of 100,000 = 18,000. Spindle share 60% = 10,800 -> (60,000+10,800)/100 = 708.
+    expect(report.byItem.find((row) => row.key === 'spindle')?.gst?.weightedSellingRateWithGst).toBeCloseTo(708, 2)
+    // Plug share 40% = 7,200 -> 472.
+    expect(report.byItem.find((row) => row.key === 'plug')?.gst?.weightedSellingRateWithGst).toBeCloseTo(472, 2)
+  })
 })

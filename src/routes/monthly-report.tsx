@@ -338,6 +338,8 @@ function ReportPage() {
         customerId: str(bill.customer),
         customerName: customerNameById.get(str(bill.customer)) ?? str(bill.customer_name) ?? 'Unknown customer',
         marketRate: num(bill.mkt),
+        gstRate: num(bill.gst_rate),
+        gstAmount: num(bill.gst_amount),
       }))
     const validBillIds = new Set(bills.map((bill) => bill.id))
     const lines = data.billItemsRaw

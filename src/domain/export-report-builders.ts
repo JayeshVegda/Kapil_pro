@@ -113,7 +113,7 @@ function billTotals(bills: ExportBill[], lines: ExportLine[]) {
 function gasReportFor(bills: ExportBill[], lines: ExportLine[], items: ExportItem[]) {
   const itemById = new Map(items.map((item) => [item.id, item]))
   return buildGasSalesReport({
-    bills: bills.map((bill) => ({ id: bill.id, date: bill.date, customerId: bill.customerId, customerName: bill.customerName, marketRate: bill.marketRate })),
+    bills: bills.map((bill) => ({ id: bill.id, date: bill.date, customerId: bill.customerId, customerName: bill.customerName, marketRate: bill.marketRate, gstRate: bill.gstRate, gstAmount: bill.gstAmount })),
     lines: lines.map((line) => ({
       billId: line.billId,
       itemId: line.itemId,

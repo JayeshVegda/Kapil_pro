@@ -47,12 +47,15 @@ await step('newbill-interact', async () => {
   await page.waitForTimeout(300)
 })
 
-// 4. Calendar: trend strip + top mover + context panel + heat tints + nav
+// 4. Calendar: gas strip + avg bill size + context panel + heat tints + nav
 await step('calendar-nav', async () => {
   await page.goto(`${BASE}/monthly-sales-calendar`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(600)
-  if (!(await page.getByTestId('rate-trend-strip').count())) throw new Error('rate trend strip missing')
-  if (!(await page.getByText('Top Mover').count())) throw new Error('top mover card missing')
+  if (!(await page.getByTestId('gas-selling-strip').count())) throw new Error('gas selling strip missing')
+  if (await page.getByTestId('rate-trend-strip').count()) throw new Error('old rate trend strip still present')
+  if (!(await page.getByText('Avg Bill Size').count())) throw new Error('avg bill size card missing')
+  if (await page.getByText('Net Position').count()) throw new Error('net position card still present')
+  if (!(await page.getByText('Avg Selling Rate').count())) throw new Error('avg selling rate card missing')
   if (!(await page.getByTestId('month-context-panel').count())) throw new Error('month context panel missing')
   const tinted = await page.locator('button[class*="bg-emerald-"], button[class*="bg-rose-"]').count()
   if (tinted === 0) console.log('   (note: no premium-tinted cells this month)')
