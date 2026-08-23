@@ -15,6 +15,7 @@ import {
 import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import { pb } from '@/data/pocketbase'
 import {
+  defaultAdminControlSettings,
   getAdminControlSettings,
   saveAdminControlSettings,
   subscribeAdminControlSettings,
@@ -133,17 +134,17 @@ function CommandBarCard({ admin, onChange }: { admin: AdminControlSettings; onCh
           <AliasField
             label="Bill aliases"
             value={admin.commandAliases.bill.join(', ')}
-            onChange={(value) => onChange({ commandAliases: { ...admin.commandAliases, bill: splitAliases(value, ['b', 'bill', 'sale']) } })}
+            onChange={(value) => onChange({ commandAliases: { ...admin.commandAliases, bill: splitAliases(value, 'bill') } })}
           />
           <AliasField
             label="Payment aliases"
             value={admin.commandAliases.payment.join(', ')}
-            onChange={(value) => onChange({ commandAliases: { ...admin.commandAliases, payment: splitAliases(value, ['p', 'pay', 'payment']) } })}
+            onChange={(value) => onChange({ commandAliases: { ...admin.commandAliases, payment: splitAliases(value, 'payment') } })}
           />
           <AliasField
             label="Print aliases"
             value={admin.commandAliases.print.join(', ')}
-            onChange={(value) => onChange({ commandAliases: { ...admin.commandAliases, print: splitAliases(value, ['pr', 'print']) } })}
+            onChange={(value) => onChange({ commandAliases: { ...admin.commandAliases, print: splitAliases(value, 'print') } })}
           />
         </div>
         <PinnedRoutes routes={admin.pinnedRoutes} onChange={(routes) => onChange({ pinnedRoutes: routes })} />
@@ -211,9 +212,9 @@ function AliasField({ label, value, onChange }: { label: string; value: string; 
   )
 }
 
-function splitAliases(raw: string, fallback: string[]) {
+function splitAliases(raw: string, kind: 'bill' | 'payment' | 'print') {
   const aliases = raw.split(/[,\s]+/).map((entry) => entry.trim().toLowerCase()).filter(Boolean)
-  return aliases.length ? Array.from(new Set(aliases)) : fallback
+  return aliases.length ? Array.from(new Set(aliases)) : defaultAdminControlSettings.commandAliases[kind]
 }
 
 function LinkCard({ to, icon: Icon, title, detail }: { to: string; icon: LucideIconType; title: string; detail: string }) {

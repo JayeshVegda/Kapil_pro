@@ -8,7 +8,7 @@ import { loadCalendarMonthData } from '@/data/calendar-month'
 import type { PBRecord } from '@/data/dashboard'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { buildGasSalesReport, type GasSalesMetrics } from '@/domain/gas-sales-reporting'
-import { buildMonthlyItemComparisons, type MonthlyItemComparisons } from '@/domain/monthly-item-rollup'
+import { buildMonthlyItemComparisons, emptyMonthlyItemComparisons, type MonthlyItemComparisons } from '@/domain/monthly-item-rollup'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatInrInteger } from '@/lib/inr-format'
@@ -467,10 +467,7 @@ function buildCalendarAggregates(data: Awaited<ReturnType<typeof loadCalendarMon
     previousMonthGas: emptyGasReport.overall,
     dailyGasByDate: new Map<string, GasSalesMetrics>(),
     leadingGasItem: null as null | { name: string; kg: number; bags: number },
-    itemComparisons: {
-      spindle: { bags: 0, kg: 0, partyCount: 0, previousBags: 0, previousKg: 0, previousPartyCount: 0 },
-      tapperPlug: { bags: 0, kg: 0, partyCount: 0, previousBags: 0, previousKg: 0, previousPartyCount: 0 },
-    } as MonthlyItemComparisons,
+    itemComparisons: emptyMonthlyItemComparisons(),
     topBuyer: null as null | { customerName: string; sales: number; bags: number; qty: number; avgRate: number },
     topCollection: null as null | { customerName: string; amount: number },
   }

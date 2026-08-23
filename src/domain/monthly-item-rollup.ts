@@ -29,6 +29,16 @@ const emptyMetric = (): MonthlyItemMetric => ({
   previousPartyCount: 0,
 })
 
+/** Single source of truth for a zeroed comparison set — UI fallbacks must use this. */
+export function emptyMonthlyItemComparisons(): MonthlyItemComparisons {
+  return {
+    spindle: emptyMetric(),
+    spindle75: emptyMetric(),
+    spindle85: emptyMetric(),
+    tapperPlug: emptyMetric(),
+  }
+}
+
 const num = (value: unknown) => {
   const parsed = Number(value ?? 0)
   return Number.isFinite(parsed) ? parsed : 0
@@ -75,7 +85,6 @@ function addItems(
     const bill = bills.get(str(item.bill))
     if (!bill) continue
     const categories = classifyItem(str(item.item_name))
-    if (!categories) continue
     const bags = num(item.bags)
     const kg = num(item.qty)
     for (const category of categories) {
@@ -114,12 +123,7 @@ export function buildMonthlyItemComparisons({
   previousMonthKey?: string
   maxCurrentDate?: string
 }): MonthlyItemComparisons {
-  const comparisons: MonthlyItemComparisons = {
-    spindle: emptyMetric(),
-    spindle75: emptyMetric(),
-    spindle85: emptyMetric(),
-    tapperPlug: emptyMetric(),
-  }
+  const comparisons: MonthlyItemComparisons = emptyMonthlyItemComparisons()
   addItems(comparisons, billLookup(currentBills, currentMonthKey, maxCurrentDate), currentItems, 'current')
   addItems(comparisons, billLookup(previousBills, previousMonthKey), previousItems, 'previous')
   return comparisons

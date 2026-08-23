@@ -16,6 +16,8 @@
     "typecheck": "npm run router:generate && tsc -b --pretty false",
     "build": "npm run router:generate && tsc -b && vite build",
     "test": "vitest run",
+    "smoke": "node scripts/smoke-ui.mjs",
+    "smoke:interactions": "node scripts/smoke-ui-interactions.mjs",
     "verify": "npm run typecheck && npm run test && npm run build",
     "lint": "eslint .",
     "preview": "vite preview"
