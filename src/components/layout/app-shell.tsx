@@ -139,6 +139,25 @@ export function AppShell() {
   const today = useMemo(() => getLocalIsoDate(), [])
   const moduleSettings = useModuleSettings()
   const { marketRate, refreshMarketRate } = useMarketRate(today)
+  const mktDeltaQuery = useQuery({
+    queryKey: ['mkt-pill-delta'],
+    staleTime: 10 * 60_000,
+    refetchInterval: 30 * 60_000,
+    queryFn: async () => {
+      try {
+        const rows = await pb.collection('brass_rates').getList(1, 2, { sort: '-date' })
+        const [latest, previous] = rows.items
+        if (!latest || !previous) return null
+        const latestRate = Number(latest.vilaity ?? 0)
+        const previousRate = Number(previous.vilaity ?? 0)
+        if (!(latestRate > 0) || !(previousRate > 0)) return null
+        return { delta: Math.round(latestRate - previousRate), date: String(latest.date ?? '') }
+      } catch {
+        return null
+      }
+    },
+  })
+  const mktDelta = mktDeltaQuery.data ?? null
   const commandDepsQuery = useQuery({
     queryKey: ['command-bar-deps'],
     enabled: commandOpen || commandInput.trim().length > 0,
@@ -663,11 +682,16 @@ export function AppShell() {
             <button
               type="button"
               className="hidden min-h-9 items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 text-xs font-semibold text-amber-800 shadow-sm transition hover:bg-amber-100 sm:inline-flex"
-              title={`${marketRate.status}${marketRate.rateDate ? ` | ${marketRate.rateDate}` : ''}`}
+              title={`${marketRate.status}${marketRate.rateDate ? ` | ${marketRate.rateDate}` : ''}${mktDelta ? ` | ${mktDelta.delta >= 0 ? '+' : '-'}₹${Math.abs(mktDelta.delta)} vs previous saved rate` : ''}`}
               onClick={() => void refreshMarketRate()}
             >
               <span className="text-[10px] uppercase tracking-[0.08em] text-amber-600">MKT</span>
               <span className="font-mono tabular-nums">{marketRate.rate > 0 ? formatInrInteger(Math.round(marketRate.rate)) : '—'}</span>
+              {mktDelta && (
+                <span className={`font-mono text-[10px] tabular-nums ${mktDelta.delta >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                  {mktDelta.delta >= 0 ? '▲' : '▼'}{Math.abs(mktDelta.delta)}
+                </span>
+              )}
             </button>
             <button
               type="button"

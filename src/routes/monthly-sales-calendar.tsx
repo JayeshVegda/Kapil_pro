@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, ChevronLeft, ChevronRight, CircleDollarSign, PackageCheck, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
+import { Activity, ArrowDown, ChevronLeft, ChevronRight, CircleDollarSign, PackageCheck, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarDaySidebar, type CalendarDaySidebarData, type CalendarSidebarBill, type CalendarSidebarPayment } from '@/components/calendar/calendar-day-sidebar'
 import { CalendarMonthOverview } from '@/components/calendar/calendar-month-overview'
@@ -8,7 +8,9 @@ import { loadCalendarMonthData } from '@/data/calendar-month'
 import type { PBRecord } from '@/data/dashboard'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { buildGasSalesReport, type GasSalesMetrics } from '@/domain/gas-sales-reporting'
-import { buildMonthlyItemComparisons, emptyMonthlyItemComparisons, type MonthlyItemComparisons } from '@/domain/monthly-item-rollup'
+import { buildMonthlyItemComparisons, emptyMonthlyItemComparisons } from '@/domain/monthly-item-rollup'
+import { bestSalesDay, buildRateSeries, dayDotState, premiumTint, topMover } from '@/domain/calendar-visuals'
+import { RateTrendStrip } from '@/components/calendar/rate-trend-strip'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatInrInteger } from '@/lib/inr-format'
@@ -113,13 +115,6 @@ function formatPremium(value: number | null) {
   return `${value >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(value))}`
 }
 
-function formatVsLastMonth(current: number, previous: number, unit = '') {
-  const delta = Math.round(current - previous)
-  const sign = delta > 0 ? '+' : delta < 0 ? '-' : '±'
-  const suffix = unit ? ` ${unit}` : ''
-  return `vs ${sign}${formatWhole(Math.abs(delta))}${suffix} (${formatWhole(previous)} last month)`
-}
-
 function CalendarPage() {
   const today = useMemo(() => getLocalIsoDate(), [])
   const search = Route.useSearch()
@@ -159,6 +154,10 @@ function CalendarPage() {
   }, [monthKey, navigate, selectedDay])
 
   const aggregates = useMemo(() => buildCalendarAggregates(calendarQuery.data, monthKey, today), [calendarQuery.data, monthKey, today])
+  const rateTrendSeries = useMemo(() => buildRateSeries(aggregates.dailyGasByDate, aggregates.rateByDate, monthKey), [aggregates, monthKey])
+  const mover = useMemo(() => topMover(aggregates.itemComparisons), [aggregates])
+  const bestDay = useMemo(() => bestSalesDay(aggregates.dailySales, monthKey), [aggregates, monthKey])
+  const contextRef = useRef<HTMLDivElement | null>(null)
   const gridWeeks = useMemo(() => {
     const [year, month] = monthKey.split('-').map(Number)
     return chunkWeeks(eachDayInclusive(startOfWeekSunday(new Date(year, month - 1, 1)), endOfWeekSaturday(new Date(year, month, 0))))
@@ -224,7 +223,7 @@ function CalendarPage() {
     <div className="w-full px-3 pb-6 pt-3 sm:px-4 lg:px-6">
       <section className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         {topCards.map((card) => <TopKpiCard key={card.label} {...card} />)}
-        <ItemSignalsKpi itemComparisons={aggregates.itemComparisons} />
+        <TopMoverCard mover={mover} onJump={() => contextRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })} />
       </section>
 
       {calendarQuery.isLoading ? <section className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">Loading calendar...</section> : null}
@@ -251,14 +250,16 @@ function CalendarPage() {
                 </button>
               </div>
             </div>
+            <RateTrendStrip series={rateTrendSeries} />
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-200 bg-slate-50/60 px-3 py-2 text-[10px] font-medium text-slate-500 sm:px-4">
               <span className="font-semibold uppercase tracking-[0.06em] text-slate-400">Legend:</span>
-              <span><span className="font-bold text-blue-700">Rate</span> — avg selling ₹/kg</span>
+              <span><span className="font-bold text-slate-900">Sales</span> — billed ₹</span>
               <span><span className="font-semibold text-amber-700">Mkt</span> — bill market ₹/kg</span>
               <span><span className="font-bold text-emerald-700">Prem</span> — premium vs market (+green / −red)</span>
               <span><span className="font-semibold text-emerald-700">Coll</span> — collections ₹</span>
-              <span><span className="font-bold text-slate-900">Sales</span> — billed ₹</span>
-              <span><span className="font-semibold text-slate-700">Kg</span> — gas sold</span>
+              <span>green wash — sold above market, red wash — below</span>
+              <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> collected ≥ billed</span>
+              <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> partial collection</span>
             </div>
             <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
               {WEEKDAYS.map((day) => <div key={day} className="py-2 text-center text-[11px] font-semibold tracking-[0.08em] text-slate-500">{day}</div>)}
@@ -277,9 +278,11 @@ function CalendarPage() {
                     const rate = aggregates.rateByDate.get(iso)
                     const gas = aggregates.dailyGasByDate.get(iso)
                     const displayedMarketRate = gas?.weightedMarketRate ?? rate ?? null
+                    const premium = gas?.premiumPerKg ?? null
                     const hasActivity = sales > 0 || collections > 0 || soldBags > 0 || !!rate || (gas?.kg ?? 0) > 0
-                    const dayBalance = collections - sales
-                    const title = `${formatFullDate(iso)}\nSelling rate: ${formatRate(gas?.weightedSellingRate ?? null)}\nBill market: ${formatRate(displayedMarketRate)}\nPremium: ${formatPremium(gas?.premiumPerKg ?? null)}/kg\nCollections: ${formatInrInteger(collections)}\nSales: ${formatInrInteger(sales)}\nGas: ${formatWhole(gas?.kg ?? 0)} kg`
+                    const dotState = dayDotState(sales, collections)
+                    const tint = inMonth && hasActivity ? premiumTint(premium) : ''
+                    const title = `${formatFullDate(iso)}\nSelling rate: ${formatRate(gas?.weightedSellingRate ?? null)}\nBill market: ${formatRate(displayedMarketRate)}\nPremium: ${formatPremium(premium)}/kg\nCollections: ${formatInrInteger(collections)}\nSales: ${formatInrInteger(sales)}\nGas: ${formatWhole(gas?.kg ?? 0)} kg`
                     return (
                       <button
                         key={iso}
@@ -287,26 +290,37 @@ function CalendarPage() {
                         title={title}
                         onClick={() => setSelectedDay((current) => (current === iso ? null : iso))}
                         className={`group min-h-[8rem] p-1.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 sm:p-2 ${
-                          isSelected ? 'bg-blue-50 ring-2 ring-inset ring-blue-500' : hasActivity ? 'bg-white hover:bg-blue-50/50' : 'bg-slate-50/80 hover:bg-white'
+                          isSelected ? 'bg-blue-50 ring-2 ring-inset ring-blue-500' : hasActivity ? `${tint || 'bg-white'} hover:bg-blue-50/60` : 'bg-slate-50/80 hover:bg-white'
                         } ${!inMonth ? 'opacity-45' : ''}`}
                       >
                         <div className="flex items-center justify-between">
                           <span className={`inline-flex h-7 min-w-7 items-center justify-center rounded-lg px-1 text-sm font-bold tabular-nums ${isToday ? 'bg-blue-700 text-white' : isSelected ? 'bg-white text-blue-700' : 'text-slate-900'}`}>{date.getDate()}</span>
-                          {hasActivity ? (
-                            <span className={`h-1.5 w-1.5 rounded-full ${dayBalance >= 0 ? 'bg-emerald-500' : 'bg-blue-600'}`} />
+                          {dotState ? (
+                            <span className={`h-1.5 w-1.5 rounded-full ${dotState === 'covered' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
                           ) : null}
                         </div>
-                        <div className="mt-1.5 space-y-1 text-[11px] leading-tight">
-                          {(gas?.weightedSellingRate != null || !!rate) && (
-                            <MetricLine label="Rate" value={formatRate(gas?.weightedSellingRate ?? null)} tone="text-blue-700 font-bold" />
+                        <div className="mt-1 flex min-h-[4.6rem] flex-col">
+                          {sales > 0 ? (
+                            <p className="font-mono text-base font-bold leading-tight text-slate-950 tabular-nums" title={formatInrInteger(sales)}>₹{formatInrInteger(sales)}</p>
+                          ) : (
+                            <p className="font-mono text-base font-bold leading-tight text-slate-300">—</p>
                           )}
-                          {displayedMarketRate != null && <MetricLine label="Mkt" value={formatRate(displayedMarketRate)} tone="text-amber-700" />}
-                          {gas?.premiumPerKg != null && (
-                            <MetricLine label="Prem" value={formatPremium(gas.premiumPerKg)} tone={gas.premiumPerKg >= 0 ? 'text-emerald-700 font-bold' : 'text-rose-700 font-bold'} />
+                          {(displayedMarketRate != null || premium != null) && (
+                            <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
+                              Mkt {formatRate(displayedMarketRate)}
+                              {premium != null && (
+                                <span className={`font-semibold ${premium >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}> · Prem {formatPremium(premium)}</span>
+                              )}
+                            </p>
                           )}
-                          {collections > 0 && <MetricLine label="Coll" value={formatInrInteger(collections)} tone="text-emerald-700" />}
-                          {sales > 0 && <MetricLine label="Sales" value={formatInrInteger(sales)} tone="text-slate-950 font-bold" />}
-                          {(gas?.kg ?? 0) > 0 && <MetricLine label="Kg" value={`${formatWhole(gas?.kg ?? 0)} kg`} tone="text-slate-700 font-bold" />}
+                          <div className="mt-auto flex flex-wrap items-center gap-1 pt-1">
+                            {collections > 0 && (
+                              <span className="rounded bg-emerald-50/90 px-1 py-px text-[10px] font-semibold text-emerald-700 tabular-nums">C {formatInrInteger(collections)}</span>
+                            )}
+                            {(gas?.kg ?? 0) > 0 && (
+                              <span className="rounded bg-slate-100 px-1 py-px text-[10px] font-semibold text-slate-600 tabular-nums">{formatWhole(gas?.kg ?? 0)} kg</span>
+                            )}
+                          </div>
                         </div>
                       </button>
                     )
@@ -316,25 +330,20 @@ function CalendarPage() {
             </div>
           </section>
 
-          <aside className="hidden xl:block">
+          <aside className="hidden xl:block" ref={contextRef}>
             <div className="sticky top-20 max-h-[calc(100dvh-6rem)] overflow-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm transition">
               {selectedSidebarData ? (
                 <CalendarDaySidebar data={selectedSidebarData} />
               ) : (
                 <CalendarMonthOverview
                   monthKey={monthKey}
-                  sales={aggregates.monthSales}
-                  collections={aggregates.monthCollections}
                   avgRate={aggregates.monthAvgMarketRate}
-                  netPosition={aggregates.monthCollections - aggregates.monthSales}
+                  rateDelta={aggregates.monthAvgMarketRateVsPrev}
                   topBuyer={aggregates.topBuyer}
                   topCollection={aggregates.topCollection}
-                  rateDelta={aggregates.monthAvgMarketRateVsPrev}
                   itemComparisons={aggregates.itemComparisons}
-                  soldBags={aggregates.monthSoldBags}
-                  soldKg={aggregates.monthSoldKg}
-                  gas={aggregates.monthGas}
                   leadingGasItem={aggregates.leadingGasItem}
+                  bestDay={bestDay}
                 />
               )}
             </div>
@@ -385,62 +394,31 @@ function TopKpiCard({
   )
 }
 
-function ItemSignalsKpi({ itemComparisons }: { itemComparisons: MonthlyItemComparisons }) {
+function TopMoverCard({ mover, onJump }: { mover: ReturnType<typeof topMover>; onJump: () => void }) {
   return (
-    <div className="min-h-[7rem] rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+    <div className="flex min-h-[7rem] flex-col rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Item Signals</p>
+        <p className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Top Mover</p>
         <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
           <PackageCheck size={15} />
         </span>
       </div>
-      <div className="space-y-1.5">
-        <ItemSignalLine
-          label="Spindle 7.5GM"
-          value={formatWhole(itemComparisons.spindle75.bags)}
-          detail={formatVsLastMonth(itemComparisons.spindle75.bags, itemComparisons.spindle75.previousBags, 'bags')}
-        />
-        <ItemSignalLine
-          label="Spindle 8.5GM"
-          value={formatWhole(itemComparisons.spindle85.bags)}
-          detail={formatVsLastMonth(itemComparisons.spindle85.bags, itemComparisons.spindle85.previousBags, 'bags')}
-        />
-        <ItemSignalLine
-          label="Spindle total"
-          value={formatWhole(itemComparisons.spindle.bags)}
-          detail={`${formatWhole(itemComparisons.spindle.kg)} kg · ${formatVsLastMonth(itemComparisons.spindle.bags, itemComparisons.spindle.previousBags, 'bags')}`}
-        />
-        <ItemSignalLine
-          label="Tapper Plug"
-          value={formatWhole(itemComparisons.tapperPlug.bags)}
-          detail={formatVsLastMonth(itemComparisons.tapperPlug.bags, itemComparisons.tapperPlug.previousBags, 'bags')}
-        />
-        <ItemSignalLine
-          label="Tapper Parties"
-          value={formatWhole(itemComparisons.tapperPlug.partyCount)}
-          detail={formatVsLastMonth(itemComparisons.tapperPlug.partyCount, itemComparisons.tapperPlug.previousPartyCount, 'party')}
-        />
-      </div>
+      {mover ? (
+        <>
+          <p className="truncate font-mono text-lg font-bold leading-tight text-slate-950 tabular-nums">{formatWhole(mover.bags)}</p>
+          <p className="mt-0.5 truncate text-xs font-medium text-slate-500">{mover.label} · {mover.deltaBags >= 0 ? '+' : '-'}{formatWhole(Math.abs(mover.deltaBags))} vs last month</p>
+          <button type="button" className="mt-auto inline-flex items-center gap-1 pt-2 text-left text-xs font-semibold text-blue-700 hover:text-blue-900" onClick={onJump}>
+            See breakdown
+            <ArrowDown size={12} />
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="font-mono text-lg font-bold leading-tight text-slate-300">-</p>
+          <p className="mt-0.5 text-xs font-medium text-slate-400">No item sales yet</p>
+        </>
+      )}
     </div>
-  )
-}
-
-function ItemSignalLine({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-2 rounded-lg bg-slate-50 px-2 py-1">
-      <p className="truncate text-[11px] font-semibold text-slate-600">{label}</p>
-      <p className="font-mono text-sm font-bold leading-tight text-slate-950 tabular-nums">{value}</p>
-      <p className="col-span-2 truncate text-[10px] font-medium leading-snug text-slate-500" title={detail}>{detail}</p>
-    </div>
-  )
-}
-
-function MetricLine({ label, value, tone }: { label: string; value: string; tone: string }) {
-  return (
-    <p className="flex min-w-0 items-center justify-between gap-1">
-      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.05em] text-slate-400">{label}</span>
-      <span className={`min-w-0 truncate text-right font-mono tabular-nums ${tone}`}>{value}</span>
-    </p>
   )
 }
 

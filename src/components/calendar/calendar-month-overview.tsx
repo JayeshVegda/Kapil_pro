@@ -2,46 +2,63 @@ import { formatMonthYear } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 import { Activity, CircleDollarSign, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
 import type { MonthlyItemComparisons } from '@/domain/monthly-item-rollup'
-import type { GasSalesMetrics } from '@/domain/gas-sales-reporting'
 
 export type CalendarMonthOverviewProps = {
   monthKey: string
-  sales: number
-  collections: number
   avgRate: number | null
-  netPosition: number
+  rateDelta: number | null
   topBuyer: { customerName: string; sales: number; bags: number; qty: number; avgRate: number } | null
   topCollection: { customerName: string; amount: number } | null
-  rateDelta: number | null
   itemComparisons: MonthlyItemComparisons
-  soldBags: number
-  soldKg: number
-  gas: GasSalesMetrics
   leadingGasItem: { name: string; kg: number; bags: number } | null
+  bestDay: { day: number; sales: number } | null
 }
 
-export function CalendarMonthOverview({ monthKey, sales, collections, avgRate, netPosition, topBuyer, topCollection, rateDelta, itemComparisons, soldBags, soldKg, gas, leadingGasItem }: CalendarMonthOverviewProps) {
+export function CalendarMonthOverview({ monthKey, avgRate, rateDelta, topBuyer, topCollection, itemComparisons, leadingGasItem, bestDay }: CalendarMonthOverviewProps) {
+  const mixRows = [
+    { label: 'Spindle 7.5GM', metric: itemComparisons.spindle75 },
+    { label: 'Spindle 8.5GM', metric: itemComparisons.spindle85 },
+    { label: 'Tapper Plug', metric: itemComparisons.tapperPlug },
+  ]
+  const totalBags = mixRows.reduce((sum, row) => sum + row.metric.bags, 0)
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-testid="month-context-panel">
       <div className="rounded-xl bg-blue-700 p-4 text-white">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-blue-100/85">Month signals</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-blue-100/85">Month context</p>
         <h2 className="mt-1 text-xl font-bold leading-tight">{formatMonthYear(monthKey)}</h2>
-        <div className="mt-3 space-y-1.5">
-          <SignalLine label="Spindle 7.5GM" value={`${formatNumber(itemComparisons.spindle75.bags)} bags`} detail={formatVsLastMonth(itemComparisons.spindle75.bags, itemComparisons.spindle75.previousBags, 'bags')} />
-          <SignalLine label="Spindle 8.5GM" value={`${formatNumber(itemComparisons.spindle85.bags)} bags`} detail={formatVsLastMonth(itemComparisons.spindle85.bags, itemComparisons.spindle85.previousBags, 'bags')} />
-          <SignalLine label="Tapper Plug" value={`${formatNumber(itemComparisons.tapperPlug.bags)} bags`} detail={formatVsLastMonth(itemComparisons.tapperPlug.bags, itemComparisons.tapperPlug.previousBags, 'bags')} />
-          <SignalLine label="Tapper Plug Parties" value={`${formatNumber(itemComparisons.tapperPlug.partyCount)}`} detail={formatVsLastMonth(itemComparisons.tapperPlug.partyCount, itemComparisons.tapperPlug.previousPartyCount, 'party')} />
+        <div className="mt-3 space-y-2">
+          {totalBags > 0 ? (
+            mixRows.map((row) => {
+              const share = totalBags > 0 ? row.metric.bags / totalBags : 0
+              const delta = Math.round(row.metric.bags - row.metric.previousBags)
+              return (
+                <div key={row.label}>
+                  <div className="flex items-baseline justify-between gap-2 text-xs">
+                    <span className="truncate font-semibold text-blue-50">{row.label}</span>
+                    <span className="shrink-0 font-mono font-bold text-white tabular-nums">{formatNumber(row.metric.bags)} bags</span>
+                  </div>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/20">
+                    <div className="h-full rounded-full bg-white/80" style={{ width: `${Math.max(share * 100, 2)}%` }} />
+                  </div>
+                  <p className="mt-0.5 text-[11px] font-medium text-blue-100/85">
+                    {Math.round(share * 100)}% of volume · {delta >= 0 ? '+' : '-'}{formatNumber(Math.abs(delta))} ({formatNumber(row.metric.previousBags)} last month)
+                  </p>
+                </div>
+              )
+            })
+          ) : (
+            <p className="text-xs font-medium text-blue-100/85">No item sales yet this month.</p>
+          )}
         </div>
       </div>
 
       <div className="space-y-2 text-sm">
         <OverviewLine icon={ReceiptText} label="Top buyer" value={topBuyer ? topBuyer.customerName : '-'} detail={topBuyer ? `${formatInrInteger(topBuyer.sales)} · ${formatNumber(topBuyer.bags)} bags · avg ${formatInrInteger(topBuyer.avgRate)}` : 'No sales yet'} tone="text-blue-800" iconTone="bg-blue-50 text-blue-700" />
         <OverviewLine icon={CircleDollarSign} label="Top collection" value={topCollection ? topCollection.customerName : '-'} detail={topCollection ? formatInrInteger(topCollection.amount) : 'No collection yet'} tone="text-emerald-800" iconTone="bg-emerald-50 text-emerald-700" />
-        <OverviewLine icon={TrendingUp} label="Rate movement" value={avgRate != null ? formatInrInteger(Math.round(avgRate)) : '-'} detail={rateDelta == null ? 'No last-month rate' : `${rateDelta >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(rateDelta))} vs last month`} tone="text-sky-800" iconTone="bg-sky-50 text-sky-700" />
-        <OverviewLine icon={TrendingUp} label="Gas selling rate" value={gas.weightedSellingRate == null ? '-' : `${formatInrInteger(gas.weightedSellingRate)}/kg`} detail={gas.premiumPerKg == null ? 'Bill market comparison unavailable' : `${gas.premiumPerKg >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(gas.premiumPerKg))}/kg vs bill market`} tone="text-blue-800" iconTone="bg-blue-50 text-blue-700" />
+        <OverviewLine icon={TrendingUp} label="Rate movement" value={avgRate != null ? `${formatInrInteger(Math.round(avgRate))}/kg` : '-'} detail={rateDelta == null ? 'No last-month rate' : `${rateDelta >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(rateDelta))}/kg vs last month`} tone="text-sky-800" iconTone="bg-sky-50 text-sky-700" />
         <OverviewLine icon={ReceiptText} label="Leading gas item" value={leadingGasItem?.name ?? '-'} detail={leadingGasItem ? `${formatNumber(leadingGasItem.kg)} kg · ${formatNumber(leadingGasItem.bags)} bags` : 'No gas sales yet'} tone="text-slate-800" iconTone="bg-slate-100 text-slate-600" />
-        <OverviewLine icon={Activity} label="Collection cover" value={sales > 0 ? `${Math.round((collections / sales) * 100)}%` : '-'} detail={netPosition >= 0 ? `${formatInrInteger(netPosition)} surplus` : `${formatInrInteger(Math.abs(netPosition))} gap`} tone={netPosition >= 0 ? 'text-emerald-800' : 'text-red-700'} iconTone={netPosition >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'} />
-        <OverviewLine icon={ReceiptText} label="Sold volume" value={`${formatNumber(soldBags)} bags`} detail={`${formatNumber(soldKg)} kg from bills`} tone="text-amber-800" iconTone="bg-amber-50 text-amber-700" />
+        <OverviewLine icon={Activity} label="Best sales day" value={bestDay ? `Day ${bestDay.day}` : '-'} detail={bestDay ? formatInrInteger(bestDay.sales) : 'No sales yet'} tone="text-slate-900" iconTone="bg-amber-50 text-amber-700" />
       </div>
 
       <Divider />
@@ -86,25 +103,6 @@ function Divider() {
   return <div className="h-px bg-gradient-to-r from-transparent via-slate-300 to-transparent" />
 }
 
-function SignalLine({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="rounded-lg bg-white/10 px-2.5 py-1.5 text-xs">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="truncate font-semibold text-blue-50">{label}</span>
-        <span className="shrink-0 font-mono font-bold text-white">{value}</span>
-      </div>
-      <p className="mt-0.5 truncate text-[11px] font-medium text-blue-100/85">{detail}</p>
-    </div>
-  )
-}
-
 function formatNumber(value: number) {
   return new Intl.NumberFormat('en-IN', { maximumFractionDigits: value >= 10 ? 0 : 1 }).format(value)
-}
-
-function formatVsLastMonth(current: number, previous: number, unit = '') {
-  const delta = Math.round(current - previous)
-  const sign = delta > 0 ? '+' : delta < 0 ? '-' : '±'
-  const suffix = unit ? ` ${unit}` : ''
-  return `vs ${sign}${formatNumber(Math.abs(delta))}${suffix} (${formatNumber(previous)} last month)`
 }

@@ -1,19 +1,12 @@
 import { chromium } from 'playwright'
+import { attachErrorCollectors, createAuthenticatedPage, ensureLoggedIn } from './smoke-auth.mjs'
 
 const BASE = process.env.SMOKE_BASE ?? 'http://localhost:5199'
 const problems = []
 
 const browser = await chromium.launch()
-const page = await browser.newPage()
-page.on('pageerror', (error) => problems.push({ where: 'pageerror', message: String(error?.stack ?? error).slice(0, 900) }))
-page.on('console', (message) => {
-  if (message.type() === 'error') {
-    const text = message.text()
-    if (!text.includes('favicon') && !text.includes('Failed to load resource')) {
-      problems.push({ where: 'console', message: text.slice(0, 500) })
-    }
-  }
-})
+const { page, context } = await createAuthenticatedPage(browser, BASE)
+attachErrorCollectors(page, problems)
 
 async function step(name, fn) {
   const before = problems.length
@@ -23,6 +16,7 @@ async function step(name, fn) {
 }
 
 await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+await ensureLoggedIn(page).catch((error) => problems.push({ where: 'auth', message: String(error) }))
 
 // 1. Hard reload dashboard to catch load-order crashes
 await step('dashboard-reload', () => page.reload({ waitUntil: 'networkidle' }))
@@ -53,10 +47,15 @@ await step('newbill-interact', async () => {
   await page.waitForTimeout(300)
 })
 
-// 4. Calendar: navigate months back/forward and click a day cell
+// 4. Calendar: trend strip + top mover + context panel + heat tints + nav
 await step('calendar-nav', async () => {
   await page.goto(`${BASE}/monthly-sales-calendar`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(600)
+  if (!(await page.getByTestId('rate-trend-strip').count())) throw new Error('rate trend strip missing')
+  if (!(await page.getByText('Top Mover').count())) throw new Error('top mover card missing')
+  if (!(await page.getByTestId('month-context-panel').count())) throw new Error('month context panel missing')
+  const tinted = await page.locator('button[class*="bg-emerald-"], button[class*="bg-rose-"]').count()
+  if (tinted === 0) console.log('   (note: no premium-tinted cells this month)')
   for (let i = 0; i < 3; i += 1) {
     const prev = page.getByRole('button', { name: /prev/i }).first()
     if (await prev.count()) { await prev.click().catch(() => {}); await page.waitForTimeout(350) }
@@ -88,11 +87,13 @@ await step('settings-toggles', async () => {
 for (const route of ['/transactions', '/ledger', '/customers', '/export-reports']) {
   await step(`visit-${route}`, async () => {
     await page.goto(`${BASE}${route}`, { waitUntil: 'networkidle' })
+    await ensureLoggedIn(page)
     await page.reload({ waitUntil: 'networkidle' })
     await page.waitForTimeout(400)
   })
 }
 
+await context.close()
 await browser.close()
 
 if (problems.length > 0) {

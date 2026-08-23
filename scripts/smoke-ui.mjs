@@ -1,6 +1,7 @@
 import { chromium } from 'playwright'
+import { attachErrorCollectors, createAuthenticatedPage, ensureLoggedIn } from './smoke-auth.mjs'
 
-const BASE = process.env.SMOKE_BASE ?? 'http://127.0.0.1:5199'
+const BASE = process.env.SMOKE_BASE ?? 'http://localhost:5199'
 const ROUTES = [
   '/',
   '/new-bill',
@@ -20,26 +21,18 @@ const ROUTES = [
 ]
 
 const browser = await chromium.launch()
-const page = await browser.newPage()
+const { page, context } = await createAuthenticatedPage(browser, BASE)
 const problems = []
-
-page.on('pageerror', (error) => {
-  problems.push({ type: 'pageerror', message: String(error?.message ?? error).slice(0, 600) })
-})
-page.on('console', (message) => {
-  if (message.type() === 'error') {
-    const text = message.text().slice(0, 400)
-    if (!text.includes('favicon') && !text.includes('Failed to load resource')) {
-      problems.push({ type: 'console.error', message: text })
-    }
-  }
-})
+attachErrorCollectors(page, problems)
 
 for (const route of ROUTES) {
   const before = problems.length
   try {
     await page.goto(`${BASE}${route}`, { waitUntil: 'networkidle', timeout: 30_000 })
-    await page.waitForTimeout(700)
+    await ensureLoggedIn(page)
+    await page.waitForTimeout(500)
+    const body = (await page.locator('body').innerText()).slice(0, 4000)
+    if (body.trim().length < 40) throw new Error('page rendered almost no content')
   } catch (error) {
     problems.push({ type: 'navigation', route, message: String(error).slice(0, 300) })
     continue
@@ -50,6 +43,7 @@ for (const route of ROUTES) {
   for (const entry of routeErrors) console.log(`   -> [${entry.type}] ${entry.message.split('\n')[0]}`)
 }
 
+await context.close()
 await browser.close()
 
 if (problems.length > 0) {
