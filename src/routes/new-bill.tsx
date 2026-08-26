@@ -25,7 +25,8 @@ import {
   type BillingGstMode,
 } from '@/domain/billing-modes'
 import { computeNetBalance } from '@/domain/financial-math'
-import { dedupeBillPreviewCredits, partitionPaymentsForNextBill } from '@/domain/bill-preview'
+import { partitionPaymentsForNextBill } from '@/domain/bill-preview'
+import { buildBillPreviewProps } from '@/lib/bill-preview-props'
 import { loadSavedMarketRateForDate, useMarketRate } from '@/domain/market-rate'
 import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
@@ -530,19 +531,12 @@ function NewBillPage() {
   const qtySummary = formatBillQtySummary(gasQty, electronicQty)
   const previousBalanceDate = autoBalanceQuery.data?.previousBalanceDate ?? date
   const activeBalance = previewBalanceSnapshot ?? autoBalanceQuery.data
-  const activePreviousBalanceDate = activeBalance?.previousBalanceDate ?? date
   const previousBalanceAmount = activeBalance?.previousBalanceAmount ?? 0
   const validCredits = (activeBalance?.credits ?? []).filter((entry) => entry.amount > 0)
   const totalCredits = validCredits.reduce((sum, entry) => sum + entry.amount, 0)
   const validQuickPayments = quickPayments.filter((payment) => payment.amount > 0)
   const quickPaymentTotal = validQuickPayments.reduce((sum, entry) => sum + entry.amount, 0)
-  const subTotalBeforeCredits = grandTotal + previousBalanceAmount
   const payableAfterAdjustments = grandTotal + previousBalanceAmount - totalCredits - quickPaymentTotal
-  const previewCreditEntries = [
-    ...validCredits.map((c) => ({ id: c.id, date: c.date, amount: c.amount })),
-    ...validQuickPayments.map((payment) => ({ id: payment.id, date: payment.date, amount: payment.amount })),
-  ]
-  const dedupedPreviewCreditEntries = dedupeBillPreviewCredits(previewCreditEntries)
   const marketPillTitle = [
     marketRate.rateDate ? `Rate date: ${formatFullDate(marketRate.rateDate)}` : '',
     marketRate.previousRate != null ? `Previous: ${formatInrInteger(marketRate.previousRate)}` : '',
@@ -558,29 +552,28 @@ function NewBillPage() {
     type: getBillingItemType(r),
     unit: getBillingUnit(r),
   }))
-  const draftPrintProps: BillPrintLayoutProps | null =
-    customerId && validRows.length > 0
-      ? {
-          bookNo,
-          billNo,
-          date,
-          customerName: selectedCustomerName,
-          mkt: mktRate,
-          itemRows: previewItemRows,
-          gstAmount,
-          transport,
-          gstRate,
-          currentBillTotal: grandTotal,
-          previousBalance: previousBalanceAmount,
-          previousBillDate: activePreviousBalanceDate,
-          periodCreditEntries: dedupedPreviewCreditEntries,
-          subtotal: subTotalBeforeCredits,
-          finalTotal: payableAfterAdjustments,
-          totalQty,
-          totalBags: previewItemRows.reduce((s, r) => s + r.bags, 0),
-          lrList,
-        }
-      : null
+  // Single source for preview print props: pass the freshest balance snapshot in
+  // so previous balance, credits, and final total are always current.
+  function makeDraftPrintProps(balance: AutoBalanceContext | null): BillPrintLayoutProps | null {
+    if (!customerId || validRows.length === 0) return null
+    return buildBillPreviewProps({
+      bookNo,
+      billNo,
+      date,
+      customerName: selectedCustomerName,
+      mktRate: mktRate,
+      itemRows: previewItemRows,
+      gstAmount,
+      transport,
+      gstRate,
+      currentBillTotal: grandTotal,
+      balance,
+      quickPayments: validQuickPayments.map((payment) => ({ id: payment.id, date: payment.date, amount: payment.amount })),
+      totalQty,
+      totalBags: previewItemRows.reduce((s, r) => s + r.bags, 0),
+      lrList,
+    })
+  }
 
   function resetForm() {
     setDate(today)
@@ -760,18 +753,23 @@ function NewBillPage() {
 
   async function openPreview() {
     if (!validateBeforePreview()) return
-    if (!draftPrintProps) {
+    const provisionalProps = makeDraftPrintProps(activeBalance ?? null)
+    if (!provisionalProps) {
       setStatusText('Unable to build preview. Please check customer and item rows.')
       return
     }
     try {
       setStatusText('Preparing preview...')
-      setPreviewPrintProps(draftPrintProps)
+      setPreviewPrintProps(provisionalProps)
       await assertBillNumberAvailable(bookNo, billNo)
-      // The preview prints previous balance and credit entries — refetch so it
-      // can never show a stale snapshot (e.g. right after saving another bill).
+      // The preview prints previous balance and credit entries — refetch, then
+      // REBUILD the print props from the refreshed snapshot so the preview can
+      // never show a stale or missing previous balance (e.g. right after a
+      // command redirect when the balance query has not loaded yet).
       const refreshed = await autoBalanceQuery.refetch()
-      setPreviewBalanceSnapshot(refreshed.data ?? null)
+      const freshBalance = refreshed.data ?? autoBalanceQuery.data ?? null
+      setPreviewBalanceSnapshot(freshBalance)
+      setPreviewPrintProps(makeDraftPrintProps(freshBalance))
       setStatusText('')
       setIsPreviewOpen(true)
     } catch (error) {
@@ -814,6 +812,13 @@ function NewBillPage() {
       return
     }
     const command = parsed.command
+    if (command.partyOnly || command.items.length === 0) {
+      // Party-only command: preselect the party and stop — no rows, no auto preview.
+      setCustomerId(command.customer.id)
+      setDate(command.date)
+      setStatusText(`${command.customer.name} selected. Add items to the bill.`)
+      return
+    }
     const nextGstMode = command.gstMode === 'manual' ? 'manual' : command.gstRate === 18 ? 'percent18' : 'none'
     const itemMasters = itemsQuery.data ?? []
     const automaticBook = command.bookNo ? null : await getCustomerBookSelection(command.customer.id).catch(() => null)

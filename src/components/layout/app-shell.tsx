@@ -4,7 +4,8 @@ import { AlertTriangle, CheckCircle2, Clock3, Command, FileText, HelpCircle, Ind
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { pb } from '@/data/pocketbase'
 import { loadQuickSearchResults, type QuickSearchResult } from '@/data/quick-search'
-import { useMarketRate } from '@/domain/market-rate'
+import { useMarketRate, loadSavedMarketRateForDate } from '@/domain/market-rate'
+import { buildBillPreviewProps } from '@/lib/bill-preview-props'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { nextBillNoForBook, resolveCustomerBookSelection } from '@/domain/bill-books'
 import { buildCommandBillSummary, buildCommandPaymentSummary } from '@/domain/command-financial-summary'
@@ -264,6 +265,56 @@ export function AppShell() {
       lastRates: commandDepsQuery.data?.lastRates,
     })
   }, [commandDepsQuery.data, effectiveCommandInput, commandMode, marketRate.rate, pathname, today])
+  // Backdated commands must preview the SAVED market rate for that date — the
+  // same rate the New Bill form will use — so the approved rate is the real one.
+  const backDateKey = (() => {
+    if (!commandPreview?.ok) return null
+    if (commandPreview.command.kind !== 'bill' || commandPreview.command.partyOnly) return null
+    if (commandPreview.command.mktRate > 0) return null
+    if (commandPreview.command.date === today) return null
+    return commandPreview.command.date
+  })()
+  const commandDateRateQuery = useQuery({
+    queryKey: ['command-date-market-rate', backDateKey],
+    enabled: !!backDateKey,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const saved = await loadSavedMarketRateForDate(backDateKey!)
+      return saved?.rate ?? 0
+    },
+  })
+  const commandPreviewResolved = useMemo(() => {
+    if (!backDateKey || !commandDateRateQuery.data) return commandPreview
+    return parseContextCommand(effectiveCommandInput, inferCommandKind(pathname), {
+      customers: commandDepsQuery.data?.customers ?? [],
+      items: commandDepsQuery.data?.items ?? [],
+      today,
+      mktRate: commandDateRateQuery.data || marketRate.rate,
+      lastRates: commandDepsQuery.data?.lastRates,
+    })
+  }, [backDateKey, commandDateRateQuery.data, commandPreview, commandDepsQuery.data, effectiveCommandInput, marketRate.rate, pathname, today])
+  // Running total for a multi-line bill session — parsed with the exact same
+  // parser the submit uses, so the number can never drift from what is applied.
+  const billSessionTotal = useMemo(() => {
+    if (!billSession || billSession.lines.length === 0) return null
+    const body = [billSession.customer.name, ...billSession.lines, ...billSession.modifiers].join(' ')
+    const parsed = parseContextCommand(`b ${body}`, 'bill', {
+      customers: commandDepsQuery.data?.customers ?? [],
+      items: commandDepsQuery.data?.items ?? [],
+      today,
+      mktRate: marketRate.rate,
+      lastRates: commandDepsQuery.data?.lastRates,
+    })
+    if (!parsed.ok || parsed.command.kind !== 'bill' || parsed.command.items.length === 0) return null
+    const summary = buildCommandBillSummary({
+      items: parsed.command.items,
+      transport: parsed.command.transport,
+      gstRate: parsed.command.gstRate,
+      gstAmount: parsed.command.gstAmount,
+      previousBalance: commandDepsQuery.data?.customerBalances[parsed.command.customer.id] ?? 0,
+    })
+    return { billTotal: summary.grandTotal, amountDue: summary.amountDue }
+  }, [billSession, commandDepsQuery.data, marketRate.rate, today])
   const commandDraft = useMemo(
     () =>
       buildCommandDraft(effectiveCommandInput, inferCommandKind(pathname), {
@@ -494,8 +545,8 @@ export function AppShell() {
       setCommandError('Type command details after the prefix.')
       return
     }
-    if (commandPreview && !commandPreview.ok) {
-      setCommandError(commandPreview.error)
+    if (commandPreviewResolved && !commandPreviewResolved.ok) {
+      setCommandError(commandPreviewResolved.error)
       return
     }
     setCommandError('')
@@ -745,7 +796,7 @@ export function AppShell() {
           <div className="flex h-dvh w-full max-w-6xl flex-col overflow-hidden rounded-none border border-slate-200 bg-white shadow-2xl sm:h-auto sm:max-h-[84dvh] sm:rounded-xl" onMouseDown={(event) => event.stopPropagation()}>
             <div className="border-b border-slate-100 p-3">
               <CommandVerificationPills
-                preview={commandPreview}
+                preview={commandPreviewResolved}
                 marketRate={marketRate.rate}
                 marketRateDate={marketRate.rateDate}
                 customerBookSelections={commandDepsQuery.data?.customerBookSelections ?? {}}
@@ -826,12 +877,13 @@ export function AppShell() {
                   <span className="ml-auto text-xs font-medium text-slate-400">Review before opening</span>
                 </div>
                 <CommandLivePreview
-                  preview={commandPreview}
+                  preview={commandPreviewResolved}
                   draft={commandDraft}
                   isLoading={commandDepsQuery.isFetching}
                   billSession={billSession}
                   mode={commandMode}
                   input={commandInput}
+                  sessionTotal={billSessionTotal}
                   customerBalances={commandDepsQuery.data?.customerBalances ?? {}}
                   customerBookSelections={commandDepsQuery.data?.customerBookSelections ?? {}}
                   marketRate={marketRate.rate}
@@ -931,7 +983,15 @@ function CommandVerificationPills({ preview, marketRate, marketRateDate, custome
   ]
 
   let pills = emptyPills
-  if (preview?.ok && preview.command.kind === 'bill') {
+  if (preview?.ok && preview.command.kind === 'bill' && preview.command.partyOnly) {
+    const command = preview.command
+    pills = [
+      { key: 'mode', label: 'Bill', tone: 'blue', active: true },
+      { key: 'buyer', label: `Buyer ${command.customer.name}`, tone: 'slate', active: true },
+      { key: 'date', label: `Date ${formatFullDate(command.date)}`, tone: 'slate', active: true },
+      { key: 'item', label: 'No items — opens form', tone: 'slate', active: true },
+    ]
+  } else if (preview?.ok && preview.command.kind === 'bill') {
     const command = preview.command
     const book = command.bookNo
       ? `${command.bookNo}/${command.billNo ?? 'next'}`
@@ -941,17 +1001,22 @@ function CommandVerificationPills({ preview, marketRate, marketRateDate, custome
     const payments = command.attachedPayments.reduce((sum, payment) => sum + payment.amount, 0)
     const commandMarketRate = command.mktRate || marketRate
     const marketDateLabel = commandMarketRate === marketRate && marketRateDate ? ` · ${formatFullDate(marketRateDate)}` : ''
+    const gstLabel = command.gstMode === 'manual'
+      ? `GST ₹${formatInrInteger(command.gstAmount)} (manual)`
+      : command.gstMode === 'percent18'
+        ? 'GST 18%'
+        : 'No GST'
     pills = [
       { key: 'mode', label: 'Bill', tone: 'blue', active: true },
       { key: 'buyer', label: `Buyer ${command.customer.name}`, tone: 'slate', active: true },
       { key: 'item', label: `Item ${command.items.map((line) => line.item.name).join(' + ')}`, tone: 'slate', active: true },
       { key: 'qty', label: `Qty ${command.items.map((line) => line.displayQty).join(' + ')}`, tone: 'slate', active: true },
-      { key: 'base', label: `Base ${formatInrInteger(command.defaultRate)}`, tone: 'slate', active: true },
-      { key: 'final', label: `Final ${formatInrInteger(command.rate)}`, tone: 'green', active: true },
+      { key: 'base', label: `Base ${command.items.map((line) => formatInrInteger(line.defaultRate)).join(' / ')}`, tone: 'slate', active: true },
+      { key: 'final', label: `Final ${command.items.map((line) => formatInrInteger(line.rate)).join(' / ')}`, tone: 'green', active: true },
       { key: 'mkt', label: `MKT ${formatInrInteger(commandMarketRate)}${marketDateLabel}`, tone: 'amber', active: true },
       { key: 'book', label: `Book ${book}`, tone: 'slate', active: true },
       { key: 'date', label: `Date ${formatFullDate(command.date)}`, tone: 'slate', active: true },
-      { key: 'gst', label: command.gstRate > 0 || command.gstAmount > 0 ? 'GST included' : 'No GST', tone: 'slate', active: true },
+      { key: 'gst', label: gstLabel, tone: 'slate', active: true },
       { key: 'payment', label: payments > 0 ? `Payment ${formatInrInteger(payments)}` : 'No payment', tone: payments > 0 ? 'green' : 'slate', active: true },
     ]
   } else if (preview?.ok && preview.command.kind === 'payment') {
@@ -1105,6 +1170,7 @@ function CommandLivePreview({
   billSession,
   mode,
   input,
+  sessionTotal,
   customerBalances,
   customerBookSelections,
   marketRate,
@@ -1115,6 +1181,7 @@ function CommandLivePreview({
   billSession: BillSession | null
   mode: CommandMode
   input: string
+  sessionTotal: { billTotal: number; amountDue: number } | null
   customerBalances: Record<string, number>
   customerBookSelections: Record<string, CommandBookSelection>
   marketRate: number
@@ -1143,6 +1210,8 @@ function CommandLivePreview({
           <PreviewLine label="Mode" value="Bill Session" />
           <PreviewLine label="Party" value={billSession.customer.name} />
           <PreviewLine label="Items" value={String(billSession.lines.length)} />
+          {sessionTotal && <PreviewLine label="Bill Total" value={formatInrInteger(sessionTotal.billTotal)} tone="font-semibold text-blue-800" />}
+          {sessionTotal && <PreviewLine label="Amount Due (with balance)" value={formatInrInteger(sessionTotal.amountDue)} tone="font-semibold text-slate-900" />}
           <PreviewLine label="Next" value="Type item line or Enter to review" />
         </div>
         {(billSession.lines.length > 0 || billSession.modifiers.length > 0) && (
@@ -1260,7 +1329,17 @@ function CommandLivePreview({
             <PreviewLine label="After Payment" value={formatInrInteger(paymentSummary?.balanceAfterPayment ?? 0)} />
           </>
         )}
-        {command.kind === 'bill' && billSummary && (
+        {command.kind === 'bill' && command.partyOnly && (
+          <>
+            <PreviewLine label="Mode" value="Bill — party only" />
+            <PreviewLine label="Party" value={command.customer.name} />
+            <PreviewLine label="Date" value={formatFullDate(command.date)} />
+            <div className="md:col-span-2 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-2 text-xs font-medium text-blue-800">
+              Enter opens New Bill with this party preselected. Add items there, or type: {command.customer.name} 2 spindle.
+            </div>
+          </>
+        )}
+        {command.kind === 'bill' && billSummary && !command.partyOnly && (
           <><CommandBillDocumentPreview
             command={command}
             bookBill={resolvedBookBill}
@@ -1338,34 +1417,33 @@ function CommandBillDocumentPreview({ command, bookBill, currentBalance, summary
     rate: line.rate,
     amount: line.qty * line.rate,
     bags: line.qty / (Number(line.item.bagWeight ?? 50) || 50),
-    type: line.item.type,
-    unit: line.item.unit,
-    bagWeight: line.item.bagWeight,
+    type: line.item.type ?? '',
+    unit: line.item.unit ?? '',
   }))
   const [bookNo, billNo] = bookBill.split('/').map((value) => Number(value) || 0)
+  // Same builder the New Bill page uses — palette preview and form preview
+  // share one math path (previous balance, credits, final total).
+  const printProps = buildBillPreviewProps({
+    bookNo,
+    billNo,
+    date: command.date,
+    customerName: command.customer.name,
+    mktRate: marketRate,
+    itemRows: printRows,
+    gstAmount: summary.gstAmount,
+    transport: command.transport,
+    gstRate: command.gstRate,
+    currentBillTotal: summary.grandTotal,
+    balance: { previousBalanceDate: 'Opening', previousBalanceAmount: currentBalance, credits: [] },
+    quickPayments: command.attachedPayments.map((payment, index) => ({ id: String(index), date: payment.date, amount: payment.amount })),
+    totalQty: command.items.reduce((sum, line) => sum + line.qty, 0),
+    totalBags: printRows.reduce((sum, line) => sum + line.bags, 0),
+    lrList: [],
+  })
   return (
     <div className="md:col-span-2 space-y-3 p-3 sm:p-4">
       <article className="mx-auto w-full max-w-[14cm] border border-slate-300 bg-white p-4 shadow-sm sm:p-6">
-        <BillPrintLayout
-          bookNo={bookNo}
-          billNo={billNo}
-          date={command.date}
-          customerName={command.customer.name}
-          mkt={marketRate}
-          itemRows={printRows}
-          gstAmount={summary.gstAmount}
-          transport={command.transport}
-          gstRate={command.gstRate}
-          currentBillTotal={summary.grandTotal}
-          previousBalance={currentBalance}
-          previousBillDate="Opening"
-          periodCreditEntries={command.attachedPayments.map((payment, index) => ({ id: String(index), date: payment.date, amount: payment.amount }))}
-          subtotal={summary.amountDue}
-          finalTotal={amountDue}
-          totalQty={command.items.reduce((sum, line) => sum + line.qty, 0)}
-          totalBags={printRows.reduce((sum, line) => sum + line.bags, 0)}
-          lrList={[]}
-        />
+        <BillPrintLayout {...printProps} />
       </article>
       <article className="hidden">
         <header className="border-b-2 border-slate-900 px-4 py-4 text-center">
@@ -1407,11 +1485,11 @@ function InvoiceTotalLine({ label, value, strong = false }: { label: string; val
   return <div className={`flex justify-between gap-4 border-b border-slate-100 py-1.5 ${strong ? 'font-bold text-slate-950' : 'text-slate-600'}`}><span>{label}</span><span className="tabular-nums">{formatInrInteger(value)}</span></div>
 }
 
-function PreviewLine({ label, value }: { label: string; value: string }) {
+function PreviewLine({ label, value, tone = '' }: { label: string; value: string; tone?: string }) {
   return (
     <div className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5">
       <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</span>
-      <span className="min-w-0 truncate font-medium text-slate-900">{value}</span>
+      <span className={`min-w-0 truncate font-medium text-slate-900 ${tone}`}>{value}</span>
     </div>
   )
 }

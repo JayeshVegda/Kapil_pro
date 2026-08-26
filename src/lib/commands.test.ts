@@ -232,4 +232,53 @@ describe('command parsing', () => {
       command: { kind: 'payment', customer: { id: 'n1' }, amount: 500, mode: 'Cash' },
     })
   })
+
+  it('maps sp7 and sp8 aliases to the right spindle variants', () => {
+    const withVariants = [
+      { id: 'i1', name: 'Spindle (7.5GM)', defaultRate: 40, type: 'gas', unit: 'kg', bagWeight: 50 },
+      { id: 'i2', name: 'Spindle (8.5GM)', defaultRate: 40, type: 'gas', unit: 'kg', bagWeight: 50 },
+    ]
+    const sp7 = parseBillCommand('sambhu sp7 2', customers, withVariants, '2026-05-20', 500)
+    const sp8 = parseBillCommand('sambhu sp8 2', customers, withVariants, '2026-05-20', 500)
+    expect(sp7.ok && sp7.command.items[0].item.id).toBe('i1')
+    expect(sp8.ok && sp8.command.items[0].item.id).toBe('i2')
+  })
+
+  it("always treats 'on <date>' as a date, never a book/bill ref", () => {
+    const parsed = parseBillCommand('sambhu spindle 2 on 23/8', customers, items, '2026-05-20', 500)
+    expect(parsed).toMatchObject({ ok: true, command: { bookNo: null, billNo: null, date: '2026-08-23' } })
+  })
+
+  it('uses the book pattern to tell bare n/n refs from dates', () => {
+    // Book 51 holds bills 51-100, so 51/75 is a valid ref.
+    const ref = parseBillCommand('sambhu spindle 2 51/75', customers, items, '2026-05-20', 500)
+    expect(ref).toMatchObject({ ok: true, command: { bookNo: 51, billNo: 75 } })
+
+    // Book 101 holds 101-150.
+    const ref101 = parseBillCommand('sambhu spindle 2 101/120', customers, items, '2026-05-20', 500)
+    expect(ref101).toMatchObject({ ok: true, command: { bookNo: 101, billNo: 120 } })
+
+    // Book 23 does not exist in the 1,51,101,... pattern -> read 23/8 as 23 August.
+    const date = parseBillCommand('sambhu spindle 2 23/8', customers, items, '2026-05-20', 500)
+    expect(date).toMatchObject({ ok: true, command: { bookNo: null, billNo: null, date: '2026-08-23' } })
+
+    // Bill outside the book range is not a ref either; 51/8 is no date either -> loud error.
+    const neither = parseBillCommand('sambhu spindle 2 51/8', customers, items, '2026-05-20', 500)
+    expect(neither.ok).toBe(false)
+  })
+
+  it('rejects two rates on the same line instead of silently overwriting', () => {
+    const parsed = parseBillCommand('sambhu spindle 2 645 700', customers, items, '2026-05-20', 500)
+    expect(parsed.ok).toBe(false)
+    if (parsed.ok) return
+    expect(parsed.error).toContain('Two rates')
+  })
+
+  it('parses a party-only command as preselect-only', () => {
+    const parsed = parseBillCommand('sambhu', customers, items, '2026-05-20', 500)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.command).toMatchObject({ kind: 'bill', partyOnly: true, customer: { id: 'c1' }, date: '2026-05-20' })
+    expect(parsed.command.items).toHaveLength(0)
+  })
 })

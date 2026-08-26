@@ -1,6 +1,7 @@
 import { getLocalIsoDate, isValidCalendarDay } from '@/lib/date'
 import { findBestNameMatch } from '@/lib/search'
 import { getAdminControlSettings } from '@/lib/admin-control'
+import { bookNoForBillNo, isBillNoInBook } from '@/domain/bill-books'
 import { calculateGasDefaultRateFromFinal, calculateGasFinalRate, isGasBillingItem } from '@/domain/billing-modes'
 
 export type CommandKind = 'bill' | 'payment' | 'print'
@@ -81,6 +82,8 @@ export type ParsedBillCommand = {
   kind: 'bill'
   customer: CommandCustomer
   items: ParsedBillLineCommand[]
+  /** True when the command named only a party — submit should open New Bill preselected, nothing else. */
+  partyOnly: boolean
   item: CommandItem
   qty: number
   displayQty: string
@@ -191,7 +194,37 @@ export function parseBillCommand(
   lastRates: Record<string, CommandLastRate> = {},
 ): CommandParseResult<ParsedBillCommand> {
   const tokens = input.trim().split(/\s+/).filter(Boolean)
-  if (tokens.length < 2) return { ok: false, error: 'Use: party [item qty [rate]]... [gst|cgst amount] [+t amount] [book n] [bill n] [date]' }
+  if (tokens.length < 2) {
+    // Party name only — still useful: open the bill form preselected.
+    const partyOnly = resolveBestPrefix(customers, input, customerSearchText)
+    if (partyOnly.record && input.trim().length > 0) {
+      return {
+        ok: true,
+        command: {
+          kind: 'bill',
+          customer: partyOnly.record,
+          items: [],
+          partyOnly: true,
+          item: fallbackItemFor(items),
+          qty: 0,
+          displayQty: '',
+          defaultRate: 0,
+          rate: 0,
+          manualRateEdited: false,
+          gstRate: 0,
+          gstAmount: 0,
+          gstMode: 'none',
+          transport: 0,
+          date: today,
+          bookNo: null,
+          billNo: null,
+          attachedPayments: [],
+          mktRate: 0,
+        },
+      }
+    }
+    return { ok: false, error: 'Use: party [item qty [rate]]... [gst|cgst amount] [+t amount] [book n] [bill n] [date]' }
+  }
   const { record: customer, usedWords } = resolveBestPrefix(customers, input, customerSearchText)
   if (!customer) return { ok: false, error: `Party not found in: ${input}` }
 
@@ -260,12 +293,6 @@ export function parseBillCommand(
       i += 1
       continue
     }
-    const ref = parseBillRefToken(token)
-    if (ref) {
-      bookNo = ref.bookNo
-      billNo = ref.billNo
-      continue
-    }
     if ((token === 'date' || token === 'on') && i + 1 < tokens.length) {
       const rawNext = tokens[i + 1].toLowerCase()
       const maybeDate = parseDateToken(rawNext, today)
@@ -279,6 +306,26 @@ export function parseBillCommand(
         return { ok: false, error: `Invalid date: ${rawNext}` }
       }
     }
+    // Bare n/n token: a real book/bill pair wins (books start at 1, 51, 101, ...);
+    // otherwise it is read as a day/month date. 'on <date>' above always means date.
+    const bareRef = parseBillRefToken(token)
+    if (bareRef && bookNoForBillNo(bareRef.bookNo) === bareRef.bookNo && isBillNoInBook(bareRef.bookNo, bareRef.billNo)) {
+      bookNo = bareRef.bookNo
+      billNo = bareRef.billNo
+      continue
+    }
+    if (bareRef) {
+      const maybeDate = parseDateToken(token, today)
+      if (isParsedDateToken(token, maybeDate)) {
+        date = maybeDate
+        continue
+      }
+      return { ok: false, error: `${token} is neither a valid book/bill pair nor a date.` }
+    }
+    if (token === 'date' || token === 'on') {
+      // Keyword with no usable next token — ignore here; the next loop pass treats it as text.
+      continue
+    }
     const maybeDate = parseDateToken(token, today)
     if (maybeDate !== token || /^\d{4}-\d{2}-\d{2}$/.test(maybeDate)) {
       date = maybeDate
@@ -289,6 +336,33 @@ export function parseBillCommand(
 
   const parsedItems = parseBillLineCommands(lineTokens, items, effectiveMktRate, gstMode, customer.id, lastRates)
   if (!parsedItems.ok) return parsedItems
+  if (parsedItems.items.length === 0) {
+    // Party-only command: open the bill form with the party preselected.
+    return {
+      ok: true,
+      command: {
+        kind: 'bill',
+        customer,
+        items: [],
+        partyOnly: true,
+        item: fallbackItemFor(items),
+        qty: 0,
+        displayQty: '',
+        defaultRate: 0,
+        rate: 0,
+        manualRateEdited: false,
+        gstRate,
+        gstAmount,
+        gstMode,
+        transport,
+        date,
+        bookNo,
+        billNo,
+        attachedPayments: [],
+        mktRate: effectiveMktRate,
+      },
+    }
+  }
   const first = parsedItems.items[0]
   return {
     ok: true,
@@ -296,6 +370,7 @@ export function parseBillCommand(
       kind: 'bill',
       customer,
       items: parsedItems.items,
+      partyOnly: false,
       item: first.item,
       qty: first.qty,
       displayQty: first.displayQty,
@@ -313,6 +388,11 @@ export function parseBillCommand(
       mktRate: effectiveMktRate,
     },
   }
+}
+
+/** Preferred default item for party-only commands (never used for math). */
+function fallbackItemFor(items: CommandItem[]): CommandItem {
+  return items[0] ?? { id: '', name: '', defaultRate: 0, type: '', unit: '', bagWeight: 0 }
 }
 
 function parseAttachedPaymentCommand(
@@ -485,7 +565,9 @@ function parseBillLineCommands(
   if (items.length === 0) return { ok: false, error: 'Item list is empty.' }
   const fallbackItem = findDefaultBillItem(items)
   if (!fallbackItem) return { ok: false, error: 'Item list is empty.' }
-  if (tokens.length === 0) return { ok: false, error: 'Add item quantity, for example spindle 2.' }
+  // No item tokens at all -> party-only command (form opens preselected, no rows).
+  if (tokens.length === 0) return { ok: true, items: [] }
+  if (tokens.every((token) => isLineSeparator(token))) return { ok: true, items: [] }
 
   const lines: ParsedBillLineCommand[] = []
   let i = 0
@@ -522,6 +604,10 @@ function parseBillLineCommands(
       if (isLineSeparator(token)) {
         i += 1
         break
+      }
+      const wantsRate = token === 'rate' || token === 'final' || token === 'f' || token === 'fr' || token === 'default' || token === 'dr' || token === 'base' || parseAmountToken(token) > 0
+      if (wantsRate && rateMode !== 'automatic') {
+        return { ok: false, error: `Two rates given for ${item.name} — keep one.` }
       }
       if (token === 'rate' || token === 'final' || token === 'f' || token === 'fr') {
         const next = parseAmountToken(tokens[i + 1] ?? '')
@@ -621,6 +707,8 @@ function findDefaultBillItem(items: CommandItem[]) {
 function findCommandItem(items: CommandItem[], query: string) {
   const alias = query.trim().toLowerCase()
   if (alias === 'sp') return items.find((item) => item.name.toLowerCase().startsWith('spindle')) ?? null
+  if (alias === 'sp7') return items.find((item) => item.name.toLowerCase().startsWith('spindle') && item.name.toLowerCase().includes('7.5')) ?? null
+  if (alias === 'sp8') return items.find((item) => item.name.toLowerCase().startsWith('spindle') && item.name.toLowerCase().includes('8.5')) ?? null
   if (alias === 'tp') return items.find((item) => item.name.toLowerCase().startsWith('tapper plug')) ?? null
   return findBestNameMatch(items, query, (row) => row.name)
 }
