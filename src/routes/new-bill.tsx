@@ -243,7 +243,6 @@ function NewBillPage() {
     } finally {
       draftHydratedRef.current = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount, before the autosave effect is armed
   }, [])
 
   // Autosave the working draft so leaving the page never loses entered data.
@@ -913,10 +912,6 @@ function NewBillPage() {
     setPendingCommandPreview(true)
   }
 
-  async function applyQuickEntry() {
-    await applyBillCommand(quickCommandInput)
-  }
-
   async function confirmAndSave() {
     try {
       await saveMutation.mutateAsync()
@@ -927,6 +922,20 @@ function NewBillPage() {
     }
   }
 
+  const applyBillCommandRef = useRef(applyBillCommand)
+  const openPreviewRef = useRef(openPreview)
+  const confirmAndSaveRef = useRef(confirmAndSave)
+
+  useEffect(() => {
+    applyBillCommandRef.current = applyBillCommand
+    openPreviewRef.current = openPreview
+    confirmAndSaveRef.current = confirmAndSave
+  })
+
+  async function applyQuickEntry() {
+    await applyBillCommand(quickCommandInput)
+  }
+
   useEffect(() => {
     if (customersQuery.isLoading || itemsQuery.isLoading) return
     const raw = window.sessionStorage.getItem(PENDING_COMMAND_STORAGE_KEY)
@@ -935,7 +944,7 @@ function NewBillPage() {
       const pending = JSON.parse(raw) as { kind?: string; body?: string; createdAt?: number }
       if (pending.kind !== 'bill' || !pending.body || Date.now() - Number(pending.createdAt ?? 0) > 60_000) return
       window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
-      void applyBillCommand(pending.body)
+      void applyBillCommandRef.current(pending.body)
     } catch {
       window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
     }
@@ -944,8 +953,8 @@ function NewBillPage() {
   useEffect(() => {
     if (!pendingCommandPreview) return
     setPendingCommandPreview(false)
-    void openPreview()
-  }, [pendingCommandPreview, customerId, rows, date, bookNo, billNo])
+    void openPreviewRef.current()
+  }, [pendingCommandPreview])
 
   useEffect(() => {
     if (!isPreviewOpen) return
@@ -953,12 +962,12 @@ function NewBillPage() {
       if (event.ctrlKey && event.key === 'Enter') {
         event.preventDefault()
         if (saveMutation.isPending) return
-        void confirmAndSave()
+        void confirmAndSaveRef.current()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isPreviewOpen, saveMutation.isPending, bookNo, billNo, customerId, date, rows, transport, gstRate, gstAmount])
+  }, [isPreviewOpen, saveMutation.isPending])
 
   function printPreview() {
     const previewElement = previewRef.current
@@ -1042,7 +1051,7 @@ function NewBillPage() {
         return { ...row, ...getSuggestedRowPatch(selected) }
       }),
     )
-  }, [mktRate, itemsQuery.data, gstMode, getSuggestedRowPatch])
+  }, [mktRate, itemsQuery.data, gstMode, getSuggestedRowPatch, getAutoRateFromDefault])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -1584,7 +1593,7 @@ function NewBillPage() {
 
       {isPreviewOpen && (
         <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-900/60 px-3 py-4 sm:px-4 sm:py-8">
-          <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-[820px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-4rem)]">
+          <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-[820px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-4rem)]" role="dialog" aria-modal="true" aria-label="Bill Preview & Confirmation">
             <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
               <div className="min-w-0">
                 <h3 className="truncate text-base font-semibold text-slate-900">Bill Preview & Confirmation</h3>
@@ -1639,7 +1648,7 @@ function NewBillPage() {
       )}
       {isQuickItemOpen && (
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl" role="dialog" aria-modal="true" aria-label="Add Item">
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
               <h3 className="text-base font-semibold text-slate-900">Add Item</h3>
               <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickItemOpen(false)}>
@@ -1709,7 +1718,7 @@ function NewBillPage() {
       )}
       {isQuickEntryOpen && (
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl">
+          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl" role="dialog" aria-modal="true" aria-label="Bill Command">
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
               <h3 className="text-base font-semibold text-slate-900">Bill Command (Alt + B)</h3>
               <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickEntryOpen(false)}>

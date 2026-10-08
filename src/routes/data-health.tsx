@@ -111,7 +111,7 @@ function DataHealthPage() {
       </section>
       {fixPreview && (
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl" role="dialog" aria-modal="true" aria-label="Review data fix">
             <div className="border-b border-slate-200 px-4 py-3">
               <h3 className="text-base font-semibold text-slate-900">{fixPreview.preview.title}</h3>
               <p className="mt-1 text-xs text-slate-500">Review before applying this data change.</p>

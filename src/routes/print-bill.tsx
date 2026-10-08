@@ -181,7 +181,7 @@ function PrintBillPage() {
     },
   })
 
-  const bills = printQuery.data?.bills ?? []
+  const bills = useMemo(() => printQuery.data?.bills ?? [], [printQuery.data?.bills])
 
   const filteredBills = useMemo(() => {
     const q = search.trim().toLowerCase()

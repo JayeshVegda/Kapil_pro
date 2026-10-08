@@ -20,7 +20,7 @@ function CastingBillPage() {
     queryFn: () => loadCastingSessions(),
   })
 
-  const sessions = sessionsQuery.data ?? []
+  const sessions = useMemo(() => sessionsQuery.data ?? [], [sessionsQuery.data])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()

@@ -155,7 +155,7 @@ function CastingOverviewPage() {
       .sort(([a], [b]) => a.localeCompare(b))
       .slice(-6)
       .map(([month, items]) => ({ month, ...summarizeSessions(items) }))
-  }, [sessionsQuery.data, monthStats])
+  }, [sessionsQuery.data])
 
   const sessionSignals = useMemo(() => {
     const usable = monthSessions.filter((session) => session.costPerKg > 0).sort((a, b) => a.costPerKg - b.costPerKg)

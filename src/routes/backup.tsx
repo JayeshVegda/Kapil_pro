@@ -36,11 +36,26 @@ function BackupPage() {
     downloadTextFile(filename, JSON.stringify(snapshot, null, 2), 'application/json;charset=utf-8')
   }
 
-  function exportCsvBundle() {
+  async function exportCsvBundle() {
     const snapshot = backupQuery.data
     if (!snapshot) return
     const files = snapshotToCsvFiles(snapshot)
-    files.forEach((file) => downloadTextFile(file.filename, file.content, 'text/csv;charset=utf-8'))
+    try {
+      const { default: JSZip } = await import('jszip')
+      const zip = new JSZip()
+      files.forEach((file) => zip.file(file.filename, file.content))
+      const content = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(content)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `billing-csv-bundle-${today}.zip`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      files.forEach((file) => downloadTextFile(file.filename, file.content, 'text/csv;charset=utf-8'))
+    }
   }
 
   async function validateFile(file: File | null) {

@@ -87,7 +87,7 @@ function CustomersPage() {
     queryKey: CUSTOMER_QUERY_KEY,
     queryFn: loadCustomersWithLedgerContext,
   })
-  const allRows = customersQuery.data ?? []
+  const allRows = useMemo(() => customersQuery.data ?? [], [customersQuery.data])
 
   const kpis = useMemo(() => {
     const active = allRows.filter((row) => row.customer.active).length

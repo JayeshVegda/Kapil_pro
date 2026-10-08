@@ -136,7 +136,7 @@ export function AppShell() {
   const quickSearchSections = useMemo(() => groupQuickSearchResults(quickSearchResults, expandedQuickSearchSections), [expandedQuickSearchSections, quickSearchResults])
   const visibleQuickSearchResults = useMemo(() => quickSearchSections.flatMap((section) => section.visibleResults), [quickSearchSections])
   const activeQuickSearchResult = visibleQuickSearchResults[activeQuickSearchIndex] ?? visibleQuickSearchResults[0]
-  const commandRegistry = useMemo(() => getCommandRegistry(), [adminSettings])
+  const commandRegistry = useMemo(() => getCommandRegistry(), [])
   const today = useMemo(() => getLocalIsoDate(), [])
   const moduleSettings = useModuleSettings()
   const { marketRate, refreshMarketRate } = useMarketRate(today)

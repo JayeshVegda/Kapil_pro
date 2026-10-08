@@ -201,7 +201,7 @@ function CastingLogPage() {
     return m
   }, [trashEntries])
 
-  const baseSessions = sessionsQuery.data ?? []
+  const baseSessions = useMemo(() => sessionsQuery.data ?? [], [sessionsQuery.data])
 
   const filteredSessions = useMemo(() => {
     return baseSessions

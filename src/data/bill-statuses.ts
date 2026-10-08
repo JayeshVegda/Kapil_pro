@@ -56,11 +56,19 @@ export async function recalculateAndPersistBillStatusesForCustomer(customerId: s
 
   if (updates.length === 0) return
 
-  await Promise.all(
-    updates.map((entry) =>
-      pb.collection('bills').update(entry.id, {
+  if (typeof pb.createBatch === 'function') {
+    const batch = pb.createBatch()
+    for (const entry of updates) {
+      batch.collection('bills').update(entry.id, {
         status: entry.nextStatus,
-      }),
-    ),
-  )
+      })
+    }
+    await batch.send()
+  } else {
+    for (const entry of updates) {
+      await pb.collection('bills').update(entry.id, {
+        status: entry.nextStatus,
+      })
+    }
+  }
 }

@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDownRight, CheckCircle2, IndianRupee, Landmark, ReceiptText } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
@@ -299,7 +299,7 @@ function NewPaymentPage() {
     setIsCommandConfirmOpen(false)
   }
 
-  function applyPaymentCommand(input: string) {
+  const applyPaymentCommand = useCallback((input: string) => {
     const parsed = parseContextCommand(input, 'payment', {
       customers: customersQuery.data ?? [],
       today,
@@ -321,20 +321,20 @@ function NewPaymentPage() {
     setIsQuickPaymentOpen(false)
     setQuickPaymentCommand('')
     setIsCommandConfirmOpen(true)
-  }
+  }, [customersQuery.data, today])
 
   function applyQuickPaymentCommand() {
     applyPaymentCommand(quickPaymentCommand)
   }
 
-  async function confirmCommandPayment() {
+  const confirmCommandPayment = useCallback(async () => {
     try {
       await saveMutation.mutateAsync()
       setIsCommandConfirmOpen(false)
     } catch {
       // saveMutation sets visible status text.
     }
-  }
+  }, [saveMutation])
 
   useEffect(() => {
     if (customersQuery.isLoading) return
@@ -348,7 +348,7 @@ function NewPaymentPage() {
     } catch {
       window.sessionStorage.removeItem(PENDING_COMMAND_STORAGE_KEY)
     }
-  }, [customersQuery.isLoading, customersQuery.data])
+  }, [customersQuery.isLoading, applyPaymentCommand])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -372,7 +372,7 @@ function NewPaymentPage() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isCommandConfirmOpen, customerId, amount, mode, date, note, saveMutation.isPending])
+  }, [isCommandConfirmOpen, saveMutation.isPending, confirmCommandPayment])
 
   return (
     <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
@@ -616,7 +616,7 @@ function NewPaymentPage() {
 
       {isQuickPaymentOpen && (
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl">
+          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl" role="dialog" aria-modal="true" aria-label="Payment Command">
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
               <h3 className="text-base font-semibold text-slate-900">Payment Command (Alt + B)</h3>
               <button type="button" className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100" onClick={() => setIsQuickPaymentOpen(false)}>
@@ -652,7 +652,7 @@ function NewPaymentPage() {
       )}
       {isCommandConfirmOpen && (
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-2xl" role="dialog" aria-modal="true" aria-label="Confirm Payment">
             <div className="border-b border-slate-200 px-4 py-3">
               <h3 className="text-base font-semibold text-slate-900">Confirm Payment</h3>
               <p className="mt-1 text-xs text-slate-500">Ctrl+Enter confirms save</p>

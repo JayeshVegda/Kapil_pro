@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { loadCastingSessions } from '@/data/casting'
+import { getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/casting/materials')({
@@ -16,7 +17,7 @@ function CastingMaterialsPage() {
     queryFn: () => loadCastingSessions(),
   })
 
-  const currentMonth = useMemo(() => new Date().toISOString().slice(0, 7), [])
+  const currentMonth = useMemo(() => getLocalIsoDate().slice(0, 7), [])
   const previousMonth = useMemo(() => {
     const [y, m] = currentMonth.split('-').map(Number)
     const d = new Date((y ?? 2000), (m ?? 1) - 2, 1)
