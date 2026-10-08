@@ -2,7 +2,16 @@
 @import "./components/billing/bill-print.css";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+
+/* Self-hosted Geist (preloaded from index.html) — replaces the fontsource CSS
+   import so the woff2 starts downloading with the HTML instead of after CSS parse. */
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/geist-variable.woff2") format("woff2");
+}
 
 @custom-variant dark (&:is(.dark *));
 

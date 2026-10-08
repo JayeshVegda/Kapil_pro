@@ -13,7 +13,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
-import { pb } from '@/data/pocketbase'
+import { loadItems } from '@/data/items'
 import {
   defaultAdminControlSettings,
   getAdminControlSettings,
@@ -88,15 +88,11 @@ function SettingsPage() {
 }
 
 function BillEntryCard({ defaultItemName, onChange }: { defaultItemName: string; onChange: (name: string) => void }) {
-  const itemsQuery = useQuery({
-    queryKey: ['items-options'],
-    queryFn: async () => {
-      const records = await pb.collection('items').getFullList({ sort: 'name', fields: 'id,name' })
-      return records.map((row) => String(row.name ?? '')).filter(Boolean)
-    },
-    staleTime: 60_000,
-  })
-  const known = itemsQuery.data ?? []
+  // Same key AND queryFn as control-room: ['items-options'] caches full item
+  // records, so consumers must map to names (mixing shapes here once rendered
+  // an object as a React child — the infamous "object with keys" crash).
+  const itemsQuery = useQuery({ queryKey: ['items-options'], queryFn: loadItems })
+  const known = (itemsQuery.data ?? []).map((item) => item.name).filter(Boolean)
   const options = known.includes(defaultItemName) || !defaultItemName ? known : [defaultItemName, ...known]
 
   return (

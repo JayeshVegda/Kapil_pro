@@ -11,9 +11,11 @@ function boundsForMonthKey(monthKey: string) {
     throw new Error('Invalid month key')
   }
   const start = `${yearRaw}-${pad2(monthRaw)}-01`
+  const nextDate = new Date(yearRaw, monthRaw, 1)
+  const nextStart = `${nextDate.getFullYear()}-${pad2(nextDate.getMonth() + 1)}-01`
   const lastDay = new Date(yearRaw, monthRaw, 0).getDate()
   const end = `${yearRaw}-${pad2(monthRaw)}-${pad2(lastDay)}`
-  return { start, end }
+  return { start, nextStart, end }
 }
 
 function shiftMonthKey(monthKey: string, delta: number): string {
@@ -29,15 +31,15 @@ function shiftMonthKey(monthKey: string, delta: number): string {
  * Bill items are fetched in small chunks to avoid huge single responses and long filter URLs.
  */
 export async function loadCalendarMonthData(monthKey: string) {
-  const { start, end } = boundsForMonthKey(monthKey)
+  const { start, nextStart, end } = boundsForMonthKey(monthKey)
   const prevStartEnd = boundsForMonthKey(shiftMonthKey(monthKey, -1))
 
   /** Same read access pattern as bills/payments; avoids failing the whole month if rules differ. */
-  const listRatesBetween = async (rangeStart: string, rangeEnd: string): Promise<PBRecord[]> => {
+  const listRatesBetween = async (rangeStart: string, rangeNextStart: string): Promise<PBRecord[]> => {
     try {
       return (await pb.collection('brass_rates').getFullList({
         sort: 'date',
-        filter: `date >= "${rangeStart}" && date <= "${rangeEnd}"`,
+        filter: `date >= "${rangeStart}" && date < "${rangeNextStart}"`,
       })) as PBRecord[]
     } catch {
       return []
@@ -47,20 +49,20 @@ export async function loadCalendarMonthData(monthKey: string) {
   const [billsRaw, prevBillsRaw, paymentsRaw, customersRaw, itemsRaw, ratesRaw, prevRatesRaw] = await Promise.all([
     pb.collection('bills').getFullList({
       sort: 'date,bill_no',
-      filter: `date >= "${start}" && date <= "${end}"`,
+      filter: `date >= "${start}" && date < "${nextStart}"`,
     }) as Promise<PBRecord[]>,
     pb.collection('bills').getFullList({
       sort: 'date,bill_no',
-      filter: `date >= "${prevStartEnd.start}" && date <= "${prevStartEnd.end}"`,
+      filter: `date >= "${prevStartEnd.start}" && date < "${prevStartEnd.nextStart}"`,
     }) as Promise<PBRecord[]>,
     pb.collection('payments').getFullList({
       sort: 'date',
-      filter: `date >= "${start}" && date <= "${end}"`,
+      filter: `date >= "${start}" && date < "${nextStart}"`,
     }) as Promise<PBRecord[]>,
     pb.collection('customers').getFullList({ sort: 'company_name,name' }) as Promise<PBRecord[]>,
     pb.collection('items').getFullList({ sort: 'name' }) as Promise<PBRecord[]>,
-    listRatesBetween(start, end),
-    listRatesBetween(prevStartEnd.start, prevStartEnd.end),
+    listRatesBetween(start, nextStart),
+    listRatesBetween(prevStartEnd.start, prevStartEnd.nextStart),
   ])
 
   const loadBillItems = async (bills: PBRecord[]) => {

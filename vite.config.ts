@@ -110,4 +110,18 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Stable vendor chunks: these rarely change between deploys, so the
+        // browser keeps using its cached copy and cold starts parse less.
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('@tanstack') || /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'vendor-react'
+          if (id.includes('pocketbase') || id.includes('idb-keyval')) return 'vendor-data'
+          return undefined
+        },
+      },
+    },
+  },
 })

@@ -25,7 +25,7 @@ import {
   type BillingGstMode,
 } from '@/domain/billing-modes'
 import { computeNetBalance } from '@/domain/financial-math'
-import { partitionPaymentsForNextBill } from '@/domain/bill-preview'
+import { isPaymentAttachedToPriorBill, partitionPaymentsForNextBill } from '@/domain/bill-preview'
 import { buildBillPreviewProps } from '@/lib/bill-preview-props'
 import { loadSavedMarketRateForDate, useMarketRate } from '@/domain/market-rate'
 import { PENDING_COMMAND_STORAGE_KEY, parseContextCommand } from '@/lib/commands'
@@ -366,8 +366,21 @@ function NewBillPage() {
           return String(a.id).localeCompare(String(b.id))
         })
       const billItems = billItemsRaw as PBRecord[]
+      const openingBalance = num(customerRecord.opening_balance)
+
+      const priorBills = bills.filter((bill) => datePart(bill.date) < date)
+      const priorBillRefs = new Set(
+        priorBills.map((bill) => String(bill.bill_ref ?? `${num(bill.book_no)}/${num(bill.bill_no)}`)),
+      )
+      const allCustomerBillRefs = new Set(
+        bills.map((bill) => String(bill.bill_ref ?? `${num(bill.book_no)}/${num(bill.bill_no)}`)),
+      )
       const payments = (paymentsRaw as PBRecord[])
-        .filter((payment) => datePart(payment.date) <= date)
+        .filter((payment) => {
+          const pDate = datePart(payment.date)
+          if (pDate <= date) return true
+          return isPaymentAttachedToPriorBill(String(payment.note ?? ''), priorBillRefs)
+        })
         .map((payment) => ({
           date: datePart(payment.date),
           amount: num(payment.amount),
@@ -375,9 +388,7 @@ function NewBillPage() {
           id: String(payment.id),
           note: String(payment.note ?? ''),
         }))
-      const openingBalance = num(customerRecord.opening_balance)
 
-      const priorBills = bills.filter((bill) => datePart(bill.date) < date)
       if (priorBills.length === 0) {
         const openingCredits = payments.filter((entry) => entry.amount > 0)
         return { previousBalanceDate: 'Opening', previousBalanceAmount: openingBalance, credits: openingCredits }
@@ -392,9 +403,6 @@ function NewBillPage() {
       const lastBill = priorBills[priorBills.length - 1]
       const lastBillDate = datePart(lastBill.date)
       const lastBillCreatedTs = toTs(lastBill.created)
-      const priorBillRefs = new Set(
-        priorBills.map((bill) => String(bill.bill_ref ?? `${num(bill.book_no)}/${num(bill.bill_no)}`)),
-      )
       const billTotals = priorBills.map((bill) => ({
         date: datePart(bill.date),
         total: calculateBillTotalFromBase(itemTotalByBill.get(bill.id) ?? 0, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount)),
@@ -406,6 +414,7 @@ function NewBillPage() {
         cutoffCreatedTs: lastBillCreatedTs,
         currentBillDate: date,
         priorBillRefs,
+        allCustomerBillRefs,
       })
       const paidUntilLastBill = partitionedPayments.previousBalancePayments
         .reduce((sum, entry) => sum + entry.amount, 0)

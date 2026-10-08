@@ -161,13 +161,20 @@ export async function saveBillWithItems(input: SaveBillInput & { payments?: Quic
     }
     for (const payment of input.payments ?? []) {
       if (!(payment.amount > 0)) continue
+      const baseNote = `Quick payment with bill ${input.bookNo}/${input.billNo}`
+      const trimmedNote = payment.note?.trim() ?? ''
+      const fullNote = !trimmedNote
+        ? baseNote
+        : trimmedNote.toLowerCase().includes('quick payment with bill')
+          ? trimmedNote
+          : `${baseNote} - ${trimmedNote}`
       batch.collection('payments').create({
         customer: input.customerId,
         customer_name: input.customerName,
         date: payment.date,
         amount: payment.amount,
         mode: payment.mode,
-        note: payment.note || `Quick payment with bill ${input.bookNo}/${input.billNo}`,
+        note: fullNote,
       })
     }
     try {

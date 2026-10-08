@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM } from '@/components/billing/bill-print-layout'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
+import { getAttachedPaymentBillRef } from '@/domain/bill-preview'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatFullDate } from '@/lib/date'
@@ -34,6 +35,8 @@ type BillOption = {
   billNo: number
   bookNo: number
   date: string
+  created: string
+  createdTs: number
   customerId: string
   customerName: string
   printCustomerName: string
@@ -82,6 +85,8 @@ function mapBillOption(
     .map((entry) => `${entry.itemName} ${Math.round(entry.qty)}kg`)
     .join(', ')
   const moreCount = itemRows.length > 2 ? ` +${itemRows.length - 2}` : ''
+  const created = String(row.created ?? '')
+  const createdTs = new Date(created).getTime() || 0
 
   return {
     id: row.id,
@@ -89,6 +94,8 @@ function mapBillOption(
     billNo: num(row.bill_no),
     bookNo: num(row.book_no),
     date: datePart(row.date),
+    created,
+    createdTs,
     customerId: String(row.customer ?? ''),
     customerName: displayName,
     printCustomerName,
@@ -158,9 +165,13 @@ function PrintBillPage() {
         }
       })
       const payments = (paymentsRaw as PBRecord[]).map((row) => ({
+        id: String(row.id ?? ''),
         customerId: String(row.customer ?? ''),
         date: datePart(row.date),
+        created: String(row.created ?? ''),
+        createdTs: new Date(String(row.created ?? '')).getTime() || 0,
         amount: num(row.amount),
+        note: String(row.note ?? ''),
       }))
       const customerOpeningById = new Map(
         (customersRaw as PBRecord[]).map((row) => [row.id, num(row.opening_balance)]),
@@ -220,36 +231,76 @@ function PrintBillPage() {
     const gstAmount = selectedBill.gstAmount > 0 ? selectedBill.gstAmount : (itemBaseTotal * selectedBill.gstRate) / 100
     const currentBillTotal = itemBaseTotal + gstAmount + selectedBill.transport
 
+    const priorBills = allCustomerBills.slice(0, currentIdx)
+    const priorBillRefs = new Set(priorBills.map((bill) => bill.billRef))
+    const allCustomerBillRefs = new Set(printQuery.data.bills.filter((b) => b.customerId === selectedBill.customerId).map((b) => b.billRef))
+
     let previousBalance = printQuery.data.customerOpeningById.get(selectedBill.customerId) ?? 0
-    for (let i = 0; i < currentIdx; i += 1) {
-      const bill = allCustomerBills[i]
+    for (const bill of priorBills) {
       const rows = printQuery.data.billItems.filter((item) => item.billId === bill.id)
       const base = rows.reduce((sum, row) => sum + row.amount, 0)
       previousBalance += calculateBillTotalFromBase(base, bill.transport, bill.gstRate, bill.gstAmount)
     }
 
     const previousBillDate = currentIdx > 0 ? allCustomerBills[currentIdx - 1].date : 'Opening'
+    const priorBill = currentIdx > 0 ? allCustomerBills[currentIdx - 1] : null
+    const priorCutoffDate = priorBill ? priorBill.date : ''
+    const priorCutoffCreatedTs = priorBill ? priorBill.createdTs : 0
+    const selectedBillCreatedTs = selectedBill.createdTs
+
     const paidBeforePrevious =
       currentIdx > 0
         ? printQuery.data.payments
-            .filter(
-              (entry) =>
-                entry.customerId === selectedBill.customerId &&
-                isOnOrBeforeDay(entry.date, allCustomerBills[currentIdx - 1].date),
-            )
+            .filter((entry) => {
+              if (entry.customerId !== selectedBill.customerId) return false
+              if (entry.amount <= 0) return false
+              const attachedRef = getAttachedPaymentBillRef(entry.note)
+              const isAttachedToRecordedBill = attachedRef !== null && allCustomerBillRefs.has(attachedRef)
+
+              if (isAttachedToRecordedBill) {
+                return priorBillRefs.has(attachedRef)
+              }
+
+              // Independent payment:
+              if (entry.date < priorCutoffDate) return true
+              if (entry.date === priorCutoffDate) {
+                if (entry.createdTs <= 0 || priorCutoffCreatedTs <= 0) return true
+                return entry.createdTs <= priorCutoffCreatedTs
+              }
+              return false
+            })
             .reduce((sum, entry) => sum + entry.amount, 0)
         : 0
     previousBalance -= paidBeforePrevious
 
-    const previousCutoffDate = currentIdx > 0 ? allCustomerBills[currentIdx - 1].date : ''
     const periodCreditEntries = printQuery.data.payments
       .filter((entry) => {
         if (entry.customerId !== selectedBill.customerId) return false
-        if (!isOnOrBeforeDay(entry.date, selectedBill.date)) return false
-        if (!previousCutoffDate) return true
-        return !isOnOrBeforeDay(entry.date, previousCutoffDate)
+        if (entry.amount <= 0) return false
+        const attachedRef = getAttachedPaymentBillRef(entry.note)
+        const isAttachedToRecordedBill = attachedRef !== null && allCustomerBillRefs.has(attachedRef)
+
+        if (isAttachedToRecordedBill) {
+          return attachedRef === selectedBill.billRef
+        }
+
+        // Independent payment:
+        // Must be after priorCutoff
+        if (priorBill) {
+          if (entry.date < priorCutoffDate) return false
+          if (entry.date === priorCutoffDate && entry.createdTs > 0 && priorCutoffCreatedTs > 0 && entry.createdTs <= priorCutoffCreatedTs) {
+            return false
+          }
+        }
+        // Must be on or before selectedBill
+        if (entry.date > selectedBill.date) return false
+        if (entry.date === selectedBill.date && entry.createdTs > 0 && selectedBillCreatedTs > 0 && entry.createdTs > selectedBillCreatedTs) {
+          return false
+        }
+
+        return true
       })
-      .sort((a, b) => a.date.localeCompare(b.date))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.createdTs - b.createdTs)
     const periodCredits = periodCreditEntries.reduce((sum, entry) => sum + entry.amount, 0)
 
     const subtotal = previousBalance + currentBillTotal
