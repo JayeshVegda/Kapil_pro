@@ -1,88 +1,113 @@
-# Kapil Pro Agent Workflow
+# AGENTS.md — Kapil Pro Preview & Development Environment
 
-## Windows Local-Primary Authority
+> **Context for AI Agents**: This workspace (`C:\Site_imp\kapil-preview`) is the **isolated development and preview environment** for Kapil Pro. All experiments, new features, redesigns, and bug fixes MUST take place here on the `dev` branch. The official live production environment (`C:\Site_imp\kapil-windows\JayeshVegda-Kapil_pro-49c561a`) must NEVER be modified directly.
 
-This `kapil-windows` branch is the Windows-PC-only edition. Read `WINDOWS-SETUP.md`,
-`DATABASE-RUNBOOK.md`, and `TROUBLESHOOTING.md` before changing runtime or database
-behavior.
+---
 
-- The sole writable database is `runtime/data/data.db` on the Windows PC.
-- PocketBase listens only on `127.0.0.1:8090`; Caddy listens only on `127.0.0.1:4174`.
-- Never change either listener to `0.0.0.0` or a LAN address unless the owner explicitly requests a new security design.
-- Never commit anything under `runtime/`, any `.env`, database, backup, executable, log, or credential.
-- Before database-affecting work, run `windows/health-check.ps1` and `windows/backup-kapil.ps1`.
-- Never copy, replace, compress, or edit an active SQLite database. Use the supplied stop/backup/restore scripts.
-- Never create bidirectional synchronization or a second writable database.
-- Do not use VPS deployment scripts on this branch. Windows operations belong in `windows/`.
-- Run `npm run verify` after application changes and inspect `git status --ignored` before committing.
+## 1. Environment Architecture & Ports
 
-The safe operator commands are:
+| Environment | Purpose | UI Port | PocketBase Backend Port | Database Location |
+| :--- | :--- | :--- | :--- | :--- |
+| **Preview (THIS WORKSPACE)** | Development, experiments, testing | `http://127.0.0.1:5173` | `http://127.0.0.1:8091` | `runtime/data/` (Sandbox copy) |
+| **Production (OFF-LIMITS)** | Live business operations & accounting | `http://127.0.0.1:4174` | `http://127.0.0.1:8090` | Production `runtime/data/data.db` |
 
+### Critical Safety Rules:
+1. **NEVER modify files in `C:\Site_imp\kapil-windows\` directly.** All changes belong in this repository first.
+2. **NEVER point preview services or test scripts to port `8090` or `4174`.**
+3. **NEVER commit anything under `runtime/`, `*.db`, `*.db-wal`, `*.log`, or `.env`.** Check `git status --ignored` before committing.
+4. **Google Sheets sync is disabled in preview.** Never trigger live spreadsheet sync from this workspace.
+
+---
+
+## 2. Essential Commands
+
+### Development & Sandbox Launch:
 ```powershell
-.\windows\start-kapil.ps1
-.\windows\stop-kapil.ps1
-.\windows\health-check.ps1
-.\windows\backup-kapil.ps1
-.\windows\restore-kapil.ps1 -Archive <verified-zip>
+# Start Sandbox PocketBase (port 8091) + Vite Dev Server (port 5173):
+.\start-preview.ps1
+
+# Stop Sandbox PocketBase when done:
+.\stop-preview.ps1
+
+# Frontend only:
+npm run dev
 ```
 
-Use the installed skills as part of normal work in this project. Pick the smallest relevant set for the task, read each selected skill before acting, and mention which skills are being used.
+### Verification & Testing (Run before finishing tasks):
+```powershell
+# Regenerate TanStack router routes:
+npm run router:generate
 
-## Project Direction
+# Typecheck:
+npm run typecheck
 
-Kapil Pro should move toward a modern, practical, simple business interface:
+# Run test suite:
+npm run test
 
-- clear hierarchy before decoration
-- data visualizations that explain decisions, not just charts
-- compact operational screens for fast entry
-- readable financial numbers with consistent labels and drill-down paths
-- mobile layouts that prioritize the most common actions
+# Run a single test file:
+npx vitest run src/domain/bill-preview.test.ts
 
-## Theme Preference
+# Production build check:
+npm run build
 
-Prefer a modern, practical, simple Kapil Pro theme over dramatic redesigns:
+# Comprehensive verification pass:
+npm run verify
+```
 
-- use the existing slate/blue business-tool identity as the default
-- keep surfaces calm: white panels, slate dividers, soft blue highlights, restrained green/red/amber status colors
-- avoid black feature blocks, heavy gradients, loud shadows, decorative cards, or finance-terminal styling unless explicitly requested
-- make improvements feel integrated with the current app, not like a separate dashboard template
-- optimize for fast operator scanning: compact spacing, aligned numbers, tabular figures, clear labels, and minimal visual noise
+---
 
-## Skill Routing
+## 3. Technology Stack & Directory Structure
 
-- `using-superpowers`: general skill-discovery discipline at the start of work.
-- `brainstorming`: required before creative product work, new features, behavior changes, or page redesigns.
-- `frontend-design`: visual direction, typography, layout personality, and avoiding generic dashboard UI.
-- `vercel-react-best-practices`: React, TanStack-style UI state, component structure, performance, or frontend architecture changes.
-- `webapp-testing`: browser testing, screenshots, responsive checks, accessibility smoke tests, and end-to-end user flows.
-- `tdd`: financial math, ledger logic, parser behavior, allocation, status engines, and risky domain changes.
-- `qa`: release checks, regression sweeps, acceptance criteria, and manual verification plans.
-- `improve-codebase-architecture`: larger refactors, page decomposition, shared domain/data boundaries, and preparing new modules.
-- `architecture-review`: evaluating stack additions such as chart libraries, reporting tools, backend services, or deployment changes.
-- `shadcn`: shared UI primitives, Tailwind component patterns, forms, dialogs, tables, buttons, tabs, and design-system consistency.
-- `xlsx`: Excel import/export, workbook generation, CSV/XLSX report work, and spreadsheet compatibility.
-- `pdf`: report PDFs, bill PDFs, statement PDFs, print/export formatting, and PDF inspection.
-- `docx`: Word document generation or parsing when business documents are involved.
-- `handoff`: long-running work, major redesigns, or sessions that need continuity for another agent.
-- `web-design-guidelines`: UI/UX review, accessibility, responsive design, and visual quality audits.
-- `kibana-dashboards`: dashboard thinking for observability-style panels, filtering, drill-down, and operational data views.
-- `data-visualizer`: chart and visualization planning when turning raw business data into understandable views.
-- `chart-designer`: chart selection, dashboard layout, chart configuration, and visual encoding for business metrics.
+* **Frontend**: React 19 + TypeScript + Vite.
+* **Styling**: Tailwind CSS v4 (`@tailwindcss/vite`).
+* **Routing**: `@tanstack/react-router` (code-based file routing in `src/routes/`, autogenerated route tree in `src/routeTree.gen.ts`).
+* **State & Data Fetching**: `@tanstack/react-query` + PocketBase JS SDK (`pocketbase`).
+* **Backend**: Native PocketBase running locally on port `8091`.
+* **Testing**: Vitest (`vitest`).
 
-## Skills Not Used By Default
+### Directory Boundaries:
+* `src/domain/`: **Pure business logic**. Financial calculations, outstanding balance formulas, bill item aggregation, taxes, and status engines. **Keep pure with zero React/PocketBase dependencies.** All math must have unit tests in `src/domain/*.test.ts`.
+* `src/data/`: **Data access layer**. PocketBase queries, record transforms, and mutation functions.
+* `src/routes/`: **Page orchestration & UI**. TanStack Router components. Keep UI lean; delegate complex business calculations to `src/domain` and data calls to `src/data`.
+* `src/components/`: Reusable UI elements, modals, dialogs, forms, layout shells.
+* `pb_migrations/`: PocketBase schema migration files tracked in Git.
+* `runtime/`: Git-ignored local sandbox runtime (PocketBase executable, test database, logs).
 
-The following installed skills are available globally but should not be part of the normal Kapil Pro workflow unless a task explicitly needs them:
+---
 
-- `homelab-network-setup`, `homelab-network-readiness`: only for network/router/VPN/DNS work.
-- `azure-enterprise-infra-planner`: only for Azure infrastructure planning.
-- `crm-builder`: only if building a separate CRM-style domain from a domain brief.
-- `trading-analysis`, `trading-signal`: only for market/trading requests, not Kapil billing UI.
-- `find-skills`: only when discovering or installing more skills.
+## 4. Design & UX Guardrails
 
-## Kapil-Specific Guardrails
+Kapil Pro is a high-speed business accounting and trading application. Follow these UI principles:
 
-- Keep calculations in `src/domain`, PocketBase reads/writes in `src/data`, and page orchestration in `src/routes`.
-- Do not duplicate outstanding balance, bill status, or payment allocation logic inside route components.
-- Preserve financial ordering: business date, then created timestamp, then record id.
-- Prefer incremental redesigns of high-value pages first: Dashboard, Party Ledger, Company Report, Calendar, and Casting.
-- For visualization work, keep audit tables available but lead with summary, trend, risk, ranking, and drill-down views.
+* **Theme**: Slate/blue business utility theme. Clean white panels, slate borders (`border-slate-200`), subtle blue accents, and restrained green/red/amber status badges.
+* **Density & Ergonomics**:
+  * Prioritize keyboard navigation and compact data density.
+  * Tabular figures (`font-mono` or `tabular-nums`) for currency and weight amounts.
+  * Clear numeric alignment: numbers right-aligned, labels left-aligned.
+* **Avoid**: Heavy gradients, dark terminal themes (unless dark mode requested), decorative fluff, or giant empty cards.
+
+---
+
+## 5. Promotion Workflow (Moving Preview Updates to Official Production)
+
+When you complete and test a feature in this preview environment:
+
+1. **Commit and Push on `dev`**:
+   ```powershell
+   git add <modified-files>
+   git commit -m "feat(module): description of changes"
+   git push origin dev
+   ```
+2. **Merge into `main`**:
+   ```powershell
+   git checkout main
+   git merge dev
+   git push origin main
+   git checkout dev
+   ```
+3. **Deploy to Production**:
+   In the official production repository (`C:\Site_imp\kapil-windows\JayeshVegda-Kapil_pro-49c561a`), execute:
+   ```powershell
+   .\windows\update-production.ps1
+   ```
+   *This automatically takes a pre-update database snapshot, pulls `main`, builds the frontend, and verifies health.*

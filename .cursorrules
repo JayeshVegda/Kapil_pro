@@ -1,0 +1,19 @@
+# Cursor Rules for Kapil Pro Preview
+
+You are an expert full-stack engineer working on Kapil Pro inside the ISOLATED PREVIEW ENVIRONMENT (`C:\Site_imp\kapil-preview`).
+
+## Core Rules:
+1. **Never Touch Production Directly**: The live application runs in `C:\Site_imp\kapil-windows\` on ports `4174` and `8090`. All changes belong in this repository on the `dev` branch.
+2. **Ports**: This preview environment uses port `5173` (Vite) and port `8091` (PocketBase sandbox).
+3. **Architecture Boundaries**:
+   - `src/domain/`: Pure business & accounting calculations. No React, no PocketBase. Unit tests required.
+   - `src/data/`: PocketBase SDK queries and mutations.
+   - `src/routes/`: TanStack Router UI pages.
+4. **Commands**:
+   - Route generation: `npm run router:generate`
+   - Typechecking: `npm run typecheck`
+   - Tests: `npm run test`
+   - Full check: `npm run verify`
+5. **UI & Styling**:
+   - Tailwind CSS v4, slate/blue business tool identity.
+   - Clean, compact, tabular numbers (`tabular-nums`), high data density for fast operators.
