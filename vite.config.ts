@@ -83,9 +83,10 @@ const pocketBaseProxyPlugin = {
 
 function pocketBaseProxyMiddleware(): Connect.NextHandleFunction {
   return async (req, res) => {
-    const targetUrl = new URL(req.url ?? '/', 'http://127.0.0.1:8090')
+    const upstream = process.env.VITE_POCKETBASE_TARGET || 'http://127.0.0.1:8090'
+    const targetUrl = new URL(req.url ?? '/', upstream)
     const headers = new Headers(req.headers as Record<string, string>)
-    headers.set('host', '127.0.0.1:8090')
+    headers.set('host', targetUrl.host)
     const response = await fetch(targetUrl, {
       method: req.method,
       headers,
