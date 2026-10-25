@@ -34,3 +34,23 @@ http://127.0.0.1:4174, http://localhost:4174, http://kapil-products:4174, http:/
 		file_server
 	}
 }
+
+# Catch-all for any other hostname on this port (e.g. a new Tailscale IP or
+# MagicDNS name) so agents never see the confusing "empty 200" again.
+http://:4174 {
+	encode zstd gzip
+
+	handle_path /pb/* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up Host {upstream_hostport}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	handle {
+		root * {$KAPIL_DIST_DIR}
+		header Cache-Control "no-store, no-cache, must-revalidate"
+		try_files {path} /index.html
+		file_server
+	}
+}
