@@ -14,6 +14,8 @@ export const BACKGROUND_SYNC_QUERY_PREFIXES = new Set([
   'customer-auto-balance',
   'bill-drafts-pending',
   'bill-drafts-list',
+  'bill-drafts-preview-balance',
+  'draft-page-items',
   'issues-',
 ])
 
