@@ -1,4 +1,4 @@
-import { useIsFetching, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query'
+import { useIsFetching, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 import { AlertTriangle, CheckCircle2, Clock3, Command, FileText, HelpCircle, IndianRupee, Loader2, Menu, RefreshCw, Search, TerminalSquare, TrendingUp, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
@@ -17,6 +17,7 @@ import { rememberQuickSearchResult } from '@/lib/recent-items'
 import { filterRankedNameMatches, findBestNameMatch } from '@/lib/search'
 import { defaultModuleSettings, isPathHiddenByModules, type ModuleSettings } from '@/lib/module-settings'
 import { useModuleSettings } from '@/lib/use-module-settings'
+import { isBackgroundSyncQuery } from '@/lib/query-scope'
 import { QuickSearchPreview } from './quick-search-preview'
 import { MobileBottomNav, SidebarNavPanel } from './sidebar-nav'
 import { BillPrintLayout } from '@/components/billing/bill-print-layout'
@@ -36,6 +37,7 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/customers': { title: 'Customers', subtitle: 'Manage customer master data' },
   '/items': { title: 'Items', subtitle: 'Manage item master and defaults' },
   '/data-health': { title: 'Data Health', subtitle: 'Find bill and setup data issues' },
+  '/issues': { title: 'Issues', subtitle: 'Live system, sync, and data issues console' },
   '/backup': { title: 'Backup', subtitle: 'Export and validate data snapshots' },
   '/print-bill': { title: 'Print Bill', subtitle: 'Filter, preview, and print bills' },
   '/control-room': { title: 'Control Room', subtitle: 'Admin operations, command workflows, and system controls' },
@@ -49,20 +51,6 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
 const DOC_TITLE_SUFFIX = 'Kapil Billing'
 const COMMAND_HISTORY_STORAGE_KEY = 'kapil-command-history-v1'
 const COMMAND_HISTORY_LIMIT = 20
-const BACKGROUND_SYNC_QUERY_PREFIXES = new Set([
-  'quick-search',
-  'command-bar-deps',
-  'print-bill-balance',
-  'backup-snapshot',
-  'export-reports-snapshot',
-  'customer-auto-balance',
-  'bill-drafts-pending',
-  'bill-drafts-list',
-])
-
-function isBackgroundSyncQuery(queryKey: QueryKey) {
-  return BACKGROUND_SYNC_QUERY_PREFIXES.has(String(queryKey[0] ?? ''))
-}
 
 const commandRoutes = [
   { label: 'Dashboard', path: '/' },
@@ -75,6 +63,7 @@ const commandRoutes = [
   { label: 'Customers', path: '/customers' },
   { label: 'Items', path: '/items' },
   { label: 'Data Health', path: '/data-health' },
+  { label: 'Issues', path: '/issues' },
   { label: 'Backup', path: '/backup' },
   { label: 'Control Room', path: '/control-room' },
   { label: 'Casting Overview', path: '/casting' },

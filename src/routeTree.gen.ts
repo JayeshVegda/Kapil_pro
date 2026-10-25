@@ -18,6 +18,7 @@ import { Route as MonthlySalesCalendarRouteImport } from './routes/monthly-sales
 import { Route as MonthlyReportRouteImport } from './routes/monthly-report'
 import { Route as LedgerRouteImport } from './routes/ledger'
 import { Route as ItemsRouteImport } from './routes/items'
+import { Route as IssuesRouteImport } from './routes/issues'
 import { Route as ExportReportsRouteImport } from './routes/export-reports'
 import { Route as DraftsRouteImport } from './routes/drafts'
 import { Route as DataHealthRouteImport } from './routes/data-health'
@@ -76,6 +77,11 @@ const LedgerRoute = LedgerRouteImport.update({
 const ItemsRoute = ItemsRouteImport.update({
   id: '/items',
   path: '/items',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IssuesRoute = IssuesRouteImport.update({
+  id: '/issues',
+  path: '/issues',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ExportReportsRoute = ExportReportsRouteImport.update({
@@ -159,6 +165,7 @@ export interface FileRoutesByFullPath {
   '/data-health': typeof DataHealthRoute
   '/drafts': typeof DraftsRoute
   '/export-reports': typeof ExportReportsRoute
+  '/issues': typeof IssuesRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
   '/monthly-report': typeof MonthlyReportRoute
@@ -183,6 +190,7 @@ export interface FileRoutesByTo {
   '/data-health': typeof DataHealthRoute
   '/drafts': typeof DraftsRoute
   '/export-reports': typeof ExportReportsRoute
+  '/issues': typeof IssuesRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
   '/monthly-report': typeof MonthlyReportRoute
@@ -209,6 +217,7 @@ export interface FileRoutesById {
   '/data-health': typeof DataHealthRoute
   '/drafts': typeof DraftsRoute
   '/export-reports': typeof ExportReportsRoute
+  '/issues': typeof IssuesRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
   '/monthly-report': typeof MonthlyReportRoute
@@ -236,6 +245,7 @@ export interface FileRouteTypes {
     | '/data-health'
     | '/drafts'
     | '/export-reports'
+    | '/issues'
     | '/items'
     | '/ledger'
     | '/monthly-report'
@@ -260,6 +270,7 @@ export interface FileRouteTypes {
     | '/data-health'
     | '/drafts'
     | '/export-reports'
+    | '/issues'
     | '/items'
     | '/ledger'
     | '/monthly-report'
@@ -285,6 +296,7 @@ export interface FileRouteTypes {
     | '/data-health'
     | '/drafts'
     | '/export-reports'
+    | '/issues'
     | '/items'
     | '/ledger'
     | '/monthly-report'
@@ -311,6 +323,7 @@ export interface RootRouteChildren {
   DataHealthRoute: typeof DataHealthRoute
   DraftsRoute: typeof DraftsRoute
   ExportReportsRoute: typeof ExportReportsRoute
+  IssuesRoute: typeof IssuesRoute
   ItemsRoute: typeof ItemsRoute
   LedgerRoute: typeof LedgerRoute
   MonthlyReportRoute: typeof MonthlyReportRoute
@@ -385,6 +398,13 @@ declare module '@tanstack/react-router' {
       path: '/items'
       fullPath: '/items'
       preLoaderRoute: typeof ItemsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/issues': {
+      id: '/issues'
+      path: '/issues'
+      fullPath: '/issues'
+      preLoaderRoute: typeof IssuesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/export-reports': {
@@ -517,6 +537,7 @@ const rootRouteChildren: RootRouteChildren = {
   DataHealthRoute: DataHealthRoute,
   DraftsRoute: DraftsRoute,
   ExportReportsRoute: ExportReportsRoute,
+  IssuesRoute: IssuesRoute,
   ItemsRoute: ItemsRoute,
   LedgerRoute: LedgerRoute,
   MonthlyReportRoute: MonthlyReportRoute,
