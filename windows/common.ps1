@@ -34,8 +34,14 @@ function Get-KapilProcess([string]$Name, [string]$ExpectedExecutable) {
   if (-not [int]::TryParse((Get-Content -LiteralPath $pidFile -Raw).Trim(), [ref]$recordedPid)) { return $null }
   $process = Get-Process -Id $recordedPid -ErrorAction SilentlyContinue
   if ($null -eq $process) { return $null }
-  try { $actual = [System.IO.Path]::GetFullPath($process.Path) } catch { return $null }
-  if ($actual -ne [System.IO.Path]::GetFullPath($ExpectedExecutable)) { return $null }
+  $expectedBaseName = [System.IO.Path]::GetFileNameWithoutExtension($ExpectedExecutable)
+  if ($process.ProcessName -ne $expectedBaseName) { return $null }
+  if (-not [string]::IsNullOrWhiteSpace($process.Path)) {
+    try {
+      $actual = [System.IO.Path]::GetFullPath($process.Path)
+      if ($actual -ne [System.IO.Path]::GetFullPath($ExpectedExecutable)) { return $null }
+    } catch { }
+  }
   return $process
 }
 

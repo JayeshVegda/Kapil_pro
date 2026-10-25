@@ -25,6 +25,7 @@ import { TransactionEditorHost } from '@/components/transactions/transaction-edi
 const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Dashboard', subtitle: 'Live business overview and pending actions' },
   '/new-bill': { title: 'Bills', subtitle: 'Create and preview new sale bills' },
+  '/drafts': { title: 'AI Drafts', subtitle: 'Review and approve bills staged by Muse AI' },
   '/new-payment': { title: 'Payments', subtitle: 'Record collections and adjustments' },
   '/transactions': { title: 'Logs', subtitle: 'Manage recent bills and payments with CRUD actions' },
   '/ledger': { title: 'Party', subtitle: 'Single-party ledger and analytics' },
@@ -55,6 +56,8 @@ const BACKGROUND_SYNC_QUERY_PREFIXES = new Set([
   'backup-snapshot',
   'export-reports-snapshot',
   'customer-auto-balance',
+  'bill-drafts-pending',
+  'bill-drafts-list',
 ])
 
 function isBackgroundSyncQuery(queryKey: QueryKey) {
@@ -64,6 +67,7 @@ function isBackgroundSyncQuery(queryKey: QueryKey) {
 const commandRoutes = [
   { label: 'Dashboard', path: '/' },
   { label: 'New Bill', path: '/new-bill' },
+  { label: 'AI Drafts', path: '/drafts' },
   { label: 'New Payment', path: '/new-payment' },
   { label: 'Transactions', path: '/transactions' },
   { label: 'Ledger', path: '/ledger' },
@@ -659,13 +663,15 @@ export function AppShell() {
   const queryClient = useQueryClient()
   const fetchCount = useIsFetching({ predicate: (query) => !isBackgroundSyncQuery(query.queryKey) })
   const isSyncing = fetchCount > 0
-  const queryStates = queryClient
-    .getQueryCache()
-    .getAll()
-    .filter((q) => !isBackgroundSyncQuery(q.queryKey))
-    .map((q) => q.state)
+  const allQueries = queryClient.getQueryCache().getAll()
+  const activeTrackedQueries = allQueries.filter((q) => !isBackgroundSyncQuery(q.queryKey))
+  const queryStates = activeTrackedQueries.map((q) => q.state)
   const lastUpdatedAt = queryStates.reduce((max, s) => Math.max(max, s.dataUpdatedAt ?? 0), 0)
-  const hasError = queryStates.some((s) => s.status === 'error')
+  const failedQuery = activeTrackedQueries.find((q) => q.state.status === 'error')
+  const hasError = Boolean(failedQuery)
+  const syncErrorMessage = failedQuery
+    ? `${String(failedQuery.queryKey[0] ?? 'query')}: ${(failedQuery.state.error as any)?.message || 'Failed'}`
+    : ''
   const hasSynced = lastUpdatedAt > 0
   const ageMs = hasSynced ? Date.now() - lastUpdatedAt : Infinity
   const isOutdated = hasSynced ? ageMs > 5 * 60_000 : true
@@ -748,12 +754,16 @@ export function AppShell() {
               type="button"
               className="inline-flex min-h-10 items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-9 lg:px-3"
               onClick={() => {
+                queryClient.getQueryCache().getAll().forEach((q) => {
+                  if (q.state.status === 'error') {
+                    queryClient.resetQueries({ queryKey: q.queryKey })
+                  }
+                })
                 void queryClient.invalidateQueries({
-                  predicate: (query) => query.getObserversCount() > 0 && !isBackgroundSyncQuery(query.queryKey),
-                  refetchType: 'active',
+                  refetchType: 'all',
                 })
               }}
-              title={syncState === 'syncing' ? 'Sync in progress' : 'Refresh now'}
+              title={syncState === 'syncing' ? 'Sync in progress' : syncState === 'error' ? syncErrorMessage : 'Refresh now'}
               aria-label="Refresh app data"
               disabled={syncState === 'syncing'}
             >
@@ -774,9 +784,11 @@ export function AppShell() {
                 <span className="max-w-48 truncate text-[11px] text-slate-500">
                   {syncState === 'syncing'
                     ? 'Updating data...'
-                    : hasSynced
-                      ? `Updated ${new Date(lastUpdatedAt).toLocaleTimeString()}`
-                      : 'Waiting for first sync'}
+                    : syncState === 'error'
+                      ? syncErrorMessage || 'Error syncing data'
+                      : hasSynced
+                        ? `Updated ${new Date(lastUpdatedAt).toLocaleTimeString()}`
+                        : 'Waiting for first sync'}
                 </span>
               </span>
               <span className="grid h-5 w-5 place-items-center text-slate-500">

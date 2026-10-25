@@ -12,7 +12,7 @@ import { DASHBOARD_QUERY_KEY, fetchDashboardData } from '@/domain/dashboard'
 /**
  * Bump when persisted query shapes change so old caches are dropped.
  */
-const QUERY_CACHE_BUSTER = 'v1'
+const QUERY_CACHE_BUSTER = 'v2'
 
 /**
  * Queries worth keeping across browser restarts. Everything else refetches

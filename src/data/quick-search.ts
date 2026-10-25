@@ -90,6 +90,7 @@ async function loadCustomersCached() {
     rawName: String(row.name ?? ''),
     companyName: String(row.company_name ?? ''),
     openingBalance: num(row.opening_balance),
+    aliases: String(row.aliases ?? ''),
   }))
   customerCacheAt = Date.now()
   return customerCache
@@ -361,7 +362,7 @@ export async function loadQuickSearchResults(query: string): Promise<QuickSearch
       ? Promise.resolve({ items: [] })
       : isCustomerCommand || cleaned.length > 0
         ? pb.collection('customers').getList(1, 15, {
-            filter: `company_name ~ "${cleaned}" || name ~ "${cleaned}"`,
+            filter: `company_name ~ "${cleaned}" || name ~ "${cleaned}" || aliases ~ "${cleaned}"`,
             sort: 'company_name,name',
           }).catch(() => ({ items: [] }))
         : Promise.resolve({ items: [] }),
@@ -390,10 +391,11 @@ export async function loadQuickSearchResults(query: string): Promise<QuickSearch
     rawName: String(row.name ?? ''),
     companyName: String(row.company_name ?? ''),
     openingBalance: num(row.opening_balance),
+    aliases: String(row.aliases ?? ''),
   }))
 
   const customerResultsBase = (searchedCustomers.length ? searchedCustomers : customers)
-    .filter((row) => matchesAnyRankedQuery([row.name, row.rawName, row.companyName], q))
+    .filter((row) => matchesAnyRankedQuery([row.name, row.rawName, row.companyName, (row as any).aliases ?? ''], q))
     .slice(0, 8)
 
   const customerIds = customerResultsBase.map((row) => row.id)

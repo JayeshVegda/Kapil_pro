@@ -5,6 +5,7 @@ export type SearchableComboboxOption = {
   id: string
   name: string
   suffix?: string
+  aliases?: string
 }
 
 type Props = {
@@ -44,7 +45,7 @@ export function SearchableCombobox({
   const selected = useMemo(() => options.find((option) => option.id === value), [options, value])
   const selectedName = selected?.name ?? ''
   const matches = useMemo(
-    () => filterRankedNameMatches(options, query, (option) => option.name).slice(0, maxResults),
+    () => filterRankedNameMatches(options, query, (option) => (option.aliases ? `${option.name} ${option.aliases}` : option.name)).slice(0, maxResults),
     [options, query, maxResults],
   )
 

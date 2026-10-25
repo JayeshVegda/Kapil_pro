@@ -19,6 +19,7 @@ export type PaymentCustomerOption = {
   name: string
   openingBalance: number
   custType: string
+  aliases?: string
 }
 
 export type PaymentLedgerContext = {
@@ -49,6 +50,7 @@ export async function loadPaymentCustomers(): Promise<PaymentCustomerOption[]> {
     name: formatCustomerDisplayName(record.company_name, record.name),
     openingBalance: num(record.opening_balance),
     custType: String(record.cust_type ?? ''),
+    aliases: String(record.aliases ?? ''),
   }))
 }
 

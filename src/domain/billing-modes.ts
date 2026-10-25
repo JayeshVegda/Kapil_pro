@@ -13,8 +13,6 @@ export type LastRateContext = {
   gstRate: number
 }
 
-const GST_MARKET_RATE_DISCOUNT = 30
-
 const num = (value: unknown) => {
   const parsed = Number(value ?? 0)
   return Number.isFinite(parsed) ? parsed : 0
@@ -49,17 +47,16 @@ export function calculateBillingLineBags(input: { qty: number; item: BillingItem
   return Math.round(qty / getBillingBagWeight(input.item))
 }
 
-export function getGstMarketRateDiscount(gstModeOrRate: BillingGstMode | number) {
-  if (typeof gstModeOrRate === 'number') return gstModeOrRate === 18 ? GST_MARKET_RATE_DISCOUNT : 0
-  return gstModeOrRate === 'percent18' ? GST_MARKET_RATE_DISCOUNT : 0
+export function getGstMarketRateDiscount(_gstModeOrRate?: BillingGstMode | number) {
+  return 0
 }
 
-export function calculateGasFinalRate(defaultRate: number, mktRate: number, gstMode: BillingGstMode) {
-  return Math.max(0, num(defaultRate) + num(mktRate) - getGstMarketRateDiscount(gstMode))
+export function calculateGasFinalRate(defaultRate: number, mktRate: number, _gstMode?: BillingGstMode) {
+  return Math.max(0, num(defaultRate) + num(mktRate))
 }
 
-export function calculateGasDefaultRateFromFinal(finalRate: number, mktRate: number, gstModeOrRate: BillingGstMode | number) {
-  return Math.max(0, num(finalRate) - num(mktRate) + getGstMarketRateDiscount(gstModeOrRate))
+export function calculateGasDefaultRateFromFinal(finalRate: number, mktRate: number, _gstModeOrRate?: BillingGstMode | number) {
+  return Math.max(0, num(finalRate) - num(mktRate))
 }
 
 export function suggestBillingRate(input: {

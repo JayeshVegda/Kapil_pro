@@ -111,7 +111,16 @@ export type QuickPaymentInput = {
   note?: string
 }
 
-export async function saveBillWithItems(input: SaveBillInput & { payments?: QuickPaymentInput[] }) {
+function generateRecordId(): string {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  let id = ''
+  for (let i = 0; i < 15; i++) {
+    id += chars.charAt(Math.floor(Math.random() * chars.length))
+  }
+  return id
+}
+
+export async function saveBillWithItems(input: SaveBillInput & { payments?: QuickPaymentInput[]; draftId?: string }) {
   await runDataOperation('save-bill', async () => {
     await assertBillNumberAvailable(input.bookNo, input.billNo)
 
@@ -122,35 +131,28 @@ export async function saveBillWithItems(input: SaveBillInput & { payments?: Quic
       gstAmountOverride: input.gstAmount,
     })
 
-    const bill = await pb
-      .collection('bills')
-      .create({
-        book_no: input.bookNo,
-        bill_no: input.billNo,
-        bill_ref: `${input.bookNo}/${input.billNo}`,
-        date: input.date,
-        customer: input.customerId,
-        customer_name: input.customerName,
-        mkt: input.mktRate,
-        transport: input.transport,
-        gst_rate: input.gstRate,
-        gst_amount: totals.gstAmount,
-        lr_no: input.lrList.join(', '),
-        status: 'pending',
-      })
-      .catch((error: unknown) => {
-        // The unique (book_no, bill_no) index is the last line of defence when two
-        // saves race past assertBillNumberAvailable.
-        if (isUniqueBillNumberError(error)) {
-          throw new Error(`Bill ${input.bookNo}/${input.billNo} was just taken by another save. Pick the next free number and try again.`, { cause: error })
-        }
-        throw error
-      })
-
+    const billId = generateRecordId()
     const batch = pb.createBatch()
+
+    batch.collection('bills').create({
+      id: billId,
+      book_no: input.bookNo,
+      bill_no: input.billNo,
+      bill_ref: `${input.bookNo}/${input.billNo}`,
+      date: input.date,
+      customer: input.customerId,
+      customer_name: input.customerName,
+      mkt: input.mktRate,
+      transport: input.transport,
+      gst_rate: input.gstRate,
+      gst_amount: totals.gstAmount,
+      lr_no: input.lrList.join(', '),
+      status: 'pending',
+    })
+
     for (const row of input.items) {
       batch.collection('bill_items').create({
-        bill: bill.id,
+        bill: billId,
         item: row.itemId || '',
         item_name: row.itemName,
         qty: row.qty,
@@ -177,12 +179,19 @@ export async function saveBillWithItems(input: SaveBillInput & { payments?: Quic
         note: fullNote,
       })
     }
+    if (input.draftId) {
+      batch.collection('bill_drafts').update(input.draftId, {
+        status: 'approved',
+        converted_bill: billId,
+      })
+    }
     try {
-      // One atomic request: either every line item and quick payment lands, or none do.
+      // Atomic request: header, line items, and quick payments commit together in one transaction.
       await batch.send()
     } catch (error) {
-      // Batch is atomic, so only the header needs rolling back.
-      await pb.collection('bills').delete(bill.id).catch(() => undefined)
+      if (isUniqueBillNumberError(error)) {
+        throw new Error(`Bill ${input.bookNo}/${input.billNo} was just taken by another save. Pick the next free number and try again.`, { cause: error })
+      }
       throw new Error(error instanceof Error ? `Failed to save bill details: ${error.message}` : 'Failed to save bill details', {
         cause: error,
       })
@@ -192,6 +201,13 @@ export async function saveBillWithItems(input: SaveBillInput & { payments?: Quic
     } catch (error) {
       // The bill IS saved; a failed derived-status refresh must not look like a failed save.
       console.warn('[save-bill] status recalculation failed after save', error)
+    }
+
+    try {
+      const { renderAndUploadBillJpg } = await import('@/lib/bill-jpg-upload')
+      await renderAndUploadBillJpg(billId)
+    } catch (error) {
+      console.warn('[save-bill] bill JPG upload failed after save', error)
     }
   })
 }

@@ -41,14 +41,14 @@ describe('command parsing', () => {
       item: { id: 'i1' },
       qty: 50,
       rate: 550,
-      defaultRate: 80,
+      defaultRate: 50,
       manualRateEdited: true,
     })
     expect(parsed.command.items[1]).toMatchObject({
       item: { id: 'i2' },
       qty: 200,
       defaultRate: 70,
-      rate: 540,
+      rate: 570,
       manualRateEdited: false,
     })
   })

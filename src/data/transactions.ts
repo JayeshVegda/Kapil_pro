@@ -198,6 +198,12 @@ export async function updateBillWithItems(
     for (const row of existingItems) batch.collection('bill_items').delete(row.id)
     await batch.send()
     await recalculateBillStatusesForCustomers([oldCustomerId, input.customerId])
+    try {
+      const { renderAndUploadBillJpg } = await import('@/lib/bill-jpg-upload')
+      await renderAndUploadBillJpg(billId)
+    } catch (error) {
+      console.warn('[update-bill] bill JPG upload failed after update', error)
+    }
   })
 }
 

@@ -17,7 +17,19 @@ $archive = Join-Path $script:BackupDir ("kapil-local-$stamp.zip")
 try {
   Compress-Archive -Path (Join-Path $script:DataDir '*') -DestinationPath $archive -CompressionLevel Optimal
   if ((Get-Item -LiteralPath $archive).Length -lt 100000) { throw 'Backup archive is unexpectedly small.' }
-  $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+  $hash = if ($null -ne (Get-Command Get-FileHash -ErrorAction SilentlyContinue)) {
+    (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+  } else {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($archive)
+    try {
+      $bytes = $sha.ComputeHash($stream)
+      [System.BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+    } finally {
+      $stream.Close()
+      $sha.Dispose()
+    }
+  }
   Set-Content -LiteralPath ($archive + '.sha256.txt') -Value "$hash  $([System.IO.Path]::GetFileName($archive))"
   Write-KapilLog "Backup created: $archive (SHA-256 $hash)"
 } finally {
