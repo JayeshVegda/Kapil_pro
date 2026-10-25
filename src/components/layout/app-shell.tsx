@@ -99,6 +99,11 @@ type BillSession = {
 }
 
 export function AppShell() {
+  // The headless preview renderer loads /preview-bill/<id> as a bare page —
+  // no sidebar, header, or shell queries, so it can signal readiness fast.
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/preview-bill')) {
+    return <Outlet />
+  }
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [quickSearch, setQuickSearch] = useState('')
   const [debouncedQuickSearch, setDebouncedQuickSearch] = useState('')
