@@ -685,9 +685,16 @@ function NewBillPage() {
       if (items.length === 0) return
       setRows((prev) =>
         prev.map((row) => {
-          if (!row.itemName || row.rateMode === 'explicit_final') return row
+          if (!row.itemName) return row
           const selected = items.find((it) => it.name === row.itemName || it.id === row.itemId)
           if (!selected) return row
+          if (row.rateMode === 'explicit_final') {
+            // The final rate is fixed, but the margin must follow the bill's MKT:
+            // margin = final rate − MKT. Without this, the margin column goes stale
+            // whenever the market rate changes (e.g. an AI draft's custom MKT).
+            if (!isGasBillingItem(selected)) return row
+            return { ...row, defaultRate: getDefaultRateFromFinal(row.rate, nextMktRate, gstMode) }
+          }
           if (row.rateMode === 'explicit_default') {
             return {
               ...row,
@@ -700,12 +707,17 @@ function NewBillPage() {
         }),
       )
     },
-    [itemsQuery.data, getAutoRateFromDefault, gstMode, getSuggestedRowPatch],
+    [itemsQuery.data, getAutoRateFromDefault, getDefaultRateFromFinal, gstMode, getSuggestedRowPatch],
   )
 
   const handleDateChange = useCallback(
     async (nextDate: string) => {
       setDate(nextDate)
+      if (mktManuallyEditedRef.current) {
+        // A loaded AI draft or a manual entry owns this MKT — never auto-replace it.
+        setStatusText(`Date set to ${formatFullDate(nextDate)}. MKT kept at ₹${mktRate}.`)
+        return
+      }
       try {
         const saved = await loadSavedMarketRateForDate(nextDate)
         if (saved && saved.rate > 0) {
@@ -716,7 +728,7 @@ function NewBillPage() {
         // ignore
       }
     },
-    [updateMktRate],
+    [updateMktRate, mktRate],
   )
 
   function validateBeforePreview() {
@@ -771,6 +783,11 @@ function NewBillPage() {
     const savedRate = await loadSavedMarketRateForDate(commandDate)
     const explicitMktRate = firstPass.ok && firstPass.command.kind === 'bill' ? firstPass.command.mktRate : 0
     const commandMktRate = explicitMktRate || savedRate?.rate || 0
+    // A loaded AI draft or a manual MKT entry owns the market rate: keep it unless
+    // the command itself dictated one ("mkt 920").
+    const commandHadExplicitMkt = explicitMktRate > 0
+    const keepManualMkt = !commandHadExplicitMkt && mktManuallyEditedRef.current && mktRate > 0
+    const effectiveMktRate = commandHadExplicitMkt ? explicitMktRate : keepManualMkt ? mktRate : commandMktRate
     const commandCustomerId = firstPass.ok && firstPass.command.kind === 'bill' ? firstPass.command.customer.id : ''
     const commandLastRates: Record<string, LastCustomerItemRate> = commandCustomerId
       ? await loadCustomerLastItemRates(commandCustomerId).catch(() => ({}))
@@ -783,7 +800,7 @@ function NewBillPage() {
       customers: customersQuery.data ?? [],
       items: itemsQuery.data ?? [],
       today,
-      mktRate: commandMktRate,
+      mktRate: effectiveMktRate,
       lastRates: parserLastRates,
     })
     if (!parsed.ok) {
@@ -829,8 +846,13 @@ function NewBillPage() {
     }
     setCustomerId(command.customer.id)
     setDate(command.date)
-    mktManuallyEditedRef.current = false
-    setMktRate(commandMktRate)
+    if (commandHadExplicitMkt) {
+      mktManuallyEditedRef.current = true
+      setMktRate(explicitMktRate)
+    } else if (!keepManualMkt) {
+      mktManuallyEditedRef.current = false
+      setMktRate(commandMktRate)
+    }
     setTransport(command.transport)
     setGstMode(nextGstMode)
     setManualGstAmount(command.gstMode === 'manual' ? command.gstAmount : 0)
@@ -849,14 +871,14 @@ function NewBillPage() {
         const suggested = line.rateMode === 'automatic'
           ? suggestBillingRate({
               item: selected,
-              mktRate: commandMktRate,
+              mktRate: effectiveMktRate,
               gstMode: nextGstMode,
               lastRate: findLastRateForItem(commandLastRates, selected),
             })
           : null
         const fallbackDefaultRate = line.manualRateEdited && !isGasBillingItem(selected)
           ? line.rate
-          : line.defaultRate || getDefaultRateFromFinal(line.rate, commandMktRate, nextGstMode)
+          : line.defaultRate || getDefaultRateFromFinal(line.rate, effectiveMktRate, nextGstMode)
         return {
           itemName: selected.name,
           itemId: selected.id,
@@ -882,7 +904,7 @@ function NewBillPage() {
     )
     setIsQuickEntryOpen(false)
     setStatusText(
-      `Command ready: ${command.customer.name} | ${command.bookNo ? `Bill ${command.bookNo}/${command.billNo ?? 'next'} | ` : ''}${command.items.length} item${command.items.length === 1 ? '' : 's'}${command.attachedPayments.length > 0 ? ` | ${command.attachedPayments.length} attached payment${command.attachedPayments.length === 1 ? '' : 's'}` : ''} | ${command.date} | MKT ${commandMktRate || 'not found'}`,
+      `Command ready: ${command.customer.name} | ${command.bookNo ? `Bill ${command.bookNo}/${command.billNo ?? 'next'} | ` : ''}${command.items.length} item${command.items.length === 1 ? '' : 's'}${command.attachedPayments.length > 0 ? ` | ${command.attachedPayments.length} attached payment${command.attachedPayments.length === 1 ? '' : 's'}` : ''} | ${command.date} | MKT ${effectiveMktRate || 'not found'}${keepManualMkt ? ' (kept yours)' : ''}`,
     )
     setPendingCommandPreview(true)
   }
@@ -1147,6 +1169,7 @@ function NewBillPage() {
 
     // 4. Resolve Market Rate (Prioritize draft MKT, then historical date MKT, then live feed)
     let resolvedMkt = Number(draft.mkt || 0)
+    let mktFromDraft = resolvedMkt > 0
     if (!(resolvedMkt > 0)) {
       try {
         const savedDateRate = await loadSavedMarketRateForDate(draftDate)
@@ -1213,7 +1236,8 @@ function NewBillPage() {
 
         const suggested = getSuggestedRowPatch(item, resolvedMkt, nextGstMode)
         const rowQty = Number(row.qty > 0 ? row.qty : (row.bags ? Number(row.bags) * (item.bagWeight || 50) : 0))
-        const rowRate = Number(row.rate > 0 ? row.rate : suggested.rate)
+        const dictatedRate = Number(row.rate > 0 ? row.rate : 0)
+        const rowRate = dictatedRate > 0 ? dictatedRate : suggested.rate
 
         return {
           ...newBillItemRow(),
@@ -1222,8 +1246,14 @@ function NewBillPage() {
           itemId: item.id,
           qty: rowQty,
           rate: rowRate,
-          rateMode: (row.rate > 0 ? 'explicit_final' : suggested.rateMode) as BillRateMode,
-          manualRateEdited: Boolean(row.rate > 0),
+          rateMode: (dictatedRate > 0 ? 'explicit_final' : suggested.rateMode) as BillRateMode,
+          manualRateEdited: Boolean(dictatedRate > 0),
+          // Margin is final − the DRAFT's market rate. The suggested patch carries the
+          // last bill's margin, which is wrong for a draft that dictated its own rate.
+          defaultRate:
+            dictatedRate > 0 && isGasBillingItem(item)
+              ? getDefaultRateFromFinal(dictatedRate, resolvedMkt, nextGstMode)
+              : suggested.defaultRate,
           bagWeight: item.bagWeight || 50,
         }
       })
@@ -1261,7 +1291,9 @@ function NewBillPage() {
     }
 
     setLoadedDraftId(draft.id)
-    setStatusText(`Loaded AI draft for ${targetCustomerName || 'party'}. MKT: ₹${resolvedMkt}.`)
+    setStatusText(
+      `Loaded AI draft for ${targetCustomerName || 'party'}. MKT: ₹${resolvedMkt}${mktFromDraft ? '' : ` (auto: saved rate for ${formatFullDate(draftDate)})`}.`,
+    )
 
     // 8. Auto Preview if requested
     if (draft.autoOpenPreview && targetCustomerId && nextRows.some((r) => r.qty > 0 && r.rate > 0)) {
@@ -1312,7 +1344,7 @@ function NewBillPage() {
         }
       }, 100)
     }
-  }, [customersQuery.data, itemsQuery.data, getSuggestedRowPatch, today, marketRate.rate, updateMktRate, autoBalanceQuery])
+  }, [customersQuery.data, itemsQuery.data, getSuggestedRowPatch, getDefaultRateFromFinal, today, marketRate.rate, updateMktRate, autoBalanceQuery])
 
   // Consume any preloaded draft from session storage (when user clicks "Review & Load" from /drafts)
   useEffect(() => {
