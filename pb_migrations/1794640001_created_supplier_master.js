@@ -58,12 +58,14 @@ migrate((app) => {
   });
   app.save(purchaseItems);
 
-  const brassScrap = new Record("purchase_items");
+  const itemsCollection = app.findCollectionByNameOrId("purchase_items");
+
+  const brassScrap = new Record(itemsCollection);
   brassScrap.set("name", "brass scrap");
   brassScrap.set("active", true);
   app.save(brassScrap);
   for (const seedName of ["chol", "pata", "marobol", "sisu", "coal"]) {
-    const seed = new Record("purchase_items");
+    const seed = new Record(itemsCollection);
     seed.set("name", seedName);
     seed.set("active", true);
     app.save(seed);
