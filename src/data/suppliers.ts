@@ -731,11 +731,11 @@ export async function loadSupplierBundle(supplierId: string): Promise<SupplierBu
   })
 }
 
-export async function computeSupplierBundleSettlement(bundle: SupplierBundle): Promise<SupplierSettlementResult> {
+export function computeSupplierBundleSettlement(bundle: SupplierBundle): SupplierSettlementResult {
   return computeSupplierSettlement(bundleToSettlementInput(bundle))
 }
 
-export async function computeSupplierBundleLedger(bundle: SupplierBundle, filter?: SupplierLedgerInput['filter']): Promise<SupplierLedgerResult> {
+export function computeSupplierBundleLedger(bundle: SupplierBundle, filter?: SupplierLedgerInput['filter']): SupplierLedgerResult {
   return buildSupplierLedger(bundleToLedgerInput(bundle, filter))
 }
 

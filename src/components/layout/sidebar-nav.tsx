@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import { useState, type ComponentType } from 'react'
-import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, Users, X } from 'lucide-react'
+import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Package, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, Truck, Users, X } from 'lucide-react'
 import { isPathHiddenByModules } from '@/lib/module-settings'
 import { useModuleSettings } from '@/lib/use-module-settings'
 
@@ -27,6 +27,13 @@ const navGroups: NavGroup[] = [
     items: [
       { to: '/customers', title: 'Customers', icon: Users },
       { to: '/ledger', title: 'Party Ledger', icon: BookOpen },
+    ],
+  },
+  {
+    label: 'Purchases',
+    items: [
+      { to: '/suppliers', title: 'Suppliers', icon: Truck },
+      { to: '/purchase-items', title: 'Purchase Items', icon: Package },
     ],
   },
   {
