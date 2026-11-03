@@ -312,7 +312,7 @@ async function writeAuditRow(input: AuditInput): Promise<void> {
 
 async function fetchAll<T>(collection: string, map: (row: PBRow) => T, options?: { sort?: string; filter?: string }): Promise<T[]> {
   const result = await pb.collection(collection).getFullList({
-    sort: options?.sort ?? 'date,created,id',
+    sort: options?.sort ?? 'created,id',
     filter: options?.filter,
   })
   return (result as unknown as PBRow[]).map(map)
@@ -709,12 +709,12 @@ export async function loadSupplierBundle(supplierId: string): Promise<SupplierBu
   return runDataOperation('load-supplier-bundle', async () => {
     const supplier = await getSupplier(supplierId)
     const [bills, lines, adjustments, bardan, payments, allocations] = await Promise.all([
-      fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill),
-      fetchAll<PurchaseLineView>(SUPPLIER_COLLECTIONS.lines, mapLine),
-      fetchAll<PurchaseAdjustmentView>(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment),
-      fetchAll<PurchaseBardanView>(SUPPLIER_COLLECTIONS.bardan, mapBardan),
-      fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment),
-      fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation),
+      fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill, { sort: 'date,created,id' }),
+      fetchAll<PurchaseLineView>(SUPPLIER_COLLECTIONS.lines, mapLine, { sort: 'created,id' }),
+      fetchAll<PurchaseAdjustmentView>(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment, { sort: 'created,id' }),
+      fetchAll<PurchaseBardanView>(SUPPLIER_COLLECTIONS.bardan, mapBardan, { sort: 'date,created,id' }),
+      fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment, { sort: 'date,created,id' }),
+      fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation, { sort: 'created,id' }),
     ])
     const supplierBillIds = new Set(bills.filter((bill) => bill.supplierId === supplierId).map((bill) => bill.id))
     const paymentsOfSupplier = payments.filter((payment) => payment.supplierId === supplierId)
@@ -755,12 +755,12 @@ export async function loadSuppliersSummary(): Promise<SupplierSummary[]> {
   return runDataOperation('load-suppliers-summary', async () => {
     const suppliers = await listSuppliers({ includeInactive: true })
     const [allBills, allLines, allAdjustments, allBardan, allPayments, allAllocations] = await Promise.all([
-      fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill),
-      fetchAll<PurchaseLineView>(SUPPLIER_COLLECTIONS.lines, mapLine),
-      fetchAll<PurchaseAdjustmentView>(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment),
-      fetchAll<PurchaseBardanView>(SUPPLIER_COLLECTIONS.bardan, mapBardan),
-      fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment),
-      fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation),
+      fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill, { sort: 'date,created,id' }),
+      fetchAll<PurchaseLineView>(SUPPLIER_COLLECTIONS.lines, mapLine, { sort: 'created,id' }),
+      fetchAll<PurchaseAdjustmentView>(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment, { sort: 'created,id' }),
+      fetchAll<PurchaseBardanView>(SUPPLIER_COLLECTIONS.bardan, mapBardan, { sort: 'date,created,id' }),
+      fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment, { sort: 'date,created,id' }),
+      fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation, { sort: 'created,id' }),
     ])
 
     const rows: SupplierSummary[] = []

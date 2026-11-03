@@ -8,6 +8,8 @@ import { clearIfExpiredSession, hasValidAppSession } from '@/app/auth'
 import { LoginScreen } from '@/components/auth/login-screen'
 import { Toaster } from '@/components/ui/sonner'
 import { DASHBOARD_QUERY_KEY, fetchDashboardData } from '@/domain/dashboard'
+import { loadCustomerOptions } from '@/data/customers'
+import { loadItemOptions } from '@/data/items'
 
 /**
  * Bump when persisted query shapes change so old caches are dropped.
@@ -39,6 +41,12 @@ export function AppProviders({ children }: { children: ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
+            queryFn: async ({ queryKey }) => {
+              const key = queryKey[0]
+              if (key === 'customers-options') return loadCustomerOptions()
+              if (key === 'items-options') return loadItemOptions()
+              throw new Error(`Missing queryFn for queryKey '${JSON.stringify(queryKey)}'`)
+            },
             staleTime: 60_000,
             refetchOnWindowFocus: false,
             refetchOnReconnect: false,

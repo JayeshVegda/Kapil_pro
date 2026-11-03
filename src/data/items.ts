@@ -137,3 +137,29 @@ export async function deleteItem(itemId: string) {
   })
 }
 
+
+
+export type ItemOption = {
+  id: string
+  name: string
+  defaultRate: number
+  type: string
+  unit: string
+  bagWeight: number
+  aliases?: string
+}
+
+export async function loadItemOptions(): Promise<ItemOption[]> {
+  return runDataOperation('load-item-options', async () => {
+    const records = await pb.collection('items').getFullList({ sort: 'name' })
+    return (records as PBRecord[]).map((r) => ({
+      id: r.id,
+      name: String(r.name ?? ''),
+      defaultRate: num(r.default_rate),
+      type: String(r.type ?? ''),
+      unit: String(r.unit ?? ''),
+      bagWeight: num(r.bag_weight) || 50,
+      aliases: String(r.aliases ?? ''),
+    }))
+  })
+}

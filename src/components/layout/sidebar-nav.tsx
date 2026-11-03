@@ -1,4 +1,4 @@
-import { Link } from '@tanstack/react-router'
+import { Link, useRouterState } from '@tanstack/react-router'
 import { useState, type ComponentType } from 'react'
 import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Package, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, Truck, Users, X } from 'lucide-react'
 import { isPathHiddenByModules } from '@/lib/module-settings'
@@ -14,6 +14,7 @@ const navGroups: NavGroup[] = [
   { label: 'Dashboard', items: [{ to: '/', title: 'Dashboard', icon: LayoutDashboard }] },
   {
     label: 'Transactions',
+    collapsible: true,
     items: [
       { to: '/new-bill', title: 'Bills', icon: FilePlus2 },
       { to: '/drafts', title: 'AI Drafts', icon: Sparkles },
@@ -24,6 +25,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: 'Customers',
+    collapsible: true,
     items: [
       { to: '/customers', title: 'Customers', icon: Users },
       { to: '/ledger', title: 'Party Ledger', icon: BookOpen },
@@ -31,6 +33,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: 'Purchases',
+    collapsible: true,
     items: [
       { to: '/suppliers', title: 'Suppliers', icon: Truck },
       { to: '/purchase-items', title: 'Purchase Items', icon: Package },
@@ -38,6 +41,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: 'Reports',
+    collapsible: true,
     items: [
       { to: '/monthly-sales-calendar', title: 'Monthly Sales Calendar', icon: Calendar },
       { to: '/monthly-report', title: 'Company Report', icon: CalendarDays },
@@ -46,6 +50,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: 'Setup',
+    collapsible: true,
     items: [
       { to: '/items', title: 'Items', icon: Boxes },
       { to: '/issues', title: 'Issues', icon: ShieldAlert },
@@ -86,43 +91,77 @@ function useVisibleNavGroups() {
     .filter((group) => group.items.length > 0)
 }
 
+const DEFAULT_COLLAPSED: Record<string, boolean> = {
+  Reports: true,
+  Setup: true,
+  Casting: true,
+}
+
+const STORAGE_KEY = 'kapil-sidebar-collapsed-groups'
+
+function loadSavedCollapsed(): Record<string, boolean> {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null
+    if (raw) return { ...DEFAULT_COLLAPSED, ...JSON.parse(raw) }
+  } catch {}
+  return DEFAULT_COLLAPSED
+}
+
 function NavGroupsList({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?: () => void }) {
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({ Casting: false })
+  const currentPath = useRouterState({ select: (s) => s.location.pathname })
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(loadSavedCollapsed)
+
+  const toggleGroup = (label: string) => {
+    setCollapsedGroups((prev) => {
+      const next = { ...prev, [label]: !prev[label] }
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      } catch {}
+      return next
+    })
+  }
 
   return (
     <>
-      {groups.map((group) => (
-        <div key={group.label} className="mb-3">
-          {group.collapsible ? (
-            <button
-              type="button"
-              className="mb-1 flex w-full items-center justify-between rounded-md px-3 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 hover:bg-white/5 hover:text-slate-300"
-              onClick={() => setCollapsedGroups((prev) => ({ ...prev, [group.label]: !prev[group.label] }))}
-            >
-              <span>{group.label}</span>
-              {collapsedGroups[group.label] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-            </button>
-          ) : (
-            <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{group.label}</p>
-          )}
-          {!collapsedGroups[group.label] && group.items.map((item) => {
-            const Icon = item.icon
-            return (
-              <Link
-                key={item.to}
-                to={item.to}
-                onClick={onNavigate}
-                className="mb-0.5 flex items-center gap-2 rounded-md border-l-2 border-transparent px-3 py-2 text-[13px] text-slate-300 transition hover:bg-white/5 hover:text-slate-100"
-                activeOptions={{ exact: true }}
-                activeProps={{ className: 'border-l-blue-400 bg-blue-500/20 font-semibold text-white' }}
+      {groups.map((group) => {
+        const hasActiveItem = group.items.some((item) =>
+          item.to === '/' ? currentPath === '/' : currentPath.startsWith(item.to)
+        )
+        const isCollapsed = Boolean(group.collapsible && collapsedGroups[group.label] && !hasActiveItem)
+
+        return (
+          <div key={group.label} className="mb-3">
+            {group.collapsible ? (
+              <button
+                type="button"
+                className="mb-1 flex w-full items-center justify-between rounded-md px-3 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 hover:bg-white/5 hover:text-slate-300"
+                onClick={() => toggleGroup(group.label)}
               >
-                <Icon size={15} />
-                <span>{item.title}</span>
-              </Link>
-            )
-          })}
-        </div>
-      ))}
+                <span>{group.label}</span>
+                {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+              </button>
+            ) : (
+              <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{group.label}</p>
+            )}
+            {!isCollapsed && group.items.map((item) => {
+              const Icon = item.icon
+              return (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  onClick={onNavigate}
+                  className="mb-0.5 flex items-center gap-2 rounded-md border-l-2 border-transparent px-3 py-2 text-[13px] text-slate-300 transition hover:bg-white/5 hover:text-slate-100"
+                  activeOptions={{ exact: true }}
+                  activeProps={{ className: 'border-l-blue-400 bg-blue-500/20 font-semibold text-white' }}
+                >
+                  <Icon size={15} />
+                  <span>{item.title}</span>
+                </Link>
+              )
+            })}
+          </div>
+        )
+      })}
     </>
   )
 }

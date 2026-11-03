@@ -1,6 +1,7 @@
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
 import { buildCustomerLedgerSummaries, type BillItemRecord, type BillRecord, type CustomerRecord, type PaymentRecord } from '@/domain/customers'
+import { formatCompanyName, formatCustomerDisplayName } from '@/lib/customer-display'
 
 type PBRecord = Record<string, unknown> & { id: string }
 
@@ -182,5 +183,32 @@ export async function updateCustomer(
 export async function toggleCustomerActive(id: string, nextActive: boolean) {
   await runDataOperation('toggle-customer-active', async () => {
     await pb.collection('customers').update(id, { active: nextActive })
+  })
+}
+
+export type CustomerOption = {
+  id: string
+  name: string
+  companyName: string
+  customerName: string
+  custType: string
+  aliases?: string
+}
+
+export async function loadCustomerOptions(): Promise<CustomerOption[]> {
+  return runDataOperation('load-customer-options', async () => {
+    const records = await pb.collection('customers').getFullList({ sort: 'company_name,name' })
+    return (records as PBRecord[]).map((r) => {
+      const customerName = String(r.name ?? '')
+      const companyName = formatCompanyName(r.company_name, r.name)
+      return {
+        id: r.id,
+        name: formatCustomerDisplayName(companyName, customerName),
+        companyName,
+        customerName,
+        custType: String(r.cust_type ?? ''),
+        aliases: String(r.aliases ?? ''),
+      }
+    })
   })
 }

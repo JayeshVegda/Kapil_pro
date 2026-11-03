@@ -7,7 +7,23 @@ const num = (v: unknown) => (Number.isFinite(Number(v ?? 0)) ? Number(v) : 0)
 const datePart = (v: unknown) => String(v ?? '').slice(0, 10)
 
 /** Collections that must be readable for the app to work. */
-const CORE_COLLECTIONS = ['bills', 'bill_items', 'payments', 'customers', 'items', 'brass_rates', 'bill_drafts'] as const
+const CORE_COLLECTIONS = [
+  'bills',
+  'bill_items',
+  'payments',
+  'customers',
+  'items',
+  'brass_rates',
+  'bill_drafts',
+  'suppliers',
+  'purchase_items',
+  'purchase_bills',
+  'purchase_bill_lines',
+  'purchase_bill_adjustments',
+  'purchase_bardan',
+  'supplier_payments',
+  'supplier_payment_allocations',
+] as const
 /** Locked on purpose since the Muse permissions migration (module unused). */
 const GATED_COLLECTIONS = ['casting_sessions', 'casting_batches', 'casting_inputs', 'casting_materials', 'casting2_sessions', 'casting2_materials', 'casting2_inputs', 'casting_batch_inputs', 'stock_in', 'stock_adjustments', 'stock_openings'] as const
 
@@ -52,7 +68,7 @@ export async function probeCollections(): Promise<CollectionProbe[]> {
 export async function probeMarketFeed(): Promise<{ reachable: boolean; detail: string }> {
   try {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 15000)
+    const timer = setTimeout(() => controller.abort(), 5000)
     const res = await fetch('/api/market-rate', { signal: controller.signal, cache: 'no-store' })
     clearTimeout(timer)
     return { reachable: res.ok, detail: res.ok ? 'RSS feed reachable' : `HTTP ${res.status}` }
