@@ -11,8 +11,10 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TransactionsRouteImport } from './routes/transactions'
 import { Route as SuppliersRouteImport } from './routes/suppliers'
+import { Route as SupplierPaymentsRouteImport } from './routes/supplier-payments'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PurchaseItemsRouteImport } from './routes/purchase-items'
+import { Route as PurchaseBillsRouteImport } from './routes/purchase-bills'
 import { Route as PrintBillRouteImport } from './routes/print-bill'
 import { Route as NewPaymentRouteImport } from './routes/new-payment'
 import { Route as NewBillRouteImport } from './routes/new-bill'
@@ -28,6 +30,7 @@ import { Route as CustomersRouteImport } from './routes/customers'
 import { Route as ControlRoomRouteImport } from './routes/control-room'
 import { Route as CastingRouteImport } from './routes/casting'
 import { Route as CalendarRouteImport } from './routes/calendar'
+import { Route as BardanPendingRouteImport } from './routes/bardan-pending'
 import { Route as BackupRouteImport } from './routes/backup'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CastingIndexRouteImport } from './routes/casting/index'
@@ -49,6 +52,11 @@ const SuppliersRoute = SuppliersRouteImport.update({
   path: '/suppliers',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SupplierPaymentsRoute = SupplierPaymentsRouteImport.update({
+  id: '/supplier-payments',
+  path: '/supplier-payments',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -57,6 +65,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const PurchaseItemsRoute = PurchaseItemsRouteImport.update({
   id: '/purchase-items',
   path: '/purchase-items',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PurchaseBillsRoute = PurchaseBillsRouteImport.update({
+  id: '/purchase-bills',
+  path: '/purchase-bills',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PrintBillRoute = PrintBillRouteImport.update({
@@ -134,6 +147,11 @@ const CalendarRoute = CalendarRouteImport.update({
   path: '/calendar',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BardanPendingRoute = BardanPendingRouteImport.update({
+  id: '/bardan-pending',
+  path: '/bardan-pending',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BackupRoute = BackupRouteImport.update({
   id: '/backup',
   path: '/backup',
@@ -150,9 +168,9 @@ const CastingIndexRoute = CastingIndexRouteImport.update({
   getParentRoute: () => CastingRoute,
 } as any)
 const SupplierPaymentsNewRoute = SupplierPaymentsNewRouteImport.update({
-  id: '/supplier-payments/new',
-  path: '/supplier-payments/new',
-  getParentRoute: () => rootRouteImport,
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => SupplierPaymentsRoute,
 } as any)
 const SupplierLedgerSupplierIdRoute =
   SupplierLedgerSupplierIdRouteImport.update({
@@ -161,9 +179,9 @@ const SupplierLedgerSupplierIdRoute =
     getParentRoute: () => rootRouteImport,
   } as any)
 const PurchaseBillsNewRoute = PurchaseBillsNewRouteImport.update({
-  id: '/purchase-bills/new',
-  path: '/purchase-bills/new',
-  getParentRoute: () => rootRouteImport,
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => PurchaseBillsRoute,
 } as any)
 const CastingNewSessionRoute = CastingNewSessionRouteImport.update({
   id: '/new-session',
@@ -189,6 +207,7 @@ const CastingBillRoute = CastingBillRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/bardan-pending': typeof BardanPendingRoute
   '/calendar': typeof CalendarRoute
   '/casting': typeof CastingRouteWithChildren
   '/control-room': typeof ControlRoomRoute
@@ -204,8 +223,10 @@ export interface FileRoutesByFullPath {
   '/new-bill': typeof NewBillRoute
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/purchase-bills': typeof PurchaseBillsRouteWithChildren
   '/purchase-items': typeof PurchaseItemsRoute
   '/settings': typeof SettingsRoute
+  '/supplier-payments': typeof SupplierPaymentsRouteWithChildren
   '/suppliers': typeof SuppliersRoute
   '/transactions': typeof TransactionsRoute
   '/casting/bill': typeof CastingBillRoute
@@ -220,6 +241,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/bardan-pending': typeof BardanPendingRoute
   '/calendar': typeof CalendarRoute
   '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
@@ -234,8 +256,10 @@ export interface FileRoutesByTo {
   '/new-bill': typeof NewBillRoute
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/purchase-bills': typeof PurchaseBillsRouteWithChildren
   '/purchase-items': typeof PurchaseItemsRoute
   '/settings': typeof SettingsRoute
+  '/supplier-payments': typeof SupplierPaymentsRouteWithChildren
   '/suppliers': typeof SuppliersRoute
   '/transactions': typeof TransactionsRoute
   '/casting/bill': typeof CastingBillRoute
@@ -251,6 +275,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/backup': typeof BackupRoute
+  '/bardan-pending': typeof BardanPendingRoute
   '/calendar': typeof CalendarRoute
   '/casting': typeof CastingRouteWithChildren
   '/control-room': typeof ControlRoomRoute
@@ -266,8 +291,10 @@ export interface FileRoutesById {
   '/new-bill': typeof NewBillRoute
   '/new-payment': typeof NewPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/purchase-bills': typeof PurchaseBillsRouteWithChildren
   '/purchase-items': typeof PurchaseItemsRoute
   '/settings': typeof SettingsRoute
+  '/supplier-payments': typeof SupplierPaymentsRouteWithChildren
   '/suppliers': typeof SuppliersRoute
   '/transactions': typeof TransactionsRoute
   '/casting/bill': typeof CastingBillRoute
@@ -284,6 +311,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/backup'
+    | '/bardan-pending'
     | '/calendar'
     | '/casting'
     | '/control-room'
@@ -299,8 +327,10 @@ export interface FileRouteTypes {
     | '/new-bill'
     | '/new-payment'
     | '/print-bill'
+    | '/purchase-bills'
     | '/purchase-items'
     | '/settings'
+    | '/supplier-payments'
     | '/suppliers'
     | '/transactions'
     | '/casting/bill'
@@ -315,6 +345,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/backup'
+    | '/bardan-pending'
     | '/calendar'
     | '/control-room'
     | '/customers'
@@ -329,8 +360,10 @@ export interface FileRouteTypes {
     | '/new-bill'
     | '/new-payment'
     | '/print-bill'
+    | '/purchase-bills'
     | '/purchase-items'
     | '/settings'
+    | '/supplier-payments'
     | '/suppliers'
     | '/transactions'
     | '/casting/bill'
@@ -345,6 +378,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/backup'
+    | '/bardan-pending'
     | '/calendar'
     | '/casting'
     | '/control-room'
@@ -360,8 +394,10 @@ export interface FileRouteTypes {
     | '/new-bill'
     | '/new-payment'
     | '/print-bill'
+    | '/purchase-bills'
     | '/purchase-items'
     | '/settings'
+    | '/supplier-payments'
     | '/suppliers'
     | '/transactions'
     | '/casting/bill'
@@ -377,6 +413,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BackupRoute: typeof BackupRoute
+  BardanPendingRoute: typeof BardanPendingRoute
   CalendarRoute: typeof CalendarRoute
   CastingRoute: typeof CastingRouteWithChildren
   ControlRoomRoute: typeof ControlRoomRoute
@@ -392,13 +429,13 @@ export interface RootRouteChildren {
   NewBillRoute: typeof NewBillRoute
   NewPaymentRoute: typeof NewPaymentRoute
   PrintBillRoute: typeof PrintBillRoute
+  PurchaseBillsRoute: typeof PurchaseBillsRouteWithChildren
   PurchaseItemsRoute: typeof PurchaseItemsRoute
   SettingsRoute: typeof SettingsRoute
+  SupplierPaymentsRoute: typeof SupplierPaymentsRouteWithChildren
   SuppliersRoute: typeof SuppliersRoute
   TransactionsRoute: typeof TransactionsRoute
-  PurchaseBillsNewRoute: typeof PurchaseBillsNewRoute
   SupplierLedgerSupplierIdRoute: typeof SupplierLedgerSupplierIdRoute
-  SupplierPaymentsNewRoute: typeof SupplierPaymentsNewRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -417,6 +454,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SuppliersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/supplier-payments': {
+      id: '/supplier-payments'
+      path: '/supplier-payments'
+      fullPath: '/supplier-payments'
+      preLoaderRoute: typeof SupplierPaymentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -429,6 +473,13 @@ declare module '@tanstack/react-router' {
       path: '/purchase-items'
       fullPath: '/purchase-items'
       preLoaderRoute: typeof PurchaseItemsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/purchase-bills': {
+      id: '/purchase-bills'
+      path: '/purchase-bills'
+      fullPath: '/purchase-bills'
+      preLoaderRoute: typeof PurchaseBillsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/print-bill': {
@@ -536,6 +587,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CalendarRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/bardan-pending': {
+      id: '/bardan-pending'
+      path: '/bardan-pending'
+      fullPath: '/bardan-pending'
+      preLoaderRoute: typeof BardanPendingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/backup': {
       id: '/backup'
       path: '/backup'
@@ -559,10 +617,10 @@ declare module '@tanstack/react-router' {
     }
     '/supplier-payments/new': {
       id: '/supplier-payments/new'
-      path: '/supplier-payments/new'
+      path: '/new'
       fullPath: '/supplier-payments/new'
       preLoaderRoute: typeof SupplierPaymentsNewRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof SupplierPaymentsRoute
     }
     '/supplier-ledger/$supplierId': {
       id: '/supplier-ledger/$supplierId'
@@ -573,10 +631,10 @@ declare module '@tanstack/react-router' {
     }
     '/purchase-bills/new': {
       id: '/purchase-bills/new'
-      path: '/purchase-bills/new'
+      path: '/new'
       fullPath: '/purchase-bills/new'
       preLoaderRoute: typeof PurchaseBillsNewRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof PurchaseBillsRoute
     }
     '/casting/new-session': {
       id: '/casting/new-session'
@@ -628,9 +686,33 @@ const CastingRouteChildren: CastingRouteChildren = {
 const CastingRouteWithChildren =
   CastingRoute._addFileChildren(CastingRouteChildren)
 
+interface PurchaseBillsRouteChildren {
+  PurchaseBillsNewRoute: typeof PurchaseBillsNewRoute
+}
+
+const PurchaseBillsRouteChildren: PurchaseBillsRouteChildren = {
+  PurchaseBillsNewRoute: PurchaseBillsNewRoute,
+}
+
+const PurchaseBillsRouteWithChildren = PurchaseBillsRoute._addFileChildren(
+  PurchaseBillsRouteChildren,
+)
+
+interface SupplierPaymentsRouteChildren {
+  SupplierPaymentsNewRoute: typeof SupplierPaymentsNewRoute
+}
+
+const SupplierPaymentsRouteChildren: SupplierPaymentsRouteChildren = {
+  SupplierPaymentsNewRoute: SupplierPaymentsNewRoute,
+}
+
+const SupplierPaymentsRouteWithChildren =
+  SupplierPaymentsRoute._addFileChildren(SupplierPaymentsRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BackupRoute: BackupRoute,
+  BardanPendingRoute: BardanPendingRoute,
   CalendarRoute: CalendarRoute,
   CastingRoute: CastingRouteWithChildren,
   ControlRoomRoute: ControlRoomRoute,
@@ -646,13 +728,13 @@ const rootRouteChildren: RootRouteChildren = {
   NewBillRoute: NewBillRoute,
   NewPaymentRoute: NewPaymentRoute,
   PrintBillRoute: PrintBillRoute,
+  PurchaseBillsRoute: PurchaseBillsRouteWithChildren,
   PurchaseItemsRoute: PurchaseItemsRoute,
   SettingsRoute: SettingsRoute,
+  SupplierPaymentsRoute: SupplierPaymentsRouteWithChildren,
   SuppliersRoute: SuppliersRoute,
   TransactionsRoute: TransactionsRoute,
-  PurchaseBillsNewRoute: PurchaseBillsNewRoute,
   SupplierLedgerSupplierIdRoute: SupplierLedgerSupplierIdRoute,
-  SupplierPaymentsNewRoute: SupplierPaymentsNewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

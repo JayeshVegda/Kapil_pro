@@ -22,6 +22,7 @@ export async function invalidateAfterSupplierPurchaseWrite(queryClient: QueryCli
     queryClient.invalidateQueries({ queryKey: ['suppliers-list'] }),
     queryClient.invalidateQueries({ queryKey: ['purchase-items'] }),
     queryClient.invalidateQueries({ queryKey: ['purchase-bills'] }),
+    queryClient.invalidateQueries({ queryKey: ['supplier-payments'] }),
   ]
   if (supplierId) {
     promises.push(queryClient.invalidateQueries({ queryKey: ['supplier-bundle', supplierId] }))

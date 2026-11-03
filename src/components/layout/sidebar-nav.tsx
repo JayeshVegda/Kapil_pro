@@ -1,13 +1,22 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { useState, type ComponentType } from 'react'
-import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Package, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, Truck, Users, X } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { useMemo, useState, type ComponentType } from 'react'
+import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Package, Plus, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, Truck, Users, X } from 'lucide-react'
+import { loadAllPurchaseBills } from '@/data/suppliers'
 import { isPathHiddenByModules } from '@/lib/module-settings'
 import { useModuleSettings } from '@/lib/use-module-settings'
+
+type NavItem = {
+  to: string
+  title: string
+  icon: ComponentType<{ size?: number; className?: string }>
+  badge?: number | string
+}
 
 type NavGroup = {
   label: string
   collapsible?: boolean
-  items: Array<{ to: string; title: string; icon: ComponentType<{ size?: number; className?: string }> }>
+  items: NavItem[]
 }
 
 const navGroups: NavGroup[] = [
@@ -36,9 +45,12 @@ const navGroups: NavGroup[] = [
     collapsible: true,
     items: [
       { to: '/suppliers', title: 'Suppliers', icon: Truck },
-      { to: '/purchase-bills/new', title: 'New Purchase Bill', icon: FilePlus2 },
-      { to: '/supplier-payments/new', title: 'New Supplier Payment', icon: CreditCard },
-      { to: '/purchase-items', title: 'Purchase Items', icon: Package },
+      { to: '/purchase-bills', title: 'Bills', icon: ScrollText },
+      { to: '/purchase-bills/new', title: 'New Bill', icon: FilePlus2 },
+      { to: '/supplier-payments', title: 'Payments', icon: CreditCard },
+      { to: '/supplier-payments/new', title: 'New Payment', icon: Plus },
+      { to: '/bardan-pending', title: 'Bardan Pending', icon: Package },
+      { to: '/purchase-items', title: 'Purchase Items', icon: Boxes },
     ],
   },
   {
@@ -88,9 +100,31 @@ export function SidebarNav() {
 /** Nav groups with switched-off modules removed, dropping any group left empty. */
 function useVisibleNavGroups() {
   const moduleSettings = useModuleSettings()
-  return navGroups
-    .map((group) => ({ ...group, items: group.items.filter((item) => !isPathHiddenByModules(item.to, moduleSettings)) }))
-    .filter((group) => group.items.length > 0)
+  const billsQuery = useQuery({
+    queryKey: ['purchase-bills'],
+    queryFn: loadAllPurchaseBills,
+    staleTime: 30_000,
+  })
+
+  const pendingBardanCount = useMemo(() => {
+    return (billsQuery.data ?? []).filter((b) => b.bardanPending && !b.cancelled).length
+  }, [billsQuery.data])
+
+  return useMemo(() => {
+    return navGroups
+      .map((group) => ({
+        ...group,
+        items: group.items
+          .filter((item) => !isPathHiddenByModules(item.to, moduleSettings))
+          .map((item) => {
+            if (item.to === '/bardan-pending' && pendingBardanCount > 0) {
+              return { ...item, badge: pendingBardanCount }
+            }
+            return item
+          }),
+      }))
+      .filter((group) => group.items.length > 0)
+  }, [moduleSettings, pendingBardanCount])
 }
 
 const DEFAULT_COLLAPSED: Record<string, boolean> = {
@@ -158,6 +192,11 @@ function NavGroupsList({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?
                 >
                   <Icon size={15} />
                   <span>{item.title}</span>
+                  {item.badge != null && (
+                    <span className="ml-auto rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+                      {item.badge}
+                    </span>
+                  )}
                 </Link>
               )
             })}
