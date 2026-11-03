@@ -15,3 +15,16 @@ export async function invalidateAfterPaymentWrite(queryClient: QueryClient, cust
     queryClient.invalidateQueries({ queryKey: ['customer-auto-balance'] }),
   ])
 }
+
+export async function invalidateAfterSupplierPurchaseWrite(queryClient: QueryClient, supplierId?: string) {
+  const promises: Promise<unknown>[] = [
+    queryClient.invalidateQueries({ queryKey: ['suppliers'] }),
+    queryClient.invalidateQueries({ queryKey: ['purchase-items'] }),
+  ]
+  if (supplierId) {
+    promises.push(queryClient.invalidateQueries({ queryKey: ['supplier-bundle', supplierId] }))
+  } else {
+    promises.push(queryClient.invalidateQueries({ queryKey: ['supplier-bundle'] }))
+  }
+  await Promise.all(promises)
+}
