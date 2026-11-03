@@ -16,8 +16,8 @@ import {
   type SupplierUpsertInput,
 } from '@/data/suppliers'
 import { formatFullDate } from '@/lib/date'
-import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
-import { paiseToRupeesText, rupeesToPaise } from '@/domain/supplier-units'
+import { formatPaiseInr, parseNonNegativeNumber } from '@/lib/inr-format'
+import { rupeesToPaise } from '@/domain/supplier-units'
 
 export const Route = createFileRoute('/suppliers')({
   component: SuppliersPage,
@@ -81,8 +81,7 @@ const FILTER_LABEL: Record<FilterType, string> = {
 }
 
 function formatPaiseDisplay(paise: number): string {
-  if (paise === 0) return '₹0.00'
-  return `₹${paiseToRupeesText(paise)}`
+  return formatPaiseInr(paise)
 }
 
 function SuppliersPage() {
@@ -253,21 +252,35 @@ function SuppliersPage() {
               {kpis.total} Total ({kpis.active} active)
             </span>
             <span className="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-rose-100">
-              {kpis.withDueCount} Owe {formatInrInteger(Math.round(kpis.totalDuePaise / 100))}
+              {kpis.withDueCount} Owe {formatPaiseInr(kpis.totalDuePaise)}
             </span>
             {kpis.totalAdvancePaise > 0 && (
               <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-100">
-                Advance {formatInrInteger(Math.round(kpis.totalAdvancePaise / 100))}
+                Advance {formatPaiseInr(kpis.totalAdvancePaise)}
               </span>
             )}
           </div>
-          <button
-            type="button"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
-            onClick={() => setDialogState(defaultSupplierFormState())}
-          >
-            <Plus size={14} /> Add Supplier
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              to="/purchase-bills/new"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              <Plus size={14} /> New Bill
+            </Link>
+            <Link
+              to="/supplier-payments/new"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              <Plus size={14} /> New Payment
+            </Link>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
+              onClick={() => setDialogState(defaultSupplierFormState())}
+            >
+              <Plus size={14} /> Add Supplier
+            </button>
+          </div>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -405,6 +418,20 @@ function SuppliersPage() {
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         <div className="inline-flex gap-1.5">
+                          <Link
+                            to="/purchase-bills/new"
+                            search={{ supplierId: s.id }}
+                            className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                          >
+                            + Bill
+                          </Link>
+                          <Link
+                            to="/supplier-payments/new"
+                            search={{ supplierId: s.id }}
+                            className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+                          >
+                            + Pay
+                          </Link>
                           <Link
                             to="/supplier-ledger/$supplierId"
                             params={{ supplierId: s.id }}

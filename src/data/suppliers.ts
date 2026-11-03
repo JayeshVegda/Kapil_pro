@@ -1,5 +1,6 @@
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
+import { nextPurchaseInNo } from '@/domain/in-no'
 import {
   computeSupplierSettlement,
   type SupplierSettlementInput,
@@ -83,6 +84,7 @@ export type PurchaseAdjustmentView = {
   billId: string
   type: string
   amountPaise: number
+  note?: string
   created: string
 }
 
@@ -238,6 +240,7 @@ const mapAdjustment = (row: PBRow): PurchaseAdjustmentView => ({
   billId: text(row.bill),
   type: text(row.type),
   amountPaise: num(row.amount_paise),
+  note: text(row.note),
   created: text(row.created),
 })
 
@@ -545,13 +548,116 @@ function generateRecordId(): string {
   return id
 }
 
+export async function getNextPurchaseInNo(dateYyyyMmDd: string): Promise<string> {
+  const records = await pb.collection('purchase_bills').getFullList({ fields: 'in_no' })
+  const existingInNos = (records as unknown as Array<{ in_no?: string }>).map((r) => String(r.in_no ?? ''))
+  return nextPurchaseInNo(existingInNos, dateYyyyMmDd)
+}
+
 export async function createPurchaseBill(input: PurchaseBillCreateInput): Promise<PurchaseBillView> {
   return runDataOperation('create-purchase-bill', async () => {
-    const billId = generateRecordId()
+    let inNo = (input.inNo || '').trim()
+    if (!inNo) {
+      inNo = await getNextPurchaseInNo(input.date)
+    }
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const billId = generateRecordId()
+        const billPayload = {
+          id: billId,
+          supplier: input.supplierId,
+          in_no: inNo,
+          supplier_bill_no: input.supplierBillNo ?? '',
+          date: input.date,
+          pool: input.pool,
+          tax_mode: input.taxMode,
+          gst_rate_bp: input.gstRateBp ?? 0,
+          vehicle_no: input.vehicleNo ?? '',
+          private_note: input.privateNote ?? '',
+          group_id: input.groupId ?? '',
+        }
+        const batch = pb.createBatch()
+        batch.collection('purchase_bills').create(billPayload)
+        const lineIds: string[] = []
+        for (const line of input.lines) {
+          const lineId = generateRecordId()
+          lineIds.push(lineId)
+          batch.collection('purchase_bill_lines').create({
+            id: lineId,
+            bill: billId,
+            item: line.itemId ?? '',
+            item_name: line.itemName,
+            weight_g: line.weightG,
+            rate_milli: line.rateMilli,
+            amount_paise: line.amountPaise,
+          })
+        }
+        for (const adjustment of input.adjustments ?? []) {
+          batch.collection('purchase_bill_adjustments').create({
+            id: generateRecordId(),
+            bill: billId,
+            type: adjustment.type,
+            amount_paise: adjustment.amountPaise,
+            note: adjustment.note ?? '',
+          })
+        }
+        for (const entry of input.bardan ?? []) {
+          batch.collection('purchase_bardan').create({
+            id: generateRecordId(),
+            bill: billId,
+            bardan_g: entry.bardanG,
+            rate_line: entry.rateLineIndex != null && entry.rateLineIndex >= 0 ? lineIds[entry.rateLineIndex] ?? '' : '',
+            rate_milli: entry.rateMilli,
+            method: entry.method,
+            credit_paise: entry.creditPaise ?? 0,
+            cash_amount_paise: entry.cashAmountPaise ?? 0,
+            date: entry.date ?? input.date,
+            note: entry.note ?? '',
+          })
+        }
+        batch.collection('purchase_audit_log').create({
+          collection: 'purchase_bills',
+          record_id: billId,
+          action: 'create',
+          after_json: JSON.stringify(billPayload),
+          actor: currentActor(),
+        })
+        await batch.send()
+        return mapBill((await pb.collection('purchase_bills').getOne(billId)) as PBRow)
+      } catch (err) {
+        if (attempt < 2) {
+          inNo = await getNextPurchaseInNo(input.date)
+          continue
+        }
+        throw err
+      }
+    }
+    throw new Error('Failed to create purchase bill after retries')
+  })
+}
+
+export type PurchaseBillUpdateInput = {
+  supplierId: string
+  supplierBillNo?: string
+  date: string
+  pool: SupplierPool
+  taxMode: string
+  gstRateBp?: number
+  vehicleNo?: string
+  privateNote?: string
+  lines: Array<{ itemId?: string; itemName: string; weightG: number; rateMilli: number; amountPaise: number }>
+  adjustments?: Array<{ type: string; amountPaise: number; note?: string }>
+}
+
+export async function updatePurchaseBill(billId: string, input: PurchaseBillUpdateInput): Promise<PurchaseBillView> {
+  return runDataOperation('update-purchase-bill', async () => {
+    const beforeBill = (await pb.collection('purchase_bills').getOne(billId)) as PBRow
+    const oldLines = await pb.collection('purchase_bill_lines').getFullList({ filter: `bill = "${billId}"` })
+    const oldAdjustments = await pb.collection('purchase_bill_adjustments').getFullList({ filter: `bill = "${billId}"` })
+
     const billPayload = {
-      id: billId,
       supplier: input.supplierId,
-      in_no: input.inNo,
       supplier_bill_no: input.supplierBillNo ?? '',
       date: input.date,
       pool: input.pool,
@@ -559,16 +665,21 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
       gst_rate_bp: input.gstRateBp ?? 0,
       vehicle_no: input.vehicleNo ?? '',
       private_note: input.privateNote ?? '',
-      group_id: input.groupId ?? '',
     }
+
     const batch = pb.createBatch()
-    batch.collection('purchase_bills').create(billPayload)
-    const lineIds: string[] = []
+    batch.collection('purchase_bills').update(billId, billPayload)
+
+    for (const oldLine of oldLines) {
+      batch.collection('purchase_bill_lines').delete(oldLine.id)
+    }
+    for (const oldAdj of oldAdjustments) {
+      batch.collection('purchase_bill_adjustments').delete(oldAdj.id)
+    }
+
     for (const line of input.lines) {
-      const lineId = generateRecordId()
-      lineIds.push(lineId)
       batch.collection('purchase_bill_lines').create({
-        id: lineId,
+        id: generateRecordId(),
         bill: billId,
         item: line.itemId ?? '',
         item_name: line.itemName,
@@ -577,6 +688,7 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
         amount_paise: line.amountPaise,
       })
     }
+
     for (const adjustment of input.adjustments ?? []) {
       batch.collection('purchase_bill_adjustments').create({
         id: generateRecordId(),
@@ -586,29 +698,87 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
         note: adjustment.note ?? '',
       })
     }
-    for (const entry of input.bardan ?? []) {
-      batch.collection('purchase_bardan').create({
-        id: generateRecordId(),
-        bill: billId,
-        bardan_g: entry.bardanG,
-        rate_line: entry.rateLineIndex != null && entry.rateLineIndex >= 0 ? lineIds[entry.rateLineIndex] ?? '' : '',
-        rate_milli: entry.rateMilli,
-        method: entry.method,
-        credit_paise: entry.creditPaise ?? 0,
-        cash_amount_paise: entry.cashAmountPaise ?? 0,
-        date: entry.date ?? input.date,
-        note: entry.note ?? '',
-      })
-    }
+
     batch.collection('purchase_audit_log').create({
       collection: 'purchase_bills',
       record_id: billId,
-      action: 'create',
+      action: 'update',
+      before_json: JSON.stringify(beforeBill),
       after_json: JSON.stringify(billPayload),
       actor: currentActor(),
     })
+
     await batch.send()
     return mapBill((await pb.collection('purchase_bills').getOne(billId)) as PBRow)
+  })
+}
+
+export type PurchaseBardanEntryInput = {
+  billId: string
+  bardanG: number
+  rateLineId?: string
+  rateMilli: number
+  method: string // 'deduct' | 'in_kind' | 'cash_back' | 'advance'
+  creditPaise?: number
+  cashAmountPaise?: number
+  date?: string
+  note?: string
+}
+
+export async function addPurchaseBardanEntry(input: PurchaseBardanEntryInput): Promise<PurchaseBardanView> {
+  return runDataOperation('add-purchase-bardan-entry', async () => {
+    const bill = (await pb.collection('purchase_bills').getOne(input.billId)) as PBRow
+    const bardanId = generateRecordId()
+    const bardanPayload = {
+      id: bardanId,
+      bill: input.billId,
+      bardan_g: input.bardanG,
+      rate_line: input.rateLineId ?? '',
+      rate_milli: input.rateMilli,
+      method: input.method,
+      credit_paise: input.creditPaise ?? 0,
+      cash_amount_paise: input.cashAmountPaise ?? 0,
+      date: input.date || String(bill.date ?? ''),
+      note: input.note ?? '',
+    }
+
+    const batch = pb.createBatch()
+    batch.collection('purchase_bardan').create(bardanPayload)
+
+    if (input.method === 'advance' && (input.creditPaise ?? 0) > 0) {
+      const paymentId = generateRecordId()
+      const paymentPayload = {
+        id: paymentId,
+        supplier: bill.supplier,
+        date: input.date || String(bill.date ?? ''),
+        pool: bill.pool,
+        kind: 'bardan_advance',
+        amount_paise: input.creditPaise ?? 0,
+        mode: 'other',
+        reference: `Bardan Advance (Bill ${bill.in_no})`,
+        payee_name: '',
+        private_note: input.note ?? '',
+      }
+      batch.collection('supplier_payments').create(paymentPayload)
+      batch.collection('purchase_audit_log').create({
+        collection: 'supplier_payments',
+        record_id: paymentId,
+        action: 'create',
+        after_json: JSON.stringify(paymentPayload),
+        actor: currentActor(),
+      })
+    }
+
+    batch.collection('purchase_audit_log').create({
+      collection: 'purchase_bardan',
+      record_id: bardanId,
+      action: 'create',
+      after_json: JSON.stringify(bardanPayload),
+      actor: currentActor(),
+    })
+
+    await batch.send()
+    return mapBardan((await pb.collection('purchase_bardan').getOne(bardanId)) as PBRow)
   })
 }
 
@@ -644,6 +814,7 @@ export type SupplierPaymentCreateInput = {
   reference?: string
   payeeName?: string
   privateNote?: string
+  allocations?: Array<{ billId: string; amountPaise: number }>
 }
 
 export async function createSupplierPayment(input: SupplierPaymentCreateInput): Promise<SupplierPaymentView> {
@@ -663,6 +834,26 @@ export async function createSupplierPayment(input: SupplierPaymentCreateInput): 
     }
     const batch = pb.createBatch()
     batch.collection('supplier_payments').create(payload)
+
+    for (const alloc of input.allocations ?? []) {
+      if (alloc.amountPaise > 0) {
+        const allocId = generateRecordId()
+        batch.collection('supplier_payment_allocations').create({
+          id: allocId,
+          payment: paymentId,
+          bill: alloc.billId,
+          amount_paise: alloc.amountPaise,
+        })
+        batch.collection('purchase_audit_log').create({
+          collection: 'supplier_payment_allocations',
+          record_id: allocId,
+          action: 'create',
+          after_json: JSON.stringify({ payment: paymentId, bill: alloc.billId, amount_paise: alloc.amountPaise }),
+          actor: currentActor(),
+        })
+      }
+    }
+
     batch.collection('purchase_audit_log').create({
       collection: 'supplier_payments',
       record_id: paymentId,
@@ -672,6 +863,33 @@ export async function createSupplierPayment(input: SupplierPaymentCreateInput): 
     })
     await batch.send()
     return mapPayment((await pb.collection('supplier_payments').getOne(paymentId)) as PBRow)
+  })
+}
+
+export type PurchaseBillDetail = {
+  bill: PurchaseBillView
+  lines: PurchaseLineView[]
+  adjustments: PurchaseAdjustmentView[]
+  bardan: PurchaseBardanView[]
+  allocations: SupplierAllocationView[]
+}
+
+export async function loadPurchaseBill(billId: string): Promise<PurchaseBillDetail> {
+  return runDataOperation('load-purchase-bill', async () => {
+    const [billRaw, lines, adjustments, bardan, allocations] = await Promise.all([
+      pb.collection('purchase_bills').getOne(billId),
+      fetchAll<PurchaseLineView>('purchase_bill_lines', mapLine, { filter: `bill = "${billId}"`, sort: 'created,id' }),
+      fetchAll<PurchaseAdjustmentView>('purchase_bill_adjustments', mapAdjustment, { filter: `bill = "${billId}"`, sort: 'created,id' }),
+      fetchAll<PurchaseBardanView>('purchase_bardan', mapBardan, { filter: `bill = "${billId}"`, sort: 'date,created,id' }),
+      fetchAll<SupplierAllocationView>('supplier_payment_allocations', mapAllocation, { filter: `bill = "${billId}"`, sort: 'created,id' }),
+    ])
+    return {
+      bill: mapBill(billRaw as PBRow),
+      lines,
+      adjustments,
+      bardan,
+      allocations,
+    }
   })
 }
 
@@ -766,17 +984,6 @@ export async function loadSuppliersSummary(): Promise<SupplierSummary[]> {
     const rows: SupplierSummary[] = []
     for (const supplier of suppliers) {
       const bills = allBills.filter((bill) => bill.supplierId === supplier.id)
-      if (bills.length === 0 && allPayments.every((payment) => payment.supplierId !== supplier.id)) {
-        rows.push({
-          supplier,
-          kachaDuePaise: supplier.openingKachaPaise,
-          gstDuePaise: supplier.openingGstPaise,
-          advancePaise: 0,
-          outstandingPaise: 0,
-          lastActivityDate: '',
-        })
-        continue
-      }
       const billIds = new Set(bills.map((bill) => bill.id))
       const payments = allPayments.filter((payment) => payment.supplierId === supplier.id)
       const paymentIds = new Set(payments.map((payment) => payment.id))

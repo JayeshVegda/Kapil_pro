@@ -31,7 +31,9 @@ import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as BackupRouteImport } from './routes/backup'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CastingIndexRouteImport } from './routes/casting/index'
+import { Route as SupplierPaymentsNewRouteImport } from './routes/supplier-payments.new'
 import { Route as SupplierLedgerSupplierIdRouteImport } from './routes/supplier-ledger.$supplierId'
+import { Route as PurchaseBillsNewRouteImport } from './routes/purchase-bills.new'
 import { Route as CastingNewSessionRouteImport } from './routes/casting/new-session'
 import { Route as CastingMaterialsRouteImport } from './routes/casting/materials'
 import { Route as CastingLogRouteImport } from './routes/casting/log'
@@ -147,12 +149,22 @@ const CastingIndexRoute = CastingIndexRouteImport.update({
   path: '/',
   getParentRoute: () => CastingRoute,
 } as any)
+const SupplierPaymentsNewRoute = SupplierPaymentsNewRouteImport.update({
+  id: '/supplier-payments/new',
+  path: '/supplier-payments/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SupplierLedgerSupplierIdRoute =
   SupplierLedgerSupplierIdRouteImport.update({
     id: '/supplier-ledger/$supplierId',
     path: '/supplier-ledger/$supplierId',
     getParentRoute: () => rootRouteImport,
   } as any)
+const PurchaseBillsNewRoute = PurchaseBillsNewRouteImport.update({
+  id: '/purchase-bills/new',
+  path: '/purchase-bills/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CastingNewSessionRoute = CastingNewSessionRouteImport.update({
   id: '/new-session',
   path: '/new-session',
@@ -200,7 +212,9 @@ export interface FileRoutesByFullPath {
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/purchase-bills/new': typeof PurchaseBillsNewRoute
   '/supplier-ledger/$supplierId': typeof SupplierLedgerSupplierIdRoute
+  '/supplier-payments/new': typeof SupplierPaymentsNewRoute
   '/casting/': typeof CastingIndexRoute
 }
 export interface FileRoutesByTo {
@@ -228,7 +242,9 @@ export interface FileRoutesByTo {
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/purchase-bills/new': typeof PurchaseBillsNewRoute
   '/supplier-ledger/$supplierId': typeof SupplierLedgerSupplierIdRoute
+  '/supplier-payments/new': typeof SupplierPaymentsNewRoute
   '/casting': typeof CastingIndexRoute
 }
 export interface FileRoutesById {
@@ -258,7 +274,9 @@ export interface FileRoutesById {
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/purchase-bills/new': typeof PurchaseBillsNewRoute
   '/supplier-ledger/$supplierId': typeof SupplierLedgerSupplierIdRoute
+  '/supplier-payments/new': typeof SupplierPaymentsNewRoute
   '/casting/': typeof CastingIndexRoute
 }
 export interface FileRouteTypes {
@@ -289,7 +307,9 @@ export interface FileRouteTypes {
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
+    | '/purchase-bills/new'
     | '/supplier-ledger/$supplierId'
+    | '/supplier-payments/new'
     | '/casting/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -317,7 +337,9 @@ export interface FileRouteTypes {
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
+    | '/purchase-bills/new'
     | '/supplier-ledger/$supplierId'
+    | '/supplier-payments/new'
     | '/casting'
   id:
     | '__root__'
@@ -346,7 +368,9 @@ export interface FileRouteTypes {
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
+    | '/purchase-bills/new'
     | '/supplier-ledger/$supplierId'
+    | '/supplier-payments/new'
     | '/casting/'
   fileRoutesById: FileRoutesById
 }
@@ -372,7 +396,9 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   SuppliersRoute: typeof SuppliersRoute
   TransactionsRoute: typeof TransactionsRoute
+  PurchaseBillsNewRoute: typeof PurchaseBillsNewRoute
   SupplierLedgerSupplierIdRoute: typeof SupplierLedgerSupplierIdRoute
+  SupplierPaymentsNewRoute: typeof SupplierPaymentsNewRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -531,11 +557,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CastingIndexRouteImport
       parentRoute: typeof CastingRoute
     }
+    '/supplier-payments/new': {
+      id: '/supplier-payments/new'
+      path: '/supplier-payments/new'
+      fullPath: '/supplier-payments/new'
+      preLoaderRoute: typeof SupplierPaymentsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/supplier-ledger/$supplierId': {
       id: '/supplier-ledger/$supplierId'
       path: '/supplier-ledger/$supplierId'
       fullPath: '/supplier-ledger/$supplierId'
       preLoaderRoute: typeof SupplierLedgerSupplierIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/purchase-bills/new': {
+      id: '/purchase-bills/new'
+      path: '/purchase-bills/new'
+      fullPath: '/purchase-bills/new'
+      preLoaderRoute: typeof PurchaseBillsNewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/casting/new-session': {
@@ -610,7 +650,9 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   SuppliersRoute: SuppliersRoute,
   TransactionsRoute: TransactionsRoute,
+  PurchaseBillsNewRoute: PurchaseBillsNewRoute,
   SupplierLedgerSupplierIdRoute: SupplierLedgerSupplierIdRoute,
+  SupplierPaymentsNewRoute: SupplierPaymentsNewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

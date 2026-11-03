@@ -7,9 +7,26 @@ const inrNumber = new Intl.NumberFormat('en-IN', {
   minimumFractionDigits: 0,
 })
 
+const inrCurrency2 = new Intl.NumberFormat('en-IN', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
 export function formatInrInteger(value: number): string {
   const n = Math.round(Number.isFinite(value) ? value : 0)
   return `₹${inrNumber.format(n)}`
+}
+
+export function formatInrCurrency(value: number): string {
+  const n = Number.isFinite(value) ? value : 0
+  return `₹${inrCurrency2.format(n)}`
+}
+
+export function formatPaiseInr(paise: number): string {
+  const p = Math.trunc(Number(paise ?? 0))
+  const sign = p < 0 ? '-' : ''
+  const absRupees = Math.abs(p) / 100
+  return `${sign}₹${inrCurrency2.format(absRupees)}`
 }
 
 /**

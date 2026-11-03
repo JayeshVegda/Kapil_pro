@@ -65,6 +65,8 @@ const commandRoutes = [
   { label: 'Monthly Sales Calendar', path: '/monthly-sales-calendar' },
   { label: 'Customers', path: '/customers' },
   { label: 'Suppliers', path: '/suppliers' },
+  { label: 'New Purchase Bill', path: '/purchase-bills/new' },
+  { label: 'New Supplier Payment', path: '/supplier-payments/new' },
   { label: 'Purchase Items', path: '/purchase-items' },
   { label: 'Items', path: '/items' },
   { label: 'Data Health', path: '/data-health' },

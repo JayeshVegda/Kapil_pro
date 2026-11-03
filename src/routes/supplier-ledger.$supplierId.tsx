@@ -1,22 +1,31 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowLeft,
   Calendar,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Download,
+  Edit3,
   FileText,
   Image as ImageIcon,
   Lock,
+  Plus,
+  Trash2,
   X,
 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { pb } from '@/data/pocketbase'
+import { toUserMessage } from '@/app/errors'
+import { invalidateAfterSupplierPurchaseWrite } from '@/app/query-invalidation'
 import { DateInput } from '@/components/ui/date-input'
 import {
+  addPurchaseBardanEntry,
+  cancelPurchaseBill,
+  cancelSupplierPayment,
   computeSupplierBundleLedger,
   computeSupplierBundleSettlement,
   loadSupplierBundle,
@@ -27,11 +36,14 @@ import {
 } from '@/data/suppliers'
 import type { SupplierPool } from '@/domain/supplier-ledger'
 import { formatFullDate } from '@/lib/date'
+import { formatPaiseInr } from '@/lib/inr-format'
 import { exportNodeAsJpg } from '@/lib/image-export'
 import {
   gramsToKgText,
+  kgToGrams,
+  lineAmountPaise,
   milliToRateText,
-  paiseToRupeesText,
+  rupeesToPaise,
 } from '@/domain/supplier-units'
 
 export const Route = createFileRoute('/supplier-ledger/$supplierId')({
@@ -41,8 +53,7 @@ export const Route = createFileRoute('/supplier-ledger/$supplierId')({
 type PoolFilter = 'all' | 'kacha' | 'gst'
 
 function formatPaise(paise: number): string {
-  if (paise === 0) return '₹0.00'
-  return `₹${paiseToRupeesText(paise)}`
+  return formatPaiseInr(paise)
 }
 
 function findVilaityForDate(
@@ -79,6 +90,7 @@ type MergedLedgerRow = {
 
 function SupplierLedgerPage() {
   const { supplierId } = Route.useParams()
+  const queryClient = useQueryClient()
   const exportRef = useRef<HTMLDivElement>(null)
   const [isExporting, setIsExporting] = useState(false)
 
@@ -88,9 +100,26 @@ function SupplierLedgerPage() {
   const [expandedBillIds, setExpandedBillIds] = useState<Set<string>>(new Set())
   const [selectedDrawerBillId, setSelectedDrawerBillId] = useState<string | null>(null)
 
+  const [cancelPaymentId, setCancelPaymentId] = useState<string | null>(null)
+  const [cancelPaymentReason, setCancelPaymentReason] = useState('')
+  const [cancelPaymentError, setCancelPaymentError] = useState('')
+
   const bundleQuery = useQuery({
     queryKey: ['supplier-bundle', supplierId],
     queryFn: () => loadSupplierBundle(supplierId),
+  })
+
+  const cancelPaymentMutation = useMutation({
+    mutationFn: async () => {
+      if (!cancelPaymentReason.trim()) throw new Error('Cancellation reason is required.')
+      await cancelSupplierPayment(cancelPaymentId!, cancelPaymentReason.trim())
+    },
+    onSuccess: async () => {
+      setCancelPaymentId(null)
+      setCancelPaymentReason('')
+      await invalidateAfterSupplierPurchaseWrite(queryClient, supplierId)
+    },
+    onError: (err) => setCancelPaymentError(toUserMessage(err)),
   })
 
   const vilaityQuery = useQuery({
@@ -321,14 +350,30 @@ function SupplierLedgerPage() {
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={handleExportJpg}
-          disabled={isExporting}
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
-        >
-          <Download size={14} /> {isExporting ? 'Exporting...' : 'Download JPG'}
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/purchase-bills/new"
+            search={{ supplierId: s.id }}
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            <Plus size={13} /> New Bill
+          </Link>
+          <Link
+            to="/supplier-payments/new"
+            search={{ supplierId: s.id }}
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            <Plus size={13} /> New Payment
+          </Link>
+          <button
+            type="button"
+            onClick={handleExportJpg}
+            disabled={isExporting}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+          >
+            <Download size={14} /> {isExporting ? 'Exporting...' : 'Download JPG'}
+          </button>
+        </div>
       </div>
 
       {/* Exportable Container Root */}
@@ -428,26 +473,56 @@ function SupplierLedgerPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {/* Opening Balance Row */}
-              <tr className="bg-slate-50/50 font-medium text-slate-700">
-                <td className="px-3 py-2 text-xs text-slate-500">{fromDate ? formatFullDate(fromDate) : 'Start'}</td>
-                <td className="px-3 py-2 text-xs text-slate-400">—</td>
-                <td className="px-3 py-2">Opening Balance</td>
-                <td className="px-3 py-2">
-                  <span className="rounded bg-slate-200/70 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
-                    {poolFilter}
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums">
-                  {ledgerResult && ledgerResult.openingPaise > 0 ? formatPaise(ledgerResult.openingPaise) : '—'}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums">
-                  {ledgerResult && ledgerResult.openingPaise < 0 ? formatPaise(-ledgerResult.openingPaise) : '—'}
-                </td>
-                <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-slate-800">
-                  {ledgerResult ? formatPaise(ledgerResult.openingPaise) : '₹0.00'}
-                </td>
-              </tr>
+              {/* Opening Balance Rows */}
+              {(poolFilter === 'all' || poolFilter === 'kacha') && (
+                <tr className="bg-slate-50/50 font-medium text-slate-700">
+                  <td className="px-3 py-2 text-xs text-slate-500">
+                    {fromDate ? formatFullDate(fromDate) : s.openingBalanceDate ? formatFullDate(s.openingBalanceDate) : 'Start'}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-slate-400">—</td>
+                  <td className="px-3 py-2">Opening (Kacha)</td>
+                  <td className="px-3 py-2">
+                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">
+                      kacha
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                    {s.openingKachaPaise > 0 ? formatPaise(s.openingKachaPaise) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                    {s.openingKachaPaise < 0 ? formatPaise(-s.openingKachaPaise) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-slate-800">
+                    {formatPaise(s.openingKachaPaise)}
+                  </td>
+                </tr>
+              )}
+
+              {(poolFilter === 'all' || poolFilter === 'gst') && (
+                <tr className="bg-slate-50/50 font-medium text-slate-700">
+                  <td className="px-3 py-2 text-xs text-slate-500">
+                    {fromDate ? formatFullDate(fromDate) : s.openingBalanceDate ? formatFullDate(s.openingBalanceDate) : 'Start'}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-slate-400">—</td>
+                  <td className="px-3 py-2">Opening (GST)</td>
+                  <td className="px-3 py-2">
+                    <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-blue-800">
+                      gst
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                    {s.openingGstPaise > 0 ? formatPaise(s.openingGstPaise) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                    {s.openingGstPaise < 0 ? formatPaise(-s.openingGstPaise) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-slate-800">
+                    {poolFilter === 'all'
+                      ? formatPaise(s.openingKachaPaise + s.openingGstPaise)
+                      : formatPaise(s.openingGstPaise)}
+                  </td>
+                </tr>
+              )}
 
               {mergedRows.length === 0 && (
                 <tr>
@@ -518,6 +593,19 @@ function SupplierLedgerPage() {
                           <span className="inline-flex items-center gap-0.5 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-amber-100">
                             <AlertCircle size={10} /> Bardan Pending
                           </span>
+                        )}
+                        {row.paymentId && !row.cancelled && (
+                          <button
+                            type="button"
+                            title="Cancel payment"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setCancelPaymentId(row.paymentId!)
+                            }}
+                            className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                          >
+                            <Trash2 size={11} /> Cancel
+                          </button>
                         )}
                         {row.billId && (billAdjustments.length > 0 || billBardan.length > 0) && (
                           <button
@@ -620,6 +708,46 @@ function SupplierLedgerPage() {
           onClose={() => setSelectedDrawerBillId(null)}
         />
       )}
+
+      {/* Cancel Payment Modal */}
+      {cancelPaymentId && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4" onClick={() => setCancelPaymentId(null)}>
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-slate-900">Cancel Payment</h3>
+            <p className="text-xs text-slate-600">
+              Soft cancellation: The payment will remain in the audit trail and struck-through in the ledger.
+            </p>
+            {cancelPaymentError && <p className="text-xs text-rose-600">{cancelPaymentError}</p>}
+            <input
+              type="text"
+              placeholder="Cancellation reason (required)"
+              value={cancelPaymentReason}
+              onChange={(e) => setCancelPaymentReason(e.target.value)}
+              className="h-8 w-full rounded border border-slate-300 px-2 text-xs text-slate-900 outline-none focus:border-rose-400"
+            />
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCancelPaymentId(null)
+                  setCancelPaymentReason('')
+                }}
+                className="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
+              >
+                Keep Payment
+              </button>
+              <button
+                type="button"
+                disabled={!cancelPaymentReason.trim() || cancelPaymentMutation.isPending}
+                onClick={() => cancelPaymentMutation.mutate()}
+                className="rounded bg-rose-600 px-3 py-1 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {cancelPaymentMutation.isPending ? 'Cancelling...' : 'Confirm Cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -637,11 +765,72 @@ function BillDetailsDrawer({
   history: Array<{ date: string; vilaityMilli: number }>
   onClose: () => void
 }) {
+  const queryClient = useQueryClient()
   const lines = bundle.lines.filter((l) => l.billId === bill.id)
   const adjustments = bundle.adjustments.filter((a) => a.billId === bill.id)
   const bardanList = bundle.bardan.filter((b) => b.billId === bill.id)
+  const hasManualAllocations = bundle.allocations.some((a) => a.billId === bill.id)
 
   const vilaityMatch = findVilaityForDate(history, bill.date)
+
+  // Add Bardan state
+  const [showAddBardan, setShowAddBardan] = useState(false)
+  const [bardanKgStr, setBardanKgStr] = useState('')
+  const [bardanLineId, setBardanLineId] = useState(() => lines[0]?.id ?? '')
+  const [bardanMethod, setBardanMethod] = useState<'deduct' | 'in_kind' | 'cash_back' | 'advance'>('deduct')
+  const [bardanDate, setBardanDate] = useState(() => bill.date)
+  const [bardanNote, setBardanNote] = useState('')
+  const [bardanCashStr, setBardanCashStr] = useState('')
+  const [bardanError, setBardanError] = useState('')
+
+  // Cancel Bill state
+  const [showCancelPrompt, setShowCancelPrompt] = useState(false)
+  const [cancelReason, setCancelReason] = useState('')
+  const [cancelError, setCancelError] = useState('')
+
+  const selectedLine = lines.find((l) => l.id === bardanLineId) || lines[0]
+  const bardanRateMilli = selectedLine?.rateMilli ?? 0
+  const bardanGrams = kgToGrams(parseFloat(bardanKgStr) || 0)
+  const bardanCreditPaise = bardanMethod === 'deduct' || bardanMethod === 'advance' ? lineAmountPaise(bardanGrams, bardanRateMilli) : 0
+  const bardanCashPaise = bardanMethod === 'cash_back' ? rupeesToPaise(parseFloat(bardanCashStr) || 0) : 0
+
+  const addBardanMutation = useMutation({
+    mutationFn: async () => {
+      if (bardanGrams <= 0) throw new Error('Please enter a valid bardan weight in kg.')
+      await addPurchaseBardanEntry({
+        billId: bill.id,
+        bardanG: bardanGrams,
+        rateLineId: selectedLine?.id,
+        rateMilli: bardanRateMilli,
+        method: bardanMethod,
+        creditPaise: bardanCreditPaise,
+        cashAmountPaise: bardanCashPaise,
+        date: bardanDate,
+        note: bardanNote.trim(),
+      })
+    },
+    onSuccess: async () => {
+      setShowAddBardan(false)
+      setBardanKgStr('')
+      setBardanNote('')
+      setBardanCashStr('')
+      await invalidateAfterSupplierPurchaseWrite(queryClient, bill.supplierId)
+    },
+    onError: (err) => setBardanError(toUserMessage(err)),
+  })
+
+  const cancelBillMutation = useMutation({
+    mutationFn: async () => {
+      if (!cancelReason.trim()) throw new Error('Cancellation reason is required.')
+      await cancelPurchaseBill(bill.id, cancelReason.trim())
+    },
+    onSuccess: async () => {
+      setShowCancelPrompt(false)
+      await invalidateAfterSupplierPurchaseWrite(queryClient, bill.supplierId)
+      onClose()
+    },
+    onError: (err) => setCancelError(toUserMessage(err)),
+  })
 
   return (
     <div className="fixed inset-0 z-[75] flex justify-end bg-slate-900/40 backdrop-blur-xs" onClick={onClose}>
@@ -677,6 +866,16 @@ function BillDetailsDrawer({
             <X size={18} />
           </button>
         </div>
+
+        {hasManualAllocations && (
+          <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900">
+            <AlertTriangle size={15} className="shrink-0 text-amber-600" />
+            <span>
+              <strong>Notice:</strong> This bill has manual payment allocations assigned. Editing quantities or totals
+              will modify remaining dues.
+            </span>
+          </div>
+        )}
 
         {/* Settlement Status Card */}
         <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
@@ -779,10 +978,150 @@ function BillDetailsDrawer({
           </div>
         )}
 
-        {/* Bardan Entries */}
-        {bardanList.length > 0 && (
-          <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-2">Bardan Entries</h3>
+        {/* Bardan Entries & Add Bardan Form */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-600">Bardan Entries</h3>
+            {!bill.cancelled && !showAddBardan && (
+              <button
+                type="button"
+                onClick={() => setShowAddBardan(true)}
+                className="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+              >
+                <Plus size={13} /> Add Bardan
+              </button>
+            )}
+          </div>
+
+          {showAddBardan && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-3 space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-blue-950">New Bardan Settlement Entry</span>
+                <button type="button" onClick={() => setShowAddBardan(false)} className="text-slate-400 hover:text-slate-700">
+                  <X size={14} />
+                </button>
+              </div>
+
+              {bardanError && <p className="text-xs text-rose-600">{bardanError}</p>}
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] font-medium text-slate-600">Bardan Weight (kg)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 45.000"
+                    value={bardanKgStr}
+                    onChange={(e) => setBardanKgStr(e.target.value)}
+                    className="h-8 w-full rounded border border-slate-300 bg-white px-2 font-mono text-xs text-slate-900 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-medium text-slate-600">Settlement Method</label>
+                  <select
+                    value={bardanMethod}
+                    onChange={(e) => setBardanMethod(e.target.value as any)}
+                    className="h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none"
+                  >
+                    <option value="deduct">Deduct (Credit kg × rate)</option>
+                    <option value="in_kind">In Kind (Settled, nil)</option>
+                    <option value="cash_back">Cash Back (Refund memo)</option>
+                    <option value="advance">Advance (Future pool payment)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] font-medium text-slate-600">Rate Line</label>
+                  <select
+                    value={bardanLineId}
+                    onChange={(e) => setBardanLineId(e.target.value)}
+                    className="h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none"
+                  >
+                    {lines.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.itemName} (₹{milliToRateText(l.rateMilli)}/kg)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {bardanMethod === 'cash_back' ? (
+                  <div>
+                    <label className="text-[11px] font-medium text-slate-600">Cash Back Amount (₹)</label>
+                    <input
+                      type="text"
+                      placeholder="₹ amount"
+                      value={bardanCashStr}
+                      onChange={(e) => setBardanCashStr(e.target.value)}
+                      className="h-8 w-full rounded border border-slate-300 bg-white px-2 font-mono text-xs text-slate-900 outline-none"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-[11px] font-medium text-slate-600">Date</label>
+                    <DateInput value={bardanDate} onChange={setBardanDate} className="h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs" />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="text-[11px] font-medium text-slate-600">Note / Bags description</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 50 plastic bags returned"
+                  value={bardanNote}
+                  onChange={(e) => setBardanNote(e.target.value)}
+                  className="h-8 w-full rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none"
+                />
+              </div>
+
+              {/* Preview banner */}
+              <div className="rounded bg-white p-2 border border-blue-200 text-xs">
+                {bardanMethod === 'deduct' && (
+                  <p className="text-slate-700">
+                    Credit Preview: <strong>{formatPaise(bardanCreditPaise)}</strong> (deducted from bill payable)
+                  </p>
+                )}
+                {bardanMethod === 'in_kind' && (
+                  <p className="text-slate-600 italic">Money ₹0.00 — settled in kind with note.</p>
+                )}
+                {bardanMethod === 'cash_back' && (
+                  <p className="text-slate-600">
+                    Memo cash back: <strong>{formatPaise(bardanCashPaise)}</strong> (no effect on payable).
+                  </p>
+                )}
+                {bardanMethod === 'advance' && (
+                  <p className="text-emerald-700 font-medium">
+                    Creates an advance payment of <strong>{formatPaise(bardanCreditPaise)}</strong> in the {bill.pool} pool.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowAddBardan(false)}
+                  className="rounded border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addBardanMutation.mutate()}
+                  disabled={addBardanMutation.isPending}
+                  className="rounded bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {addBardanMutation.isPending ? 'Saving...' : 'Save Bardan'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {bardanList.length === 0 ? (
+            <p className="text-xs text-slate-400 italic">No bardan settled yet for this bill.</p>
+          ) : (
             <div className="space-y-1.5">
               {bardanList.map((b) => (
                 <div key={b.id} className="rounded border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-700 space-y-1">
@@ -808,8 +1147,8 @@ function BillDetailsDrawer({
                 </div>
               ))}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Private Note (Internal only) */}
         {bill.privateNote && (
@@ -844,6 +1183,62 @@ function BillDetailsDrawer({
                   </a>
                 )
               })}
+            </div>
+          </div>
+        )}
+
+        {/* Bottom Actions: Edit & Cancel Bill */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-4">
+          <Link
+            to="/purchase-bills/new"
+            search={{ editBillId: bill.id }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <Edit3 size={13} /> Edit Bill
+          </Link>
+
+          {!bill.cancelled && (
+            <button
+              type="button"
+              onClick={() => setShowCancelPrompt(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+            >
+              <Trash2 size={13} /> Cancel Bill
+            </button>
+          )}
+        </div>
+
+        {/* Cancel Dialog / Prompt */}
+        {showCancelPrompt && (
+          <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 space-y-2 text-xs">
+            <p className="font-bold text-rose-900">Are you sure you want to cancel this bill?</p>
+            <p className="text-rose-700">
+              This is a soft cancellation: the bill will remain struck-through in the ledger for the audit paper trail.
+            </p>
+            {cancelError && <p className="font-semibold text-rose-800">{cancelError}</p>}
+            <input
+              type="text"
+              placeholder="Cancellation reason (required)"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              className="h-8 w-full rounded border border-rose-300 bg-white px-2 text-xs text-slate-900 outline-none"
+            />
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowCancelPrompt(false)}
+                className="rounded border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700"
+              >
+                Keep Bill
+              </button>
+              <button
+                type="button"
+                onClick={() => cancelBillMutation.mutate()}
+                disabled={cancelBillMutation.isPending}
+                className="rounded bg-rose-600 px-3 py-1 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {cancelBillMutation.isPending ? 'Cancelling...' : 'Confirm Cancel'}
+              </button>
             </div>
           </div>
         )}

@@ -19,7 +19,9 @@ export async function invalidateAfterPaymentWrite(queryClient: QueryClient, cust
 export async function invalidateAfterSupplierPurchaseWrite(queryClient: QueryClient, supplierId?: string) {
   const promises: Promise<unknown>[] = [
     queryClient.invalidateQueries({ queryKey: ['suppliers'] }),
+    queryClient.invalidateQueries({ queryKey: ['suppliers-list'] }),
     queryClient.invalidateQueries({ queryKey: ['purchase-items'] }),
+    queryClient.invalidateQueries({ queryKey: ['purchase-bills'] }),
   ]
   if (supplierId) {
     promises.push(queryClient.invalidateQueries({ queryKey: ['supplier-bundle', supplierId] }))

@@ -62,6 +62,40 @@ export type SupplierSettlementHeaderInput = {
   openingGstPaise: number
 }
 
+export type ManualPinCandidate = {
+  billId: string
+  billPool: SupplierPool
+  billDuePaise: number
+  pinnedPaise: number
+}
+
+export type ManualPinValidationResult = {
+  valid: boolean
+  error?: string
+}
+
+export function validateManualPins(
+  paymentPool: SupplierPool,
+  paymentAmountPaise: number,
+  pins: readonly ManualPinCandidate[],
+): ManualPinValidationResult {
+  let totalPinned = 0
+  for (const pin of pins) {
+    if (pin.pinnedPaise <= 0) continue
+    if (pin.billPool !== paymentPool) {
+      return { valid: false, error: `Cross-pool pin rejected: bill is in ${pin.billPool} pool while payment is in ${paymentPool} pool.` }
+    }
+    if (pin.pinnedPaise > pin.billDuePaise) {
+      return { valid: false, error: `Over-pin on bill rejected: pinned amount (${pin.pinnedPaise}) exceeds bill due (${pin.billDuePaise}).` }
+    }
+    totalPinned += pin.pinnedPaise
+  }
+  if (totalPinned > paymentAmountPaise) {
+    return { valid: false, error: `Over-pin on payment rejected: total pinned (${totalPinned}) exceeds payment amount (${paymentAmountPaise}).` }
+  }
+  return { valid: true }
+}
+
 export type SupplierSettlementInput = {
   supplier: SupplierSettlementHeaderInput
   bills: readonly PurchaseBillSettlementInput[]

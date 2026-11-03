@@ -36,6 +36,8 @@ const navGroups: NavGroup[] = [
     collapsible: true,
     items: [
       { to: '/suppliers', title: 'Suppliers', icon: Truck },
+      { to: '/purchase-bills/new', title: 'New Purchase Bill', icon: FilePlus2 },
+      { to: '/supplier-payments/new', title: 'New Supplier Payment', icon: CreditCard },
       { to: '/purchase-items', title: 'Purchase Items', icon: Package },
     ],
   },
