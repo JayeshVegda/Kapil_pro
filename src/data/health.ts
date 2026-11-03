@@ -52,7 +52,7 @@ export async function probeCollections(): Promise<CollectionProbe[]> {
 export async function probeMarketFeed(): Promise<{ reachable: boolean; detail: string }> {
   try {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 6000)
+    const timer = setTimeout(() => controller.abort(), 15000)
     const res = await fetch('/api/market-rate', { signal: controller.signal, cache: 'no-store' })
     clearTimeout(timer)
     return { reachable: res.ok, detail: res.ok ? 'RSS feed reachable' : `HTTP ${res.status}` }

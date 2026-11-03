@@ -137,4 +137,55 @@ $$\text{Book No} = \left\lfloor\frac{\text{Bill No} - 1}{50}\right\rfloor \times
 6. **When LR / Bilti number is mentioned:**
    Store in `lr_no` field (e.g. *"Bilti 8892"* → `lr_no: "8892"`).
 7. **Always link `draft` relation:**
-   In `bill_draft_items`, always set `"draft": draft_id` so the line items link directly to the draft header.
+    In `bill_draft_items`, always set `"draft": draft_id` so the line items link directly to the draft header.
+8. **Receipt logic (money by itself):**
+    Money dictated with **no bill items** is a standalone receipt → ONE record in
+    `payment_drafts` per payment (see section 8). Never a bill draft, never also a
+    `bill_draft_payments` row, never split into multiple records for the same money.
+
+---
+
+## 8. Standalone Receipts (`payment_drafts`)
+
+Money dictated alone ("adeshe 25 hajar RTGS aavyo che" — no bill lines) stages a
+**payment receipt** so the operator can accept it in one tap.
+
+### Field contract
+
+| Field | Value |
+| :--- | :--- |
+| `customer` / `customer_name` | party id if matched, else `""` + dictated words |
+| `date` | receipt date, `YYYY-MM-DD` |
+| `amount` | whole rupees, no symbols |
+| `mode` | `"Cash"` or `"Bank"` (NEFT/RTGS/IMPS/UPI/cheque = Bank) |
+| `note` | short factual tail ("RTGS", "advance aavyo") — app prefixes "Receipt via Muse \<date\>" |
+| `raw_text` | Jay's exact words, verbatim |
+| `confidence` | honest self-assessment; 0.5 if party unmatched |
+| `status` | always `pending_review` on create |
+
+### Amount-due context (what the accept screen shows)
+
+When the operator accepts a receipt, the app computes the party's **amount due**
+(single source of truth: `src/data/customer-balance.ts → loadCustomerAutoBalanceContext(customerId, date)`):
+
+$$\text{Amount Due} = \text{Previous Balance} + \sum \text{Credits}$$
+
+Machine steps (for your understanding — you never compute this in staging):
+1. Load the party's real `bills` + `bill_items` + `payments` **up to the receipt date**
+   (matched party required; unmatched → no balance shown).
+2. `Previous Balance = opening_balance + Σ billed totals on prior bills − Σ payments applied to those bills`.
+3. `Credits` = the party's real `payments` recorded **after** the last unbilled bill
+   (period credits). `Amount due = previous + Σ credits`.
+
+> [!IMPORTANT]
+> **Pending drafts (yours) are NOT in that figure** — only real, saved records.
+> **Whatever the operator types on the accept card wins** — if his figure differs
+> from anything you or the app computed, his number goes into `payments` untouched.
+
+### Flow after staging
+
+- Operator **accepts** → app creates the real `payments` record, marks your draft
+  `approved` + `converted_payment`, recalculates the party's bill statuses.
+- Operator **rejects** → draft becomes `rejected`, dead end, Muse gets the feedback.
+- After either outcome the draft never changes again. Corrections to an accepted
+  receipt happen by **editing the payment record in the app** — never by re-staging.

@@ -4,10 +4,13 @@ import { useRef, useState, type RefObject } from 'react'
 import { Check, Eye, RefreshCw, RotateCcw, Search, Sparkles, X } from 'lucide-react'
 import { pb } from '@/data/pocketbase'
 import { countPendingDrafts, loadDraftItemMasters, loadDraftPage, type DraftStatusFilter } from '@/data/bill-drafts'
+import { countPendingPaymentDrafts, loadPaymentDraftPage, rejectPaymentDraft, savePaymentFromDraft } from '@/data/payment-drafts'
 import { loadCustomerAutoBalanceContext } from '@/data/customer-balance'
+import { loadPaymentCustomers } from '@/data/payments'
 import { buildDraftView, type DraftView } from '@/domain/drafts'
-import { formatFullDate } from '@/lib/date'
-import { formatInrInteger, formatRate, formatInQty } from '@/lib/inr-format'
+import { composeReceiptNote, PAYMENT_MODES, type PaymentDraftView } from '@/domain/payment-drafts'
+import { formatDateTime, formatFullDate } from '@/lib/date'
+import { formatInrInteger, formatRate } from '@/lib/inr-format'
 import { pollWhileTabVisible } from '@/lib/poll-while-visible'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
 import {
@@ -25,16 +28,24 @@ export const Route = createFileRoute('/drafts')({
 })
 
 const PER_PAGE = 25
+const LANE_FETCH_LIMIT = 200
+
+type DraftRow =
+  | { source: 'bill'; view: DraftView }
+  | { source: 'payment'; view: PaymentDraftView }
 
 function DraftsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState<DraftStatusFilter>('pending')
+  const [typeFilter, setTypeFilter] = useState<'all' | 'bills' | 'payments'>('all')
   const [page, setPage] = useState(1)
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [previewDraft, setPreviewDraft] = useState<DraftView | null>(null)
   const [previewStatus, setPreviewStatus] = useState('')
+  const [rejectingPayment, setRejectingPayment] = useState<PaymentDraftView | null>(null)
+  const [editingPayment, setEditingPayment] = useState<PaymentDraftView | null>(null)
   const previewRef = useRef<HTMLDivElement>(null)
 
   const itemsQuery = useQuery({
@@ -43,9 +54,16 @@ function DraftsPage() {
     staleTime: 5 * 60_000,
   })
 
-  const draftsQuery = useQuery({
-    queryKey: ['bill-drafts-page', statusFilter, page, search],
-    queryFn: () => loadDraftPage({ page, perPage: PER_PAGE, status: statusFilter, search }),
+  const billsQuery = useQuery({
+    queryKey: ['bill-drafts-page', statusFilter, search],
+    queryFn: () => loadDraftPage({ page: 1, perPage: LANE_FETCH_LIMIT, status: statusFilter, search }),
+    refetchInterval: pollWhileTabVisible(8000),
+    placeholderData: (previous) => previous,
+  })
+
+  const paymentsQuery = useQuery({
+    queryKey: ['payment-drafts-page', statusFilter, search],
+    queryFn: () => loadPaymentDraftPage({ page: 1, perPage: LANE_FETCH_LIMIT, status: statusFilter, search }),
     refetchInterval: pollWhileTabVisible(8000),
     placeholderData: (previous) => previous,
   })
@@ -56,13 +74,72 @@ function DraftsPage() {
     refetchInterval: pollWhileTabVisible(8000),
   })
 
-  const views = (draftsQuery.data?.drafts ?? []).map(({ draft, items, payments }) =>
+  const paymentPendingCountQuery = useQuery({
+    queryKey: ['payment-drafts-pending-count'],
+    queryFn: countPendingPaymentDrafts,
+    refetchInterval: pollWhileTabVisible(8000),
+  })
+
+  const combinedPending = (pendingCountQuery.data ?? 0) + (paymentPendingCountQuery.data ?? 0)
+
+  const billViews = (billsQuery.data?.drafts ?? []).map(({ draft, items, payments }) =>
     buildDraftView(draft, items, payments, itemsQuery.data ?? []),
   )
+
+  const rows: DraftRow[] = [
+    ...(typeFilter === 'payments' ? [] : billViews.map((view): DraftRow => ({ source: 'bill', view }))),
+    ...(typeFilter === 'bills' ? [] : (paymentsQuery.data?.drafts ?? []).map((view): DraftRow => ({ source: 'payment', view }))),
+  ].sort((a, b) => b.view.created.localeCompare(a.view.created))
+
+  const totalItems = rows.length
+  const totalPages = Math.max(1, Math.ceil(totalItems / PER_PAGE))
+  const currentPage = Math.min(page, totalPages)
+  const visible = rows.slice((currentPage - 1) * PER_PAGE, currentPage * PER_PAGE)
+
+  const latestBillQuery = useQuery({
+    queryKey: ['bill-drafts-latest'],
+    queryFn: () => loadDraftPage({ page: 1, perPage: 1, status: 'all', search: '' }),
+    refetchInterval: pollWhileTabVisible(8000),
+    staleTime: 15_000,
+  })
+  const latestPaymentQuery = useQuery({
+    queryKey: ['payment-drafts-latest'],
+    queryFn: () => loadPaymentDraftPage({ page: 1, perPage: 1, status: 'all', search: '' }),
+    refetchInterval: pollWhileTabVisible(8000),
+    staleTime: 15_000,
+  })
+  const latestRows: DraftRow[] = []
+  const latestBillRaw = latestBillQuery.data?.drafts[0]
+  if (latestBillRaw) {
+    latestRows.push({ source: 'bill', view: buildDraftView(latestBillRaw.draft, latestBillRaw.items, latestBillRaw.payments, itemsQuery.data ?? []) })
+  }
+  const latestPaymentRaw = latestPaymentQuery.data?.drafts[0]
+  if (latestPaymentRaw) {
+    latestRows.push({ source: 'payment', view: latestPaymentRaw })
+  }
+  const latest = latestRows.sort((a, b) => b.view.created.localeCompare(a.view.created))[0] ?? null
+
+  const latestLabel = latest
+    ? `${latest.source === 'bill' ? 'Bill' : 'Payment'} · ${latest.view.customerName || 'Unmatched Party'} · ${
+        latest.source === 'bill'
+          ? latest.view.itemsSubtotal > 0
+            ? formatInrInteger(latest.view.grandTotal)
+            : '—'
+          : latest.view.amount > 0
+            ? formatInrInteger(latest.view.amount)
+            : '—'
+      } · ${formatDateTime(latest.view.created) || '—'}`
+    : ''
+
+  const firstError = billsQuery.error ?? paymentsQuery.error ?? null
 
   const refreshAll = () => {
     void queryClient.invalidateQueries({ queryKey: ['bill-drafts-page'] })
     void queryClient.invalidateQueries({ queryKey: ['bill-drafts-pending-count'] })
+    void queryClient.invalidateQueries({ queryKey: ['bill-drafts-latest'] })
+    void queryClient.invalidateQueries({ queryKey: ['payment-drafts-page'] })
+    void queryClient.invalidateQueries({ queryKey: ['payment-drafts-pending-count'] })
+    void queryClient.invalidateQueries({ queryKey: ['payment-drafts-latest'] })
   }
 
   const updateStatusMutation = useMutation({
@@ -74,8 +151,16 @@ function DraftsPage() {
     },
   })
 
+  const paymentRejectMutation = useMutation({
+    mutationFn: (id: string) => rejectPaymentDraft(id),
+    onSuccess: () => {
+      refreshAll()
+      setRejectingPayment(null)
+    },
+  })
+
   const loadIntoBill = (view: DraftView, autoOpenPreview = false) => {
-    const raw = draftsQuery.data?.drafts.find((entry) => entry.draft.id === view.id)
+    const raw = billsQuery.data?.drafts.find((entry) => entry.draft.id === view.id)
     if (!raw) return
     sessionStorage.setItem(
       'kapil-loaded-draft',
@@ -99,30 +184,20 @@ function DraftsPage() {
     setPage(1)
   }
 
-  const totalItems = draftsQuery.data?.totalItems ?? 0
-  const totalPages = Math.max(1, draftsQuery.data?.totalPages ?? 1)
-
   return (
     <div className="w-full space-y-4 px-3 pb-12 pt-3 sm:px-5 lg:px-7">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-indigo-600 text-white shadow-sm"><Sparkles size={15} /></span>
+      <div className="flex items-center gap-2.5">
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-indigo-600 text-white shadow-sm"><Sparkles size={15} /></span>
+        <div className="min-w-0">
           <h2 className="text-sm font-semibold text-slate-900">AI Drafts</h2>
-          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${pendingCountQuery.data ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
-            {pendingCountQuery.data ?? 0} pending
-          </span>
+          <p className="text-[11px] text-slate-500">Bills and payments staged by Muse</p>
         </div>
-        <button
-          type="button"
-          onClick={refreshAll}
-          disabled={draftsQuery.isFetching}
-          className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"
-        >
-          <RefreshCw size={13} className={draftsQuery.isFetching ? 'animate-spin' : ''} /> Refresh
-        </button>
+        <span className={`ml-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${combinedPending ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+          {combinedPending} pending
+        </span>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3">
         <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-semibold text-slate-600">
           {(['pending', 'approved', 'rejected', 'all'] as const).map((status) => (
             <button
@@ -131,11 +206,23 @@ function DraftsPage() {
               onClick={() => { setStatusFilter(status); setPage(1) }}
               className={`rounded-md px-3 py-1.5 capitalize transition ${statusFilter === status ? 'bg-white font-bold text-indigo-700 shadow-sm' : 'hover:text-slate-900'}`}
             >
-              {status === 'pending' ? `Pending (${pendingCountQuery.data ?? 0})` : status}
+              {status === 'pending' ? `Pending ${combinedPending}` : status}
             </button>
           ))}
         </div>
-        <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
+        <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-semibold text-slate-600">
+          {(['all', 'bills', 'payments'] as const).map((type) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => { setTypeFilter(type); setPage(1) }}
+              className={`rounded-md px-3 py-1.5 transition ${typeFilter === type ? 'bg-white font-bold text-indigo-700 shadow-sm' : 'hover:text-slate-900'}`}
+            >
+              {type === 'bills' ? 'Bills' : type === 'payments' ? 'Payments' : 'All'}
+            </button>
+          ))}
+        </div>
+        <div className="relative ml-auto min-w-[220px] flex-1 sm:max-w-xs">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
@@ -143,72 +230,96 @@ function DraftsPage() {
             onChange={(event) => changeSearch(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter') commitSearch() }}
             onBlur={commitSearch}
-            placeholder="Search party, notes, bill #…"
+            placeholder="Search party, notes, items, dictation…"
             className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-3 text-xs text-slate-800 placeholder-slate-400 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </div>
       </div>
 
-      {draftsQuery.isError ? (
+      {firstError ? (
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-center text-rose-800">
           <p className="text-sm font-bold">Failed to load drafts</p>
-          <p className="mt-1 text-xs font-mono">{draftsQuery.error instanceof Error ? draftsQuery.error.message : String(draftsQuery.error)}</p>
+          <p className="mt-1 text-xs font-mono">{firstError instanceof Error ? firstError.message : String(firstError)}</p>
         </div>
-      ) : draftsQuery.isLoading ? (
+      ) : billsQuery.isLoading || paymentsQuery.isLoading ? (
         <div className="grid place-items-center rounded-xl border border-slate-200 bg-white py-14 text-slate-500">
           <RefreshCw size={22} className="animate-spin text-indigo-600" />
           <p className="mt-2 text-xs font-semibold">Loading drafts…</p>
         </div>
-      ) : views.length === 0 ? (
-        <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-10 text-center">
-          <p className="text-sm font-bold text-slate-900">{search ? 'No matching drafts' : `No ${statusFilter === 'all' ? '' : statusFilter + ' '}drafts`}</p>
-          <p className="mx-auto mt-1 max-w-md text-xs text-slate-500">Bills Muse stages (dictated or bill photos) land here for review. Approve, load into the editor, or reject with feedback.</p>
+      ) : visible.length === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <p className="text-xs font-semibold text-slate-900">{search ? 'No matching drafts' : 'All caught up'}</p>
+          {latest && <p className="mt-0.5 text-[11px] text-slate-500">Latest draft: {latestLabel}</p>}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/80 text-[10px] uppercase font-bold tracking-wider text-slate-500">
-                <th className="px-3.5 py-2.5">Party</th>
-                <th className="px-2 py-2.5">Bill</th>
+                <th className="px-3.5 py-2.5">Type</th>
+                <th className="px-2 py-2.5">Party</th>
                 <th className="px-2 py-2.5">Date</th>
-                <th className="px-2 py-2.5">Items</th>
-                <th className="px-2 py-2.5 text-right">Qty / Bags</th>
-                <th className="px-2 py-2.5 text-right">MKT</th>
-                <th className="px-2 py-2.5 text-right">Total</th>
-                <th className="px-2 py-2.5 text-right">Advance</th>
-                <th className="px-2 py-2.5">Match</th>
+                <th className="px-2 py-2.5 text-right">Amount</th>
+                <th className="px-2 py-2.5">Detail</th>
                 <th className="px-3.5 py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {views.map((view) => {
-                const isPending = view.status !== 'approved' && view.status !== 'rejected'
+              {visible.map((row) => {
+                const isPending = row.view.status !== 'approved' && row.view.status !== 'rejected'
+                if (row.source === 'payment') {
+                  const view = row.view
+                  return (
+                    <tr key={`payment-${view.id}`} className={`transition hover:bg-slate-50/70 ${isPending ? '' : 'opacity-70'}`}>
+                      <td className="px-3.5 py-2.5">
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-700">Payment</span>
+                      </td>
+                      <DraftPartyCell name={view.customerName} isLinked={view.isPartyLinked} avatarClass={view.isPartyLinked ? 'bg-emerald-500' : 'bg-amber-500'} secondaryText={view.rawText} />
+                      <td className="whitespace-nowrap px-2 py-2.5 text-slate-600">{view.date ? formatFullDate(view.date) : '—'}</td>
+                      <td className="whitespace-nowrap px-2 py-2.5 text-right font-mono font-bold tabular-nums text-sm text-emerald-800">{formatInrInteger(view.amount)}</td>
+                      <td className="px-2 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-700">{view.mode}</span>
+                          {view.note && <span className="max-w-[160px] truncate text-[10px] italic text-slate-500">{view.note}</span>}
+                          {view.convertedPayment && <span className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">converted</span>}
+                        </div>
+                        {view.isPartyLinked && !view.convertedPayment && (
+                          <div className="mt-0.5"><PaymentDraftDueCell customerId={view.customerId} date={view.date} /></div>
+                        )}
+                      </td>
+                      <td className="px-3.5 py-2.5">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {isPending ? (
+                            <>
+                              <button type="button" onClick={() => setRejectingPayment(view)} title="Reject" className="rounded-md border border-slate-200 p-1 text-rose-600 transition hover:bg-rose-50"><X size={13} /></button>
+                              <button type="button" onClick={() => setEditingPayment(view)} disabled={!view.isPartyLinked} title={view.isPartyLinked ? 'Accept payment' : 'Party unmatched — accept after linking in the modal'} className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"><Check size={12} /> Accept</button>
+                            </>
+                          ) : (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                              {view.status === 'approved' ? 'accepted' : 'rejected'}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                }
+                const view = row.view
                 const firstItem = view.rows[0]
                 return (
-                  <tr key={view.id} className={`transition hover:bg-slate-50/70 ${isPending ? '' : 'opacity-70'}`}>
-                    <td className="max-w-[220px] px-3.5 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-md text-[10px] font-black text-white ${view.isPartyLinked ? 'bg-indigo-500' : 'bg-amber-500'}`}>
-                          {(view.customerName || 'P').charAt(0).toUpperCase()}
-                        </span>
-                        <div className="min-w-0">
-                          <p className="truncate font-semibold text-slate-900">{view.customerName || 'Unmatched Party'}</p>
-                          {view.notes && <p className="truncate text-[10px] italic text-slate-400">“{view.notes}”</p>}
-                        </div>
-                      </div>
+                  <tr key={`bill-${view.id}`} className={`transition hover:bg-slate-50/70 ${isPending ? '' : 'opacity-70'}`}>
+                    <td className="px-3.5 py-2.5">
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-700">Bill</span>
                     </td>
-                    <td className="px-2 py-2.5 font-mono text-[11px] text-slate-700">
-                      {view.convertedBill
-                        ? 'converted'
-                        : view.bookNo > 0 || view.billNo > 0
-                          ? `${view.bookNo > 0 ? `${view.bookNo}/` : ''}${view.billNo || '—'}`
-                          : 'auto'}
-                    </td>
+                    <DraftPartyCell name={view.customerName} isLinked={view.isPartyLinked} avatarClass={view.isPartyLinked ? 'bg-indigo-500' : 'bg-amber-500'} secondaryText={view.notes} />
                     <td className="whitespace-nowrap px-2 py-2.5 text-slate-600">{view.date ? formatFullDate(view.date) : '—'}</td>
-                    <td className="max-w-[200px] px-2 py-2.5">
+                    <td className="whitespace-nowrap px-2 py-2.5 text-right font-mono font-bold tabular-nums text-sm text-slate-900">
+                      {view.itemsSubtotal > 0 ? formatInrInteger(view.grandTotal) : '—'}
+                      {view.isEstimate && <span className="ml-1 rounded bg-amber-100 px-1 align-middle text-[9px] font-bold text-amber-800">est.</span>}
+                    </td>
+                    <td className="max-w-[260px] px-2 py-2.5">
                       {view.rows.length === 0 ? (
-                        <span className="text-slate-400">no items</span>
+                        <p className="text-slate-400">no items</p>
                       ) : (
                         <p className="truncate text-slate-800">
                           {firstItem.itemName}
@@ -216,22 +327,16 @@ function DraftsPage() {
                           {view.rows.length > 1 ? ` +${view.rows.length - 1}` : ''}
                         </p>
                       )}
-                    </td>
-                    <td className="whitespace-nowrap px-2 py-2.5 text-right font-mono tabular-nums text-slate-700">
-                      {formatInQty(view.totalQty, 'kg')} / {view.totalBags}
-                    </td>
-                    <td className="px-2 py-2.5 text-right font-mono tabular-nums text-amber-800">{view.mkt > 0 ? `₹${view.mkt}` : '—'}</td>
-                    <td className="px-2 py-2.5 text-right font-mono font-bold tabular-nums text-slate-900">
-                      {view.itemsSubtotal > 0 ? formatInrInteger(view.grandTotal) : '—'}
-                      {view.isEstimate && <span className="ml-1 rounded bg-amber-100 px-1 text-[9px] font-bold text-amber-800">est.</span>}
-                    </td>
-                    <td className="px-2 py-2.5 text-right font-mono tabular-nums text-emerald-700">{view.advanceTotal > 0 ? formatInrInteger(view.advanceTotal) : '—'}</td>
-                    <td className="px-2 py-2.5">
-                      {view.isPartyLinked ? (
-                        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">linked</span>
-                      ) : (
-                        <span className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">unmatched</span>
-                      )}
+                      <p className="text-[10px] text-slate-500">
+                        <span className="font-mono">
+                          {view.convertedBill
+                            ? 'converted'
+                            : view.bookNo > 0 || view.billNo > 0
+                              ? `${view.bookNo > 0 ? `${view.bookNo}/` : ''}${view.billNo || '—'}`
+                              : 'auto'}
+                        </span>
+                        {view.advanceTotal > 0 && ` · Adv ${formatInrInteger(view.advanceTotal)}`}
+                      </p>
                     </td>
                     <td className="px-3.5 py-2.5">
                       <div className="flex items-center justify-end gap-1.5">
@@ -257,9 +362,9 @@ function DraftsPage() {
           <div className="flex items-center justify-between border-t border-slate-200 px-3.5 py-2 text-[11px] text-slate-500">
             <span>{totalItems} draft{totalItems === 1 ? '' : 's'}{search ? ` matching “${search}”` : ''}</span>
             <div className="flex items-center gap-2">
-              <button type="button" disabled={page <= 1} onClick={() => setPage((current: number) => Math.max(1, current - 1))} className="rounded-md border border-slate-200 px-2 py-1 font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-40">Prev</button>
-              <span className="font-mono">page {page} / {totalPages}</span>
-              <button type="button" disabled={page >= totalPages} onClick={() => setPage((current: number) => Math.min(totalPages, current + 1))} className="rounded-md border border-slate-200 px-2 py-1 font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-40">Next</button>
+              <button type="button" disabled={currentPage <= 1} onClick={() => setPage(Math.max(1, currentPage - 1))} className="rounded-md border border-slate-200 px-2 py-1 font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-40">Prev</button>
+              <span className="font-mono">page {currentPage} / {totalPages}</span>
+              <button type="button" disabled={currentPage >= totalPages} onClick={() => setPage(Math.min(totalPages, currentPage + 1))} className="rounded-md border border-slate-200 px-2 py-1 font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-40">Next</button>
             </div>
           </div>
         </div>
@@ -283,7 +388,67 @@ function DraftsPage() {
           }}
         />
       )}
+
+      {rejectingPayment && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-900/50 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <h3 className="text-sm font-bold text-slate-900">Reject payment draft?</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              {rejectingPayment.customerName || 'Unmatched Party'} · {formatInrInteger(rejectingPayment.amount)} · {rejectingPayment.date ? formatFullDate(rejectingPayment.date) : 'no date'}
+            </p>
+            <p className="mt-2 text-xs text-slate-500">Rejected drafts are dead ends. Muse gets feedback; fixes happen on the payment record once accepted.</p>
+            {paymentRejectMutation.isError && <p className="mt-2 text-xs font-semibold text-rose-700">{paymentRejectMutation.error instanceof Error ? paymentRejectMutation.error.message : String(paymentRejectMutation.error)}</p>}
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button type="button" onClick={() => { setRejectingPayment(null); paymentRejectMutation.reset() }} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Cancel</button>
+              <button type="button" onClick={() => paymentRejectMutation.mutate(rejectingPayment.id)} disabled={paymentRejectMutation.isPending} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-rose-700 disabled:opacity-60">{paymentRejectMutation.isPending ? 'Rejecting…' : 'Reject'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingPayment && (
+        <PaymentAcceptModal
+          view={editingPayment}
+          onClose={() => { setEditingPayment(null); void queryClient.invalidateQueries({ queryKey: ['payment-drafts-page'] }) }}
+          refreshAll={queryClient.invalidateQueries}
+        />
+      )}
     </div>
+  )
+}
+
+function DraftPartyCell({ name, isLinked, avatarClass, secondaryText }: { name: string; isLinked: boolean; avatarClass: string; secondaryText?: string }) {
+  return (
+    <td className="px-2 py-2.5">
+      <div className="flex items-center gap-2">
+        <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-md text-[10px] font-black text-white ${avatarClass}`}>
+          {(name || 'P').charAt(0).toUpperCase()}
+        </span>
+        <div className="min-w-0">
+          <p className="truncate font-semibold text-slate-900">{name || 'Unmatched Party'}</p>
+          {!isLinked && (
+            <span className="mt-0.5 inline-flex rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">Party not matched</span>
+          )}
+          {secondaryText && <p className="max-w-[220px] truncate text-[10px] italic text-slate-400">“{secondaryText}”</p>}
+        </div>
+      </div>
+    </td>
+  )
+}
+
+function PaymentDraftDueCell({ customerId, date }: { customerId: string; date: string }) {
+  const dueQuery = useQuery({
+    queryKey: ['payment-drafts-due', customerId, date],
+    queryFn: () => loadCustomerAutoBalanceContext(customerId, date),
+    staleTime: 30_000,
+  })
+  if (!dueQuery.data) return null
+  const balance = dueQuery.data
+  const due = balance.previousBalanceAmount + balance.credits.reduce((sum, credit) => sum + credit.amount, 0)
+  return (
+    <span className="text-[11px] text-slate-500">
+      Due <span className="font-mono font-semibold text-slate-700">₹{formatInrInteger(due)}</span>
+    </span>
   )
 }
 
@@ -423,3 +588,176 @@ function DraftPreviewModal({ view, onClose, previewRef, status, setStatus, onEdi
     </div>
   )
 }
+
+
+type AcceptModalProps = {
+  view: PaymentDraftView
+  onClose: () => void
+  refreshAll: (filter: { queryKey: readonly unknown[] }) => void
+}
+
+function PaymentAcceptModal({ view, onClose, refreshAll }: AcceptModalProps) {
+  const customersQuery = useQuery({
+    queryKey: ['payment-drafts-customers'],
+    queryFn: loadPaymentCustomers,
+    staleTime: 5 * 60_000,
+  })
+  const customers = customersQuery.data ?? []
+
+  const [customerId, setCustomerId] = useState(view.customerId)
+  const [date, setDate] = useState(view.date)
+  const [amount, setAmount] = useState(view.amount > 0 ? String(view.amount) : '')
+  const [mode, setMode] = useState<'Cash' | 'Bank'>(view.mode)
+  const [museNote, setMuseNote] = useState(view.note)
+
+  const amountDueQuery = useQuery({
+    queryKey: ['payment-drafts-amount-due', customerId, date],
+    queryFn: () => loadCustomerAutoBalanceContext(customerId, date),
+    enabled: Boolean(customerId),
+    staleTime: 30_000,
+  })
+  const balance = amountDueQuery.data
+  const amountDue = balance ? balance.previousBalanceAmount + balance.credits.reduce((sum, credit) => sum + credit.amount, 0) : null
+
+  const selectedCustomer = customers.find((customer) => customer.id === customerId)
+  const parsedAmount = Number(amount)
+  const canAccept = Boolean(
+    customerId && date && Number.isFinite(parsedAmount) && parsedAmount > 0,
+  )
+
+  const acceptMutation = useMutation({
+    mutationFn: () =>
+      savePaymentFromDraft({
+        draftId: view.id,
+        customerId,
+        customerName: selectedCustomer?.name ?? view.customerName,
+        date,
+        amount: parsedAmount,
+        mode,
+        note: composeReceiptNote(date, view.note, museNote),
+      }),
+    onSuccess: () => {
+      void refreshAll({ queryKey: ['payment-drafts-page'] })
+      void refreshAll({ queryKey: ['payment-drafts-pending-count'] })
+      onClose()
+    },
+  })
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-900/60 px-3 py-4 backdrop-blur-sm sm:px-4 sm:py-8">
+      <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-[460px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/70 px-5 py-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-bold text-slate-900">Accept Payment Draft</h3>
+            <p className="mt-0.5 text-xs text-slate-500">{view.customerName || 'Unmatched Party'} · ID {view.id.slice(0, 8)}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><X size={18} /></button>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-3.5 overflow-auto p-5">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-[11px] italic text-slate-600">
+            <span className="font-bold not-italic text-slate-500">Dictated: </span>“{view.rawText || '—'}”
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-xs font-semibold text-slate-500">Party</label>
+              {view.isPartyLinked ? (
+                <select
+                  value={customerId}
+                  onChange={(event) => setCustomerId(event.target.value)}
+                  className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-indigo-500"
+                >
+                  {customers.some((customer) => customer.id === customerId) ? null : <option value={view.customerId}>{view.customerName} (from dictation)</option>}
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>{customer.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  value=""
+                  onChange={(event) => setCustomerId(event.target.value)}
+                  className="h-9 w-full rounded-lg border border-amber-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-indigo-500"
+                >
+                  <option value="">Link a party to enable Accept</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>{customer.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <label className="flex flex-col gap-1 text-xs font-semibold text-slate-500">
+              Date
+              <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-indigo-500" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-semibold text-slate-500">
+              Amount (₹)
+              <input
+                inputMode="decimal"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value.replace(/[^0-9.]/g, ''))}
+                className={`h-9 rounded-lg border px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-indigo-500 ${parsedAmount > 0 ? 'border-slate-300 bg-white' : 'border-amber-300 bg-white'}`}
+              />
+            </label>
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-xs font-semibold text-slate-500">Mode</label>
+              <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
+                {PAYMENT_MODES.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => setMode(option)}
+                    className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${mode === option ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="flex flex-col gap-1 text-xs font-semibold text-slate-500 sm:col-span-2">
+              Note (prefix added on accept)
+              <input
+                value={museNote}
+                onChange={(event) => setMuseNote(event.target.value)}
+                placeholder="Muse's note, editable"
+                className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-indigo-500"
+              />
+              <span className="text-[10px] font-normal text-slate-400">Saved as “Receipt via Muse {date || 'unknown-date'}{museNote ? ` - ${museNote}` : ''}”. The dictated text stays on the draft untouched.</span>
+            </label>
+          </div>
+
+          {customerId && (
+            <div className="rounded-lg border border-slate-200 bg-blue-50/60 p-3 text-xs">
+              {amountDueQuery.isFetching ? (
+                <span className="text-blue-700">Loading amount due…</span>
+              ) : amountDueQuery.isError || amountDue === null ? (
+                <span className="text-amber-800">Could not load the party balance — verify manually before accepting.</span>
+              ) : (
+                <>
+                  <span className="font-semibold text-slate-500">Amount due (as of {date ? formatFullDate(date) : '—'}): </span>
+                  <span className="font-mono font-bold text-slate-900">₹{formatInrInteger(amountDue)}</span>
+                  <span className="ml-2 text-[10px] text-slate-500">{amountDue < 0 ? 'advance' : 'receivable'} · figure here wins over what Muse said</span>
+                </>
+              )}
+            </div>
+          )}
+
+          {acceptMutation.isError && <p className="text-xs font-semibold text-rose-700">{acceptMutation.error instanceof Error ? acceptMutation.error.message : String(acceptMutation.error)}</p>}
+        </div>
+
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-200 bg-white px-5 py-3">
+          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Cancel</button>
+          <button
+            type="button"
+            onClick={() => acceptMutation.mutate()}
+            disabled={!canAccept || acceptMutation.isPending}
+            className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {acceptMutation.isPending ? 'Posting…' : `Accept · ${formatInrInteger(parsedAmount) || '₹0'}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+

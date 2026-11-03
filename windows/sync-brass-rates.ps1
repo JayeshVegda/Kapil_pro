@@ -12,17 +12,29 @@ function Write-SyncLog([string]$Message) {
 }
 
 try {
-  if (-not (Test-Path -LiteralPath $emailPath -PathType Leaf)) { throw 'PocketBase admin email configuration is missing.' }
-  if (-not (Test-Path -LiteralPath $passwordPath -PathType Leaf)) { throw 'Encrypted PocketBase credential is missing.' }
+  $credsJsonPath = Join-Path $state 'pb-admin-credentials.json'
+  $adminEmail = $null
+  $adminPassword = $null
+  if (Test-Path -LiteralPath $credsJsonPath -PathType Leaf) {
+    $creds = Get-Content -LiteralPath $credsJsonPath -Raw | ConvertFrom-Json
+    $adminEmail = $creds.email
+    $adminPassword = $creds.password
+  } elseif ((Test-Path -LiteralPath $emailPath -PathType Leaf) -and (Test-Path -LiteralPath $passwordPath -PathType Leaf)) {
+    $secure = Get-Content -LiteralPath $passwordPath -Raw | ConvertTo-SecureString
+    $credential = New-Object Management.Automation.PSCredential((Get-Content -LiteralPath $emailPath -Raw).Trim(), $secure)
+    $adminEmail = $credential.UserName
+    $adminPassword = $credential.GetNetworkCredential().Password
+  } else {
+    throw 'PocketBase admin credentials not found (checked pb-admin-credentials.json and dpapi).'
+  }
+
   if (-not (Test-Path -LiteralPath (Join-Path $repo 'node_modules\pocketbase') -PathType Container)) { throw 'Required PocketBase JavaScript client is missing.' }
 
   $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8090/api/health' -TimeoutSec 8
   if ([int]$health.code -ne 200) { throw 'PocketBase is not healthy.' }
 
-  $secure = Get-Content -LiteralPath $passwordPath -Raw | ConvertTo-SecureString
-  $credential = New-Object Management.Automation.PSCredential((Get-Content -LiteralPath $emailPath -Raw).Trim(), $secure)
-  $env:PB_ADMIN_EMAIL = $credential.UserName
-  $env:PB_ADMIN_PASSWORD = $credential.GetNetworkCredential().Password
+  $env:PB_ADMIN_EMAIL = $adminEmail
+  $env:PB_ADMIN_PASSWORD = $adminPassword
   $env:PB_URL = 'http://127.0.0.1:8090'
   $env:BRASS_RSS_URL = 'https://rss.zayu.dev/telegram/channel/brassb2b'
 

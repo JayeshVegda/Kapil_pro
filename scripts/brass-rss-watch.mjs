@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import PocketBase from 'pocketbase'
 import {
   formatRateAlertMessage,
@@ -10,10 +11,14 @@ import {
 } from './brass-bulletin.mjs'
 import { ensureBrassRatesCollection } from './brass-rates-schema.mjs'
 
-loadEnvFile('.env')
-loadEnvFile('.env.production')
+const REPO_ROOT = new URL('..', import.meta.url)
+loadEnvFile(new URL('.env', REPO_ROOT))
+loadEnvFile(new URL('.env.production', REPO_ROOT))
 
+const TELEGRAM_CHANNEL = 'brassb2b'
 const RSS_URL = process.env.BRASS_RSS_URL || process.env.VITE_MARKET_RATE_URL_PUBLIC || 'https://rss.zayu.dev/telegram/channel/brassb2b'
+// Sources: 1) local RSSHub (in-process, uses TELEGRAM_SESSION), 2) mirror RSS URLs (comma-separated).
+const RSS_SOURCES = String(RSS_URL).split(',').map((part) => part.trim()).filter(Boolean)
 // Local-first: only explicitly configured PocketBase URLs are used. Never fall back to a remote host.
 const PB_URL_CANDIDATES = [
   process.env.PB_URL,
@@ -34,6 +39,7 @@ const requireTodayTz = process.env.BRASS_DAEMON_TZ || process.env.BRASS_TZ || 'A
 
 main().catch((error) => {
   console.error('Brass RSS watcher failed:', error?.message || error)
+  if (error?.stack) console.error(error.stack)
   process.exit(1)
 })
 
@@ -42,7 +48,8 @@ async function main() {
     throw new Error('Missing PB_ADMIN_EMAIL/PB_ADMIN_PASSWORD or PB_SUPERUSER_EMAIL/PB_SUPERUSER_PASSWORD')
   }
 
-  const rssText = await fetchText(RSS_URL)
+  const { text: rssText, source: rssSource } = await fetchFeed()
+  console.log(`Feed loaded from source: ${rssSource}`)
   const parsed = parseBrassBulletinFromRss(rssText)
   if (!parsed) {
     console.log('No BrassB2B bulletin found in RSS.')
@@ -123,6 +130,39 @@ async function connectPocketBase() {
     }
   }
   throw lastError || new Error('Unable to connect to PocketBase')
+}
+
+async function fetchFeed() {
+  const errors = []
+  try {
+    const rssText = await fetchLocalHubRss()
+    return { text: rssText, source: 'local-rsshub' }
+  } catch (error) {
+    errors.push(`local-rsshub: ${error?.message || error}`)
+  }
+  for (const source of RSS_SOURCES) {
+    try {
+      return { text: await fetchText(source), source }
+    } catch (error) {
+      errors.push(`${source}: ${error?.message || error}`)
+    }
+  }
+  throw new Error(`All feed sources failed:\n  ${errors.join('\n  ')}`)
+}
+
+// Local RSSHub runs in a SEPARATE process (scripts/brass-localhub.mjs):
+// importing the rsshub package in-process mutates global fetch and would break
+// every PocketBase SDK call made afterwards. The child prints RSS XML to stdout.
+async function fetchLocalHubRss() {
+  const { execFileSync } = await import('node:child_process')
+  const scriptPath = fileURLToPath(new URL('brass-localhub.mjs', import.meta.url))
+  const xml = execFileSync(
+    process.execPath,
+    [scriptPath],
+    { encoding: 'utf8', timeout: 90_000, maxBuffer: 8 * 1024 * 1024, env: process.env },
+  )
+  if (!/<item[\s>]/i.test(xml)) throw new Error('local RSSHub produced no feed items')
+  return xml
 }
 
 async function fetchText(url) {
