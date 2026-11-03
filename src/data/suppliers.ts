@@ -3,9 +3,15 @@ import { runDataOperation } from '@/data/reliability'
 import { nextPurchaseInNo } from '@/domain/in-no'
 import {
   computeSupplierSettlement,
+  type SupplierSettlementBillRow,
   type SupplierSettlementInput,
+  type SupplierSettlementPaymentRow,
   type SupplierSettlementResult,
 } from '@/domain/supplier-settlement'
+import {
+  extractUserNote,
+  parseBagsAtReceiptKg,
+} from '@/domain/supplier-purchases'
 import {
   buildSupplierLedger,
   type SupplierLedgerInput,
@@ -144,6 +150,8 @@ export type SupplierSummary = {
   advancePaise: number
   outstandingPaise: number
   lastActivityDate: string
+  bardanPendingCount: number
+  oldestDueDays: number | null
 }
 
 export type SupplierUpsertInput = {
@@ -534,6 +542,7 @@ export type PurchaseBillCreateInput = {
   vehicleNo?: string
   privateNote?: string
   groupId?: string
+  photos?: File[]
   lines: Array<{ itemId?: string; itemName: string; weightG: number; rateMilli: number; amountPaise: number }>
   adjustments?: Array<{ type: string; amountPaise: number; note?: string }>
   bardan?: Array<{ bardanG: number; rateLineIndex?: number; rateMilli: number; method: string; creditPaise?: number; cashAmountPaise?: number; date?: string; note?: string }>
@@ -624,6 +633,17 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
           actor: currentActor(),
         })
         await batch.send()
+        if (input.photos && input.photos.length > 0) {
+          try {
+            const formData = new FormData()
+            for (const file of input.photos) {
+              formData.append('photos', file)
+            }
+            await pb.collection('purchase_bills').update(billId, formData)
+          } catch (e) {
+            console.warn('[suppliers] Failed to upload bill photos', e)
+          }
+        }
         return mapBill((await pb.collection('purchase_bills').getOne(billId)) as PBRow)
       } catch (err) {
         if (attempt < 2) {
@@ -646,6 +666,7 @@ export type PurchaseBillUpdateInput = {
   gstRateBp?: number
   vehicleNo?: string
   privateNote?: string
+  photos?: File[]
   lines: Array<{ itemId?: string; itemName: string; weightG: number; rateMilli: number; amountPaise: number }>
   adjustments?: Array<{ type: string; amountPaise: number; note?: string }>
 }
@@ -709,6 +730,17 @@ export async function updatePurchaseBill(billId: string, input: PurchaseBillUpda
     })
 
     await batch.send()
+    if (input.photos && input.photos.length > 0) {
+      try {
+        const formData = new FormData()
+        for (const file of input.photos) {
+          formData.append('photos', file)
+        }
+        await pb.collection('purchase_bills').update(billId, formData)
+      } catch (e) {
+        console.warn('[suppliers] Failed to upload bill photos', e)
+      }
+    }
     return mapBill((await pb.collection('purchase_bills').getOne(billId)) as PBRow)
   })
 }
@@ -814,6 +846,7 @@ export type SupplierPaymentCreateInput = {
   reference?: string
   payeeName?: string
   privateNote?: string
+  photos?: File[]
   allocations?: Array<{ billId: string; amountPaise: number }>
 }
 
@@ -862,6 +895,17 @@ export async function createSupplierPayment(input: SupplierPaymentCreateInput): 
       actor: currentActor(),
     })
     await batch.send()
+    if (input.photos && input.photos.length > 0) {
+      try {
+        const formData = new FormData()
+        for (const file of input.photos) {
+          formData.append('photos', file)
+        }
+        await pb.collection('supplier_payments').update(paymentId, formData)
+      } catch (e) {
+        console.warn('[suppliers] Failed to upload payment photos', e)
+      }
+    }
     return mapPayment((await pb.collection('supplier_payments').getOne(paymentId)) as PBRow)
   })
 }
@@ -1012,6 +1056,19 @@ export async function loadSuppliersSummary(): Promise<SupplierSummary[]> {
           amountPaise: pin.amountPaise,
         })),
       })
+      const poolBills = [...settlement.pools.kacha.bills, ...settlement.pools.gst.bills]
+      const bardanPendingCount = poolBills.filter((b) => b.bardanPending).length
+      const openBills = poolBills.filter((b) => b.status === 'open' || b.status === 'partial')
+      let oldestDueDays: number | null = null
+      if (openBills.length > 0) {
+        const today = new Date().toISOString().slice(0, 10)
+        const earliestDate = openBills.reduce((min, b) => (!min || b.date < min ? b.date : min), '')
+        if (earliestDate) {
+          const diffMs = new Date(today).getTime() - new Date(earliestDate).getTime()
+          oldestDueDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)))
+        }
+      }
+
       rows.push({
         supplier,
         kachaDuePaise: settlement.pools.kacha.outstandingPaise,
@@ -1019,9 +1076,275 @@ export async function loadSuppliersSummary(): Promise<SupplierSummary[]> {
         advancePaise: settlement.combined.advancePaise,
         outstandingPaise: settlement.combined.netPositionPaise,
         lastActivityDate: lastActivity({ supplier, bills, lines: [], adjustments: [], bardan: allBardan.filter((row) => billIds.has(row.billId)), payments, allocations: [] }),
+        bardanPendingCount,
+        oldestDueDays,
       })
     }
     return rows
+  })
+}
+
+/** Vilaity history for the internal-only premium column (₨/kg -> milli). */
+export type EnrichedPurchaseBill = {
+  id: string
+  inNo: string
+  date: string
+  created: string
+  supplierId: string
+  supplierName: string
+  pool: SupplierPool
+  taxMode: string
+  gstRateBp: number
+  supplierBillNo: string
+  vehicleNo: string
+  privateNote: string
+  userNote: string
+  bagsAtReceiptKg: number | null
+  photos: string[]
+  cancelled: boolean
+  cancelReason: string
+  totalWeightG: number
+  totalKg: number
+  netPaise: number
+  paidPaise: number
+  duePaise: number
+  status: 'open' | 'partial' | 'nil' | 'cancelled'
+  bardanPending: boolean
+  bardanEntryCount: number
+  lines: PurchaseLineView[]
+  adjustments: PurchaseAdjustmentView[]
+  bardan: PurchaseBardanView[]
+}
+
+export type EnrichedSupplierPayment = {
+  id: string
+  date: string
+  created: string
+  supplierId: string
+  supplierName: string
+  pool: SupplierPool
+  kind: string
+  mode: string
+  reference: string
+  payeeName: string
+  privateNote: string
+  photos: string[]
+  amountPaise: number
+  appliedPaise: number
+  advancePaise: number
+  cancelled: boolean
+  cancelReason: string
+  allocations: Array<{ billId: string; inNo: string; amountPaise: number; isManual: boolean }>
+}
+
+export async function loadAllPurchaseBills(): Promise<EnrichedPurchaseBill[]> {
+  return runDataOperation('load-all-purchase-bills', async () => {
+    const [suppliers, allBills, allLines, allAdjustments, allBardan, allPayments, allAllocations] =
+      await Promise.all([
+        fetchAll<SupplierView>('suppliers', mapSupplier),
+        fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill, { sort: '-date,-created,-id' }),
+        fetchAll<PurchaseLineView>(SUPPLIER_COLLECTIONS.lines, mapLine, { sort: 'created,id' }),
+        fetchAll<PurchaseAdjustmentView>(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment, { sort: 'created,id' }),
+        fetchAll<PurchaseBardanView>(SUPPLIER_COLLECTIONS.bardan, mapBardan, { sort: 'date,created,id' }),
+        fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment, { sort: 'date,created,id' }),
+        fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation, { sort: 'created,id' }),
+      ])
+
+    const supplierMap = new Map(suppliers.map((s) => [s.id, s]))
+    const settlementBillMap = new Map<string, SupplierSettlementBillRow>()
+
+    // Run settlement per supplier to calculate true bill dues and bardan pending
+    for (const supplier of suppliers) {
+      const supplierBills = allBills.filter((b) => b.supplierId === supplier.id)
+      if (supplierBills.length === 0) continue
+      const billIds = new Set(supplierBills.map((b) => b.id))
+      const supplierPayments = allPayments.filter((p) => p.supplierId === supplier.id)
+      const paymentIds = new Set(supplierPayments.map((p) => p.id))
+
+      const settlement = computeSupplierSettlement({
+        supplier: { openingKachaPaise: supplier.openingKachaPaise, openingGstPaise: supplier.openingGstPaise },
+        bills: supplierBills,
+        lines: allLines.filter((l) => billIds.has(l.billId)).map((l) => ({ billId: l.billId, amountPaise: l.amountPaise })),
+        adjustments: allAdjustments
+          .filter((a) => billIds.has(a.billId))
+          .map((a) => ({ billId: a.billId, type: a.type, amountPaise: a.amountPaise })),
+        bardan: allBardan
+          .filter((b) => billIds.has(b.billId))
+          .map((b) => ({ billId: b.billId, method: b.method, creditPaise: b.creditPaise, cashAmountPaise: b.cashAmountPaise, note: b.note })),
+        payments: supplierPayments.map((p) => ({
+          id: p.id,
+          date: p.date,
+          created: p.created,
+          pool: p.pool,
+          kind: p.kind,
+          amountPaise: p.amountPaise,
+          cancelled: p.cancelled,
+        })),
+        allocations: allAllocations
+          .filter((a) => paymentIds.has(a.paymentId))
+          .map((a) => ({ paymentId: a.paymentId, billId: a.billId, amountPaise: a.amountPaise })),
+      })
+
+      for (const row of [...settlement.pools.kacha.bills, ...settlement.pools.gst.bills]) {
+        settlementBillMap.set(row.billId, row)
+      }
+    }
+
+    const linesByBill = new Map<string, PurchaseLineView[]>()
+    for (const l of allLines) {
+      const list = linesByBill.get(l.billId) ?? []
+      list.push(l)
+      linesByBill.set(l.billId, list)
+    }
+
+    const adjsByBill = new Map<string, PurchaseAdjustmentView[]>()
+    for (const a of allAdjustments) {
+      const list = adjsByBill.get(a.billId) ?? []
+      list.push(a)
+      adjsByBill.set(a.billId, list)
+    }
+
+    const bardanByBill = new Map<string, PurchaseBardanView[]>()
+    for (const b of allBardan) {
+      const list = bardanByBill.get(b.billId) ?? []
+      list.push(b)
+      bardanByBill.set(b.billId, list)
+    }
+
+    return allBills.map((bill) => {
+      const supplier = supplierMap.get(bill.supplierId)
+      const bLines = linesByBill.get(bill.id) ?? []
+      const bAdjs = adjsByBill.get(bill.id) ?? []
+      const bBardan = bardanByBill.get(bill.id) ?? []
+      const sBill = settlementBillMap.get(bill.id)
+
+      const totalWeightG = bLines.reduce((sum, l) => sum + l.weightG, 0)
+      const netPaise = sBill?.netPaise ?? 0
+      const paidPaise = sBill?.paidPaise ?? 0
+      const duePaise = sBill?.duePaise ?? (bill.cancelled ? 0 : netPaise)
+      const status = sBill?.status ?? (bill.cancelled ? 'cancelled' : 'open')
+      const bardanPending = sBill?.bardanPending ?? (!bill.cancelled && bBardan.length === 0)
+
+      return {
+        id: bill.id,
+        inNo: bill.inNo,
+        date: bill.date,
+        created: bill.created,
+        supplierId: bill.supplierId,
+        supplierName: supplier?.companyName ?? 'Unknown Supplier',
+        pool: bill.pool,
+        taxMode: bill.taxMode,
+        gstRateBp: bill.gstRateBp,
+        supplierBillNo: bill.supplierBillNo,
+        vehicleNo: bill.vehicleNo,
+        privateNote: bill.privateNote,
+        userNote: extractUserNote(bill.privateNote),
+        bagsAtReceiptKg: parseBagsAtReceiptKg(bill.privateNote),
+        photos: bill.photos,
+        cancelled: bill.cancelled,
+        cancelReason: bill.cancelReason,
+        totalWeightG,
+        totalKg: totalWeightG / 1000,
+        netPaise,
+        paidPaise,
+        duePaise,
+        status,
+        bardanPending,
+        bardanEntryCount: bBardan.length,
+        lines: bLines,
+        adjustments: bAdjs,
+        bardan: bBardan,
+      }
+    })
+  })
+}
+
+export async function loadAllSupplierPayments(): Promise<EnrichedSupplierPayment[]> {
+  return runDataOperation('load-all-supplier-payments', async () => {
+    const [suppliers, allBills, allPayments, allAllocations] = await Promise.all([
+      fetchAll<SupplierView>('suppliers', mapSupplier),
+      fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill, { sort: 'date,created,id' }),
+      fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment, { sort: '-date,-created,-id' }),
+      fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation, { sort: 'created,id' }),
+    ])
+
+    const supplierMap = new Map(suppliers.map((s) => [s.id, s]))
+    const billMap = new Map(allBills.map((b) => [b.id, b]))
+    const settlementPaymentMap = new Map<string, SupplierSettlementPaymentRow>()
+
+    for (const supplier of suppliers) {
+      const supplierBills = allBills.filter((b) => b.supplierId === supplier.id)
+      const supplierPayments = allPayments.filter((p) => p.supplierId === supplier.id)
+      if (supplierPayments.length === 0) continue
+      const paymentIds = new Set(supplierPayments.map((p) => p.id))
+
+      const settlement = computeSupplierSettlement({
+        supplier: { openingKachaPaise: supplier.openingKachaPaise, openingGstPaise: supplier.openingGstPaise },
+        bills: supplierBills,
+        lines: [],
+        adjustments: [],
+        bardan: [],
+        payments: supplierPayments.map((p) => ({
+          id: p.id,
+          date: p.date,
+          created: p.created,
+          pool: p.pool,
+          kind: p.kind,
+          amountPaise: p.amountPaise,
+          cancelled: p.cancelled,
+        })),
+        allocations: allAllocations
+          .filter((a) => paymentIds.has(a.paymentId))
+          .map((a) => ({ paymentId: a.paymentId, billId: a.billId, amountPaise: a.amountPaise })),
+      })
+
+      for (const row of [...settlement.pools.kacha.payments, ...settlement.pools.gst.payments]) {
+        settlementPaymentMap.set(row.paymentId, row)
+      }
+    }
+
+    const allocsByPayment = new Map<string, SupplierAllocationView[]>()
+    for (const a of allAllocations) {
+      const list = allocsByPayment.get(a.paymentId) ?? []
+      list.push(a)
+      allocsByPayment.set(a.paymentId, list)
+    }
+
+    return allPayments.map((payment) => {
+      const supplier = supplierMap.get(payment.supplierId)
+      const pRow = settlementPaymentMap.get(payment.id)
+      const appliedPaise = pRow?.appliedPaise ?? 0
+      const advancePaise = Math.max(0, payment.amountPaise - appliedPaise)
+      const manualAllocs = allocsByPayment.get(payment.id) ?? []
+
+      const allocations = manualAllocs.map((a) => ({
+        billId: a.billId,
+        inNo: billMap.get(a.billId)?.inNo ?? '',
+        amountPaise: a.amountPaise,
+        isManual: true,
+      }))
+
+      return {
+        id: payment.id,
+        date: payment.date,
+        created: payment.created,
+        supplierId: payment.supplierId,
+        supplierName: supplier?.companyName ?? 'Unknown Supplier',
+        pool: payment.pool,
+        kind: payment.kind,
+        mode: payment.mode,
+        reference: payment.reference,
+        payeeName: payment.payeeName,
+        privateNote: payment.privateNote,
+        photos: payment.photos,
+        amountPaise: payment.amountPaise,
+        appliedPaise,
+        advancePaise,
+        cancelled: payment.cancelled,
+        cancelReason: payment.cancelReason,
+        allocations,
+      }
+    })
   })
 }
 
@@ -1039,3 +1362,4 @@ export async function loadVilaityHistory(): Promise<Array<{ date: string; vilait
     return rows.filter((row, index, list) => index === 0 || list[index - 1].date !== row.date)
   })
 }
+

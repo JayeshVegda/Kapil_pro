@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import { z } from 'zod'
 import { pb } from '@/data/pocketbase'
 import { toUserMessage } from '@/app/errors'
 import { invalidateAfterSupplierPurchaseWrite } from '@/app/query-invalidation'
@@ -34,6 +35,7 @@ import {
   type SupplierBundle,
   type SupplierPaymentView,
 } from '@/data/suppliers'
+import { computeDaysSince, parseBagsAtReceiptKg } from '@/domain/supplier-purchases'
 import type { SupplierPool } from '@/domain/supplier-ledger'
 import { formatFullDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
@@ -46,7 +48,12 @@ import {
   rupeesToPaise,
 } from '@/domain/supplier-units'
 
+const searchSchema = z.object({
+  highlightBill: z.string().optional(),
+})
+
 export const Route = createFileRoute('/supplier-ledger/$supplierId')({
+  validateSearch: searchSchema,
   component: SupplierLedgerPage,
 })
 
@@ -90,6 +97,7 @@ type MergedLedgerRow = {
 
 function SupplierLedgerPage() {
   const { supplierId } = Route.useParams()
+  const { highlightBill: highlightBillId } = Route.useSearch()
   const queryClient = useQueryClient()
   const exportRef = useRef<HTMLDivElement>(null)
   const [isExporting, setIsExporting] = useState(false)
@@ -99,6 +107,7 @@ function SupplierLedgerPage() {
   const [toDate, setToDate] = useState('')
   const [expandedBillIds, setExpandedBillIds] = useState<Set<string>>(new Set())
   const [selectedDrawerBillId, setSelectedDrawerBillId] = useState<string | null>(null)
+  const [drawerInitialAddBardan, setDrawerInitialAddBardan] = useState(false)
 
   const [cancelPaymentId, setCancelPaymentId] = useState<string | null>(null)
   const [cancelPaymentReason, setCancelPaymentReason] = useState('')
@@ -134,6 +143,38 @@ function SupplierLedgerPage() {
     if (!bundle) return null
     return computeSupplierBundleSettlement(bundle)
   }, [bundle])
+
+  const openBillsList = useMemo(() => {
+    if (!bundle || !settlement) return []
+    const allSettlementBills = [
+      ...settlement.pools.kacha.bills,
+      ...settlement.pools.gst.bills,
+    ]
+    const settlementMap = new Map(allSettlementBills.map((sb) => [sb.billId, sb]))
+
+    return bundle.bills
+      .filter((b) => !b.cancelled)
+      .map((b) => {
+        const sb = settlementMap.get(b.id)
+        const duePaise = sb?.duePaise ?? 0
+        const netPaise = sb?.netPaise ?? 0
+        const paidPaise = sb?.paidPaise ?? 0
+        const status = sb?.status ?? (duePaise === 0 ? 'nil' : 'open')
+        const bardanPending = sb?.bardanPending ?? false
+        const daysOld = computeDaysSince(b.date)
+        return {
+          ...b,
+          duePaise,
+          netPaise,
+          paidPaise,
+          status,
+          bardanPending,
+          daysOld,
+        }
+      })
+      .filter((b) => b.duePaise > 0 || b.bardanPending)
+      .sort((a, b) => (a.date < b.date ? -1 : 1))
+  }, [bundle, settlement])
 
   const ledgerResult = useMemo(() => {
     if (!bundle) return null
@@ -375,6 +416,163 @@ function SupplierLedgerPage() {
           </button>
         </div>
       </div>
+
+      {/* Pinned Open Bills Panel (Kept outside exportRef so JPG export is clean) */}
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+          <div>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+              Open Bills ({openBillsList.length})
+            </h2>
+            <p className="text-[11px] text-slate-500">
+              Bills with remaining balance or unsettled bardan requiring action
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Link
+              to="/purchase-bills/new"
+              search={{ supplierId: s.id }}
+              className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+            >
+              <Plus size={13} /> New Bill
+            </Link>
+          </div>
+        </div>
+
+        {openBillsList.length === 0 ? (
+          <p className="py-2 text-xs italic text-slate-400">All purchase bills for this supplier are fully settled.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                <tr>
+                  <th className="px-3 py-2 text-left">IN No</th>
+                  <th className="px-3 py-2 text-left">Date</th>
+                  <th className="px-3 py-2 text-center">Pool</th>
+                  <th className="px-3 py-2 text-right">Net Bill</th>
+                  <th className="px-3 py-2 text-right">Paid</th>
+                  <th className="px-3 py-2 text-right">Due</th>
+                  <th className="px-3 py-2 text-right">Age</th>
+                  <th className="px-3 py-2 text-center">Bardan</th>
+                  <th className="px-3 py-2 text-center">Status</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {openBillsList.map((b) => (
+                  <tr
+                    key={b.id}
+                    className={`transition ${
+                      highlightBillId === b.id ? 'bg-amber-50 ring-2 ring-amber-300' : 'hover:bg-slate-50/70'
+                    }`}
+                  >
+                    <td className="px-3 py-2 font-mono font-bold text-blue-700">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDrawerBillId(b.id)
+                          setDrawerInitialAddBardan(false)
+                        }}
+                        className="hover:underline"
+                      >
+                        {b.inNo}
+                      </button>
+                    </td>
+                    <td className="px-3 py-2 text-slate-600">{formatFullDate(b.date)}</td>
+                    <td className="px-3 py-2 text-center">
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+                          b.pool === 'kacha' ? 'bg-amber-100 text-amber-900' : 'bg-blue-100 text-blue-900'
+                        }`}
+                      >
+                        {b.pool}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-800">
+                      {formatPaise(b.netPaise)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-700">
+                      {formatPaise(b.paidPaise)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono font-bold tabular-nums text-rose-600">
+                      {formatPaise(b.duePaise)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600">
+                      <span
+                        className={
+                          b.daysOld > 10
+                            ? 'font-bold text-rose-600'
+                            : b.daysOld >= 7
+                              ? 'font-semibold text-amber-600'
+                              : ''
+                        }
+                      >
+                        {b.daysOld}d
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {b.bardanPending ? (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                          Pending
+                        </span>
+                      ) : (
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                          Settled
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {b.status === 'nil' ? (
+                        <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-emerald-800">
+                          NIL
+                        </span>
+                      ) : b.status === 'partial' ? (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-800">
+                          Partial
+                        </span>
+                      ) : (
+                        <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-rose-800">
+                          Open
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <div className="inline-flex items-center gap-1">
+                        {b.duePaise > 0 && (
+                          <Link
+                            to="/supplier-payments/new"
+                            search={{ supplierId: s.id, pool: b.pool, billId: b.id }}
+                            className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                          >
+                            Pay
+                          </Link>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDrawerBillId(b.id)
+                            setDrawerInitialAddBardan(true)
+                          }}
+                          className="rounded bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
+                        >
+                          Bardan
+                        </button>
+                        <Link
+                          to="/purchase-bills/new"
+                          search={{ supplierId: s.id, editBillId: b.id }}
+                          className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-200"
+                        >
+                          Edit
+                        </Link>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {/* Exportable Container Root */}
       <div ref={exportRef} className="space-y-4 bg-white p-2 sm:p-4 rounded-xl">
@@ -705,7 +903,11 @@ function SupplierLedgerPage() {
           bundle={bundle}
           settlementInfo={billSettlementMap.get(drawerBill.id)}
           history={vilaityHistory}
-          onClose={() => setSelectedDrawerBillId(null)}
+          initialShowAddBardan={drawerInitialAddBardan}
+          onClose={() => {
+            setSelectedDrawerBillId(null)
+            setDrawerInitialAddBardan(false)
+          }}
         />
       )}
 
@@ -757,12 +959,14 @@ function BillDetailsDrawer({
   bundle,
   settlementInfo,
   history,
+  initialShowAddBardan = false,
   onClose,
 }: {
   bill: PurchaseBillView
   bundle: SupplierBundle
   settlementInfo?: { status: string; bardanPending: boolean; paidPaise: number; duePaise: number }
   history: Array<{ date: string; vilaityMilli: number }>
+  initialShowAddBardan?: boolean
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
@@ -774,7 +978,7 @@ function BillDetailsDrawer({
   const vilaityMatch = findVilaityForDate(history, bill.date)
 
   // Add Bardan state
-  const [showAddBardan, setShowAddBardan] = useState(false)
+  const [showAddBardan, setShowAddBardan] = useState(initialShowAddBardan)
   const [bardanKgStr, setBardanKgStr] = useState('')
   const [bardanLineId, setBardanLineId] = useState(() => lines[0]?.id ?? '')
   const [bardanMethod, setBardanMethod] = useState<'deduct' | 'in_kind' | 'cash_back' | 'advance'>('deduct')
@@ -975,6 +1179,15 @@ function BillDetailsDrawer({
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Bags Weighed at Receipt Memo Reference */}
+        {parseBagsAtReceiptKg(bill.privateNote) != null && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50/80 p-2.5 text-xs text-blue-900">
+            <span className="font-semibold">Receipt Bags Memo:</span>{' '}
+            <span className="font-mono font-bold">{parseBagsAtReceiptKg(bill.privateNote)} kg</span>
+            <p className="mt-0.5 text-[10px] text-blue-700">Empty-bag weight recorded at receipt as reference for settlement.</p>
           </div>
         )}
 

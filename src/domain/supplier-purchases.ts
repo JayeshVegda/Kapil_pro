@@ -32,6 +32,69 @@ export type PurchaseAdjustmentType = (typeof PURCHASE_ADJUSTMENT_TYPES)[number]
 export const PURCHASE_BARDAN_METHODS = ['deduct', 'in_kind', 'cash_back', 'advance'] as const
 export type PurchaseBardanMethod = (typeof PURCHASE_BARDAN_METHODS)[number]
 
+export type SupplierPool = 'kacha' | 'gst'
+
+/**
+ * Pool-to-tax-mode rule:
+ * - Kacha pool forces tax mode 'none'.
+ * - GST pool allows 'gst' or 'rcm' only (defaults to 'gst' if 'none' is passed).
+ */
+export function allowedTaxModesForPool(pool: SupplierPool): readonly PurchaseTaxMode[] {
+  return pool === 'kacha' ? ['none'] : ['gst', 'rcm']
+}
+
+export function resolveTaxModeForPool(pool: SupplierPool, requestedMode?: string): PurchaseTaxMode {
+  if (pool === 'kacha') return 'none'
+  if (requestedMode === 'rcm') return 'rcm'
+  return 'gst'
+}
+
+/**
+ * Bardan pending age buckets:
+ * - < 7 days: fresh (normal)
+ * - 7 to 10 days: warning (amber)
+ * - > 10 days: critical (red)
+ */
+export type BardanAgeBucket = 'fresh' | 'warning' | 'critical'
+
+export function computeBardanAgeBucket(daysSinceBill: number): BardanAgeBucket {
+  if (daysSinceBill > 10) return 'critical'
+  if (daysSinceBill >= 7) return 'warning'
+  return 'fresh'
+}
+
+/** Days difference between a target date and today (or reference date). */
+export function computeDaysSince(isoDate: string, referenceDateIso?: string): number {
+  if (!isoDate) return 0
+  const ref = referenceDateIso ? new Date(referenceDateIso) : new Date()
+  const target = new Date(isoDate)
+  const diffMs = ref.getTime() - target.getTime()
+  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)))
+}
+
+/** Memo field helpers for bags weighed at receipt (kg) stored in private_note. */
+export function formatPrivateNoteWithBags(note: string, bagsKg: number | null): string {
+  const cleanNote = extractUserNote(note)
+  if (bagsKg == null || isNaN(bagsKg) || bagsKg <= 0) {
+    return cleanNote
+  }
+  const tag = `[bags_at_receipt:${bagsKg.toFixed(3)}]`
+  return cleanNote ? `${tag}\n${cleanNote}` : tag
+}
+
+export function parseBagsAtReceiptKg(rawNote?: string): number | null {
+  if (!rawNote) return null
+  const match = rawNote.match(/\[bags_at_receipt:([\d.]+)\]/)
+  if (!match) return null
+  const val = parseFloat(match[1])
+  return Number.isFinite(val) ? val : null
+}
+
+export function extractUserNote(rawNote?: string): string {
+  if (!rawNote) return ''
+  return rawNote.replace(/\[bags_at_receipt:[\d.]+\]\n?/, '').trim()
+}
+
 export type BillLineInput = { amountPaise: number }
 
 export type BillAdjustmentInput = {

@@ -3,10 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
   ArrowLeft,
+  Check,
   CreditCard,
-  Lock,
+  Image as ImageIcon,
+  Upload,
+  X,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { invalidateAfterSupplierPurchaseWrite } from '@/app/query-invalidation'
@@ -25,12 +28,15 @@ import {
   validateManualPins,
   type SupplierPool,
 } from '@/domain/supplier-settlement'
+import { computeDaysSince } from '@/domain/supplier-purchases'
 import { rupeesToPaise } from '@/domain/supplier-units'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
 
 const searchSchema = z.object({
   supplierId: z.string().optional(),
+  pool: z.enum(['kacha', 'gst']).optional(),
+  billId: z.string().optional(),
 })
 
 export const Route = createFileRoute('/supplier-payments/new')({
@@ -41,21 +47,32 @@ export const Route = createFileRoute('/supplier-payments/new')({
 type PaymentKind = 'payment' | 'paid_on_behalf' | 'settle_off' | 'refund_received'
 type PaymentMode = 'cash' | 'upi' | 'rtgs' | 'neft' | 'cheque' | 'other'
 
+const PAYMENT_KINDS: Array<{ kind: PaymentKind; label: string; desc: string }> = [
+  { kind: 'payment', label: 'Payment', desc: 'Direct payment to supplier (reduces balance)' },
+  { kind: 'paid_on_behalf', label: 'Paid for them (labour/transport)', desc: 'Paid third-party on supplier behalf' },
+  { kind: 'settle_off', label: 'Small settle-off', desc: 'Write off tiny leftover balance' },
+  { kind: 'refund_received', label: 'Refund from supplier', desc: 'Supplier returned cash/bank (increases balance)' },
+]
+
 function NewSupplierPaymentPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { supplierId: initialSupplierId } = Route.useSearch()
+  const { supplierId: initialSupplierId, pool: initialPool, billId: initialBillId } = Route.useSearch()
 
   const [supplierId, setSupplierId] = useState(initialSupplierId ?? '')
   const [date, setDate] = useState(() => getLocalIsoDate())
-  const [pool, setPool] = useState<SupplierPool>('kacha')
+  const [pool, setPool] = useState<SupplierPool>(initialPool ?? 'kacha')
   const [kind, setKind] = useState<PaymentKind>('payment')
   const [amountRupeesStr, setAmountRupeesStr] = useState('')
   const [mode, setMode] = useState<PaymentMode>('cash')
   const [reference, setReference] = useState('')
   const [payeeName, setPayeeName] = useState('')
   const [privateNote, setPrivateNote] = useState('')
-  const [isManualPicking, setIsManualPicking] = useState(false)
+  const [photos, setPhotos] = useState<File[]>([])
+  const [selectedBillIds, setSelectedBillIds] = useState<Set<string>>(
+    () => new Set(initialBillId ? [initialBillId] : []),
+  )
+  const [isManualPicking, setIsManualPicking] = useState(Boolean(initialBillId))
   const [manualPins, setManualPins] = useState<Record<string, string>>({})
   const [statusText, setStatusText] = useState('')
 
@@ -92,10 +109,25 @@ function NewSupplierPaymentPage() {
           inNo: detail?.inNo ?? '',
           date: detail?.date ?? '',
           netPaise: b.netPaise,
+          paidPaise: b.paidPaise,
           duePaise: b.duePaise,
+          daysOld: computeDaysSince(detail?.date ?? ''),
         }
       })
   }, [bundleQuery.data, pool])
+
+  // Pre-fill amount when navigated with initialBillId
+  useEffect(() => {
+    if (initialBillId && openBills.length > 0) {
+      const target = openBills.find((b) => b.billId === initialBillId)
+      if (target) {
+        setAmountRupeesStr((target.duePaise / 100).toString())
+        setIsManualPicking(true)
+        setManualPins({ [target.billId]: (target.duePaise / 100).toString() })
+        setSelectedBillIds(new Set([target.billId]))
+      }
+    }
+  }, [initialBillId, openBills])
 
   // FIFO Allocation Preview
   const fifoAllocations = useMemo(() => {
@@ -103,7 +135,13 @@ function NewSupplierPaymentPage() {
       return { lines: [], advancePaise: amountPaise }
     }
     let remaining = amountPaise
-    const lines: Array<{ billId: string; inNo: string; duePaise: number; allocatedPaise: number }> = []
+    const lines: Array<{
+      billId: string
+      inNo: string
+      duePaise: number
+      allocatedPaise: number
+      isFullyCovered: boolean
+    }> = []
 
     for (const bill of openBills) {
       if (remaining <= 0) break
@@ -113,6 +151,7 @@ function NewSupplierPaymentPage() {
         inNo: bill.inNo,
         duePaise: bill.duePaise,
         allocatedPaise: allocated,
+        isFullyCovered: allocated === bill.duePaise,
       })
       remaining -= allocated
     }
@@ -123,7 +162,6 @@ function NewSupplierPaymentPage() {
   // Manual allocation summary & validation
   const manualAllocationSummary = useMemo(() => {
     let totalPinnedPaise = 0
-    const errors: string[] = []
     const parsedAllocations: Array<{ billId: string; amountPaise: number }> = []
 
     for (const bill of openBills) {
@@ -144,18 +182,15 @@ function NewSupplierPaymentPage() {
     }))
 
     const validation = validateManualPins(pool, amountPaise, pinCandidates)
-    if (!validation.valid && validation.error) {
-      errors.push(validation.error)
-    }
+    const unallocatedPaise = Math.max(0, amountPaise - totalPinnedPaise)
 
-    const advancePaise = Math.max(0, amountPaise - totalPinnedPaise)
     return {
       totalPinnedPaise,
-      advancePaise,
+      unallocatedPaise,
+      validation,
       parsedAllocations,
-      errors,
     }
-  }, [manualPins, openBills, amountPaise, pool])
+  }, [manualPins, openBills, pool, amountPaise])
 
   const supplierOptions = useMemo(() => {
     return (suppliersQuery.data ?? []).map((s) => ({
@@ -165,22 +200,68 @@ function NewSupplierPaymentPage() {
     }))
   }, [suppliersQuery.data])
 
-  // Switch kind rules
-  const handleKindChange = (nextKind: PaymentKind) => {
+  // Handler for Kind change
+  const handleKindSelect = (nextKind: PaymentKind) => {
     setKind(nextKind)
     if (nextKind === 'paid_on_behalf') {
       setPool('kacha')
     }
   }
 
-  // Mutation
+  // Handler for Pay Full Due
+  const handlePayFullDue = () => {
+    const totalDuePaise = openBills.reduce((s, b) => s + b.duePaise, 0)
+    setAmountRupeesStr((totalDuePaise / 100).toString())
+  }
+
+  // Handler for Pay Selected Bills
+  const handlePaySelectedBills = () => {
+    const selected = openBills.filter((b) => selectedBillIds.has(b.billId))
+    const totalSelectedPaise = selected.reduce((s, b) => s + b.duePaise, 0)
+    setAmountRupeesStr((totalSelectedPaise / 100).toString())
+    setIsManualPicking(true)
+    const pins: Record<string, string> = {}
+    for (const b of selected) {
+      pins[b.billId] = (b.duePaise / 100).toString()
+    }
+    setManualPins(pins)
+  }
+
+  const toggleBillSelect = (billId: string) => {
+    setSelectedBillIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(billId)) next.delete(billId)
+      else next.add(billId)
+      return next
+    })
+  }
+
+  const selectAllBills = () => {
+    if (selectedBillIds.size === openBills.length) {
+      setSelectedBillIds(new Set())
+    } else {
+      setSelectedBillIds(new Set(openBills.map((b) => b.billId)))
+    }
+  }
+
+  const isRefRequired = ['upi', 'rtgs', 'neft', 'cheque'].includes(mode)
+
   const saveMutation = useMutation({
     mutationFn: async () => {
+      setStatusText('')
       if (!supplierId) throw new Error('Please select a supplier.')
-      if (amountPaise <= 0) throw new Error('Please enter a valid payment amount.')
+      if (amountPaise <= 0) throw new Error('Payment amount must be greater than zero.')
 
-      if (isManualPicking && manualAllocationSummary.errors.length > 0) {
-        throw new Error(manualAllocationSummary.errors[0])
+      if (kind === 'paid_on_behalf' && !payeeName.trim()) {
+        throw new Error('Payee name is required when paying on behalf of supplier.')
+      }
+
+      if (isRefRequired && !reference.trim()) {
+        throw new Error(`Reference number / transaction ID is required for ${mode.toUpperCase()} payments.`)
+      }
+
+      if (isManualPicking && !manualAllocationSummary.validation.valid) {
+        throw new Error(manualAllocationSummary.validation.error ?? 'Manual allocations are invalid.')
       }
 
       const allocationsToSave = isManualPicking ? manualAllocationSummary.parsedAllocations : undefined
@@ -195,6 +276,7 @@ function NewSupplierPaymentPage() {
         reference: reference.trim(),
         payeeName: kind === 'paid_on_behalf' ? payeeName.trim() : undefined,
         privateNote: privateNote.trim(),
+        photos: photos.length > 0 ? photos : undefined,
         allocations: allocationsToSave,
       }
 
@@ -202,12 +284,13 @@ function NewSupplierPaymentPage() {
     },
     onSuccess: async () => {
       await invalidateAfterSupplierPurchaseWrite(queryClient, supplierId)
+      await queryClient.invalidateQueries({ queryKey: ['supplier-payments'] })
       void navigate({
         to: '/supplier-ledger/$supplierId',
         params: { supplierId },
       })
     },
-    onError: (error) => setStatusText(toUserMessage(error)),
+    onError: (err) => setStatusText(toUserMessage(err)),
   })
 
   return (
@@ -222,7 +305,7 @@ function NewSupplierPaymentPage() {
           >
             <ArrowLeft size={14} /> Back
           </button>
-          <h1 className="text-base font-bold text-slate-900">New Supplier Payment</h1>
+          <h1 className="text-base font-bold text-slate-900">Record Supplier Payment</h1>
         </div>
 
         <button
@@ -232,7 +315,7 @@ function NewSupplierPaymentPage() {
           className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
         >
           <CreditCard size={14} />
-          {saveMutation.isPending ? 'Recording...' : 'Record Payment'}
+          {saveMutation.isPending ? 'Recording...' : 'Save Payment'}
         </button>
       </div>
 
@@ -242,8 +325,39 @@ function NewSupplierPaymentPage() {
         </div>
       )}
 
-      {/* Payment Details Form */}
+      {/* Main Payment Details Form */}
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
+        {/* Payment Kind Chips */}
+        <div className="space-y-1.5">
+          <label className="text-xs font-semibold text-slate-700">Payment Type</label>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4">
+            {PAYMENT_KINDS.map((item) => {
+              const active = kind === item.kind
+              return (
+                <button
+                  key={item.kind}
+                  type="button"
+                  onClick={() => handleKindSelect(item.kind)}
+                  className={`rounded-lg border p-2.5 text-left transition ${
+                    active
+                      ? 'border-emerald-500 bg-emerald-50/80 ring-2 ring-emerald-200'
+                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className={`text-xs font-bold ${active ? 'text-emerald-950' : 'text-slate-800'}`}>
+                      {item.label}
+                    </span>
+                    {active && <Check size={14} className="text-emerald-600" />}
+                  </div>
+                  <p className="mt-0.5 text-[10px] text-slate-500">{item.desc}</p>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Supplier, Date, Pool */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
           <div className="space-y-1 sm:col-span-2">
             <label className="text-xs font-semibold text-slate-700">
@@ -253,8 +367,8 @@ function NewSupplierPaymentPage() {
               options={supplierOptions}
               value={supplierId}
               onChange={setSupplierId}
-              inputClassName="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              placeholder="Search supplier..."
+              inputClassName="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+              placeholder="Select supplier..."
             />
           </div>
 
@@ -263,7 +377,7 @@ function NewSupplierPaymentPage() {
             <DateInput
               value={date}
               onChange={setDate}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
             />
           </div>
 
@@ -281,10 +395,9 @@ function NewSupplierPaymentPage() {
               </button>
               <button
                 type="button"
-                disabled={kind === 'paid_on_behalf'}
                 className={`rounded-md py-1.5 transition ${
                   pool === 'gst' ? 'bg-blue-100 text-blue-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                } ${kind === 'paid_on_behalf' ? 'opacity-40 cursor-not-allowed' : ''}`}
+                }`}
                 onClick={() => setPool('gst')}
               >
                 GST
@@ -293,40 +406,156 @@ function NewSupplierPaymentPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Payment Type / Kind</label>
-            <select
-              value={kind}
-              onChange={(e) => handleKindChange(e.target.value as PaymentKind)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            >
-              <option value="payment">Direct Payment</option>
-              <option value="paid_on_behalf">Paid On Behalf (Labour/Transporter)</option>
-              <option value="settle_off">Settle Off (Write-off small diff)</option>
-              <option value="refund_received">Refund Received (Increases Due)</option>
-            </select>
+        {/* If kind is paid_on_behalf, show Payee Name input */}
+        {kind === 'paid_on_behalf' && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-3">
+            <div className="max-w-md space-y-1">
+              <label className="text-xs font-semibold text-amber-900">
+                Third-Party Payee Name <span className="text-rose-600">*</span>
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Jamnagar Transport Co., Ramu Labour"
+                value={payeeName}
+                onChange={(e) => setPayeeName(e.target.value)}
+                className="h-9 w-full rounded-md border border-amber-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-amber-500"
+              />
+              <p className="text-[10px] text-amber-700">
+                This payment reduces what we owe the supplier, but was disbursed directly to this party.
+              </p>
+            </div>
           </div>
+        )}
 
+        {/* Open Bills Box (Shown only when supplier is chosen, BEFORE Amount field) */}
+        {supplierId && (
+          <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-xs font-bold text-slate-900">
+                  Open Bills ({pool.toUpperCase()} Pool)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  {openBills.length === 0
+                    ? `No open bills with remaining balance in ${pool} pool.`
+                    : `${openBills.length} open bill${openBills.length > 1 ? 's' : ''} available for settlement.`}
+                </p>
+              </div>
+
+              {openBills.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handlePayFullDue}
+                    className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-100"
+                  >
+                    Pay Full Due ({formatPaiseInr(openBills.reduce((s, b) => s + b.duePaise, 0))})
+                  </button>
+                  {selectedBillIds.size > 0 && (
+                    <button
+                      type="button"
+                      onClick={handlePaySelectedBills}
+                      className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
+                    >
+                      Pay Selected ({selectedBillIds.size})
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {openBills.length > 0 && (
+              <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
+                    <tr>
+                      <th className="px-2.5 py-2 w-8 text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedBillIds.size === openBills.length}
+                          onChange={selectAllBills}
+                          className="rounded text-emerald-600"
+                        />
+                      </th>
+                      <th className="px-2.5 py-2 text-left">IN No</th>
+                      <th className="px-2.5 py-2 text-left">Bill Date</th>
+                      <th className="px-2.5 py-2 text-right">Age</th>
+                      <th className="px-2.5 py-2 text-right">Net Bill</th>
+                      <th className="px-2.5 py-2 text-right">Already Paid</th>
+                      <th className="px-2.5 py-2 text-right">Due Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {openBills.map((b) => {
+                      const isSelected = selectedBillIds.has(b.billId)
+                      return (
+                        <tr
+                          key={b.billId}
+                          className={`transition ${isSelected ? 'bg-emerald-50/60' : 'hover:bg-slate-50/70'}`}
+                        >
+                          <td className="px-2.5 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleBillSelect(b.billId)}
+                              className="rounded text-emerald-600"
+                            />
+                          </td>
+                          <td className="px-2.5 py-2 font-mono font-semibold text-blue-700">{b.inNo}</td>
+                          <td className="px-2.5 py-2 text-slate-600">{formatFullDate(b.date)}</td>
+                          <td className="px-2.5 py-2 text-right font-mono text-slate-600">
+                            <span
+                              className={
+                                b.daysOld > 10
+                                  ? 'font-bold text-rose-600'
+                                  : b.daysOld >= 7
+                                    ? 'font-semibold text-amber-600'
+                                    : 'text-slate-600'
+                              }
+                            >
+                              {b.daysOld}d
+                            </span>
+                          </td>
+                          <td className="px-2.5 py-2 text-right font-mono tabular-nums text-slate-700">
+                            {formatPaiseInr(b.netPaise)}
+                          </td>
+                          <td className="px-2.5 py-2 text-right font-mono tabular-nums text-emerald-700">
+                            {formatPaiseInr(b.paidPaise)}
+                          </td>
+                          <td className="px-2.5 py-2 text-right font-mono font-bold tabular-nums text-rose-600">
+                            {formatPaiseInr(b.duePaise)}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Amount, Mode, Reference, Photo Attach */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
           <div className="space-y-1">
             <label className="text-xs font-semibold text-slate-700">
               Amount (₹) <span className="text-rose-600">*</span>
             </label>
             <input
               type="text"
-              placeholder="e.g. 50000 or 50k"
+              placeholder="0.00"
               value={amountRupeesStr}
               onChange={(e) => setAmountRupeesStr(e.target.value)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 font-mono text-xs font-bold text-slate-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 font-mono text-sm font-bold text-slate-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
             />
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Mode</label>
+            <label className="text-xs font-semibold text-slate-700">Payment Mode</label>
             <select
               value={mode}
               onChange={(e) => setMode(e.target.value as PaymentMode)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
             >
               <option value="cash">Cash</option>
               <option value="upi">UPI</option>
@@ -337,203 +566,202 @@ function NewSupplierPaymentPage() {
             </select>
           </div>
 
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Reference / UTR / Cheque</label>
-            <input
-              type="text"
-              placeholder="Optional reference"
-              value={reference}
-              onChange={(e) => setReference(e.target.value)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            />
-          </div>
-        </div>
-
-        {kind === 'paid_on_behalf' && (
-          <div className="space-y-1">
+          <div className="space-y-1 sm:col-span-2">
             <label className="text-xs font-semibold text-slate-700">
-              Payee Name (Transporter, Driver, Labour Contractor) <span className="text-rose-600">*</span>
+              Reference / UTR / Cheque No {isRefRequired && <span className="text-rose-600">*</span>}
             </label>
             <input
               type="text"
-              placeholder="Who received this money on behalf of the supplier?"
-              value={payeeName}
-              onChange={(e) => setPayeeName(e.target.value)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              placeholder={isRefRequired ? 'Required for Bank/UPI/Cheque' : 'Optional for cash'}
+              value={reference}
+              onChange={(e) => setReference(e.target.value)}
+              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
             />
-          </div>
-        )}
-      </section>
-
-      {/* Bill Allocation & Matching Section */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
-          <div>
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-              Bill Allocation ({pool.toUpperCase()} Pool)
-            </h2>
-            <p className="mt-0.5 text-xs text-slate-500">
-              {isManualPicking
-                ? 'Manual Pinning: Select exact open bills and assign payment amounts.'
-                : 'FIFO Allocation (Default): Automatically covers oldest open bills in this pool first.'}
-            </p>
-          </div>
-
-          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
-            <button
-              type="button"
-              className={`rounded-md px-3 py-1.5 transition ${
-                !isManualPicking ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-              }`}
-              onClick={() => setIsManualPicking(false)}
-            >
-              Automatic FIFO
-            </button>
-            <button
-              type="button"
-              className={`rounded-md px-3 py-1.5 transition ${
-                isManualPicking ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-              }`}
-              onClick={() => setIsManualPicking(true)}
-            >
-              Pick Bills Manually
-            </button>
           </div>
         </div>
 
-        {openBills.length === 0 ? (
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-4 text-xs text-emerald-800">
-            <p className="font-semibold">No open bills in the {pool} pool.</p>
-            <p className="mt-1 text-slate-600">
-              The entire payment of <strong>{formatPaiseInr(amountPaise)}</strong> will be recorded as a pre-bill advance in
-              the {pool} pool.
-            </p>
+        {/* Private Note & Photo Slip Attach */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-700">Private Note (Never Printed)</label>
+            <textarea
+              rows={2}
+              placeholder="Internal notes, bank account remarks..."
+              value={privateNote}
+              onChange={(e) => setPrivateNote(e.target.value)}
+              className="w-full rounded-md border border-slate-300 bg-white p-2 text-xs text-slate-900 outline-none focus:border-emerald-400"
+            />
           </div>
-        ) : !isManualPicking ? (
-          /* FIFO Preview Table */
-          <div className="space-y-3">
-            <div className="overflow-x-auto rounded border border-slate-200">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
-                  <tr>
-                    <th className="px-3 py-2 text-left">IN No</th>
-                    <th className="px-3 py-2 text-left">Bill Date</th>
-                    <th className="px-3 py-2 text-right">Current Due</th>
-                    <th className="px-3 py-2 text-right">FIFO Covered</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {openBills.map((bill) => {
-                    const match = fifoAllocations.lines.find((l) => l.billId === bill.billId)
-                    const coveredPaise = match?.allocatedPaise ?? 0
-                    return (
-                      <tr key={bill.billId}>
-                        <td className="px-3 py-2 font-mono font-medium text-blue-700">{bill.inNo}</td>
-                        <td className="px-3 py-2 text-slate-500">{formatFullDate(bill.date)}</td>
-                        <td className="px-3 py-2 text-right font-mono">{formatPaiseInr(bill.duePaise)}</td>
-                        <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700">
-                          {coveredPaise > 0 ? formatPaiseInr(coveredPaise) : '—'}
+
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-700">Attach Payment Slip / Proof</label>
+            <div className="flex items-center gap-2">
+              <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                <Upload size={13} />
+                <span>Upload Slips</span>
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? [])
+                    if (files.length > 0) setPhotos((prev) => [...prev, ...files])
+                  }}
+                />
+              </label>
+              {photos.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {photos.map((f, i) => (
+                    <span
+                      key={i}
+                      className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700"
+                    >
+                      <ImageIcon size={10} /> {f.name}
+                      <button
+                        type="button"
+                        onClick={() => setPhotos((p) => p.filter((_, idx) => idx !== i))}
+                        className="text-slate-400 hover:text-rose-600"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Allocations & FIFO Preview (Rendered ONLY when supplier is selected) */}
+      {supplierId && (
+        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                Bill Matching & Allocation Preview
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Payments match bills in the same pool ({pool}) via FIFO, or you can manually pin amounts.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={isManualPicking}
+                  onChange={(e) => setIsManualPicking(e.target.checked)}
+                  className="rounded text-emerald-600"
+                />
+                <span>Manual Bill Picking</span>
+              </label>
+            </div>
+          </div>
+
+          {!isManualPicking ? (
+            /* Default FIFO Allocation Preview */
+            <div className="space-y-3">
+              <div className="rounded-lg bg-slate-50 p-3 text-xs space-y-2">
+                <span className="font-semibold text-slate-700">FIFO Distribution Preview:</span>
+                {fifoAllocations.lines.length === 0 ? (
+                  <p className="text-slate-500 italic">
+                    {amountPaise > 0
+                      ? `No open bills in ${pool} pool — the full amount of ${formatPaiseInr(amountPaise)} will be held as advance credit.`
+                      : 'Enter an amount above to preview FIFO bill matching.'}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {fifoAllocations.lines.map((l) => (
+                      <div
+                        key={l.billId}
+                        className="flex items-center justify-between rounded border border-slate-200 bg-white px-3 py-2 text-xs"
+                      >
+                        <span className="font-medium text-slate-800">
+                          {l.isFullyCovered ? (
+                            <>Covers <strong className="text-blue-700 font-mono">{l.inNo}</strong> fully</>
+                          ) : (
+                            <>Covers <strong className="text-blue-700 font-mono">{l.inNo}</strong> partially</>
+                          )}
+                          <span className="text-slate-400 text-[11px] ml-2">
+                            (allocated {formatPaiseInr(l.allocatedPaise)} of {formatPaiseInr(l.duePaise)} due)
+                          </span>
+                        </span>
+                        <span className="font-mono font-bold text-emerald-700">
+                          {formatPaiseInr(l.allocatedPaise)}
+                        </span>
+                      </div>
+                    ))}
+                    <div className="mt-2 pt-2 border-t border-slate-200 flex justify-between font-semibold text-slate-700">
+                      <span>Advance remaining:</span>
+                      <span className="font-mono text-emerald-700">
+                        {formatPaiseInr(fifoAllocations.advancePaise)}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Manual Bill Picking Mode */
+            <div className="space-y-3">
+              <p className="text-xs text-slate-600">
+                Specify exact amounts to pin against each open bill. Pinned amounts cannot exceed the bill due or
+                the total payment amount.
+              </p>
+
+              {!manualAllocationSummary.validation.valid && (
+                <div className="flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-800">
+                  <AlertCircle size={15} className="shrink-0 text-rose-600" />
+                  <span>{manualAllocationSummary.validation.error}</span>
+                </div>
+              )}
+
+              <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
+                    <tr>
+                      <th className="px-3 py-2 text-left">IN No</th>
+                      <th className="px-3 py-2 text-left">Date</th>
+                      <th className="px-3 py-2 text-right">Remaining Due</th>
+                      <th className="px-3 py-2 text-right w-44">Pinned Amount (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {openBills.map((b) => (
+                      <tr key={b.billId}>
+                        <td className="px-3 py-2 font-mono font-bold text-blue-700">{b.inNo}</td>
+                        <td className="px-3 py-2 text-slate-600">{formatFullDate(b.date)}</td>
+                        <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">
+                          {formatPaiseInr(b.duePaise)}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <input
+                            type="text"
+                            placeholder="0.00"
+                            value={manualPins[b.billId] ?? ''}
+                            onChange={(e) => {
+                              const val = e.target.value
+                              setManualPins((prev) => ({ ...prev, [b.billId]: val }))
+                            }}
+                            className="h-8 w-full rounded border border-slate-300 px-2 text-right font-mono text-xs text-slate-900 outline-none focus:border-emerald-400"
+                          />
                         </td>
                       </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="flex justify-between items-center rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
-              <span className="text-slate-600">Unapplied Leftover (Advance):</span>
-              <span className="font-mono font-bold text-emerald-700">
-                {formatPaiseInr(fifoAllocations.advancePaise)}
-              </span>
-            </div>
-          </div>
-        ) : (
-          /* Manual Pinning Table */
-          <div className="space-y-3">
-            {manualAllocationSummary.errors.length > 0 && (
-              <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800 space-y-1">
-                {manualAllocationSummary.errors.map((err, i) => (
-                  <div key={i} className="flex items-center gap-1.5">
-                    <AlertCircle size={14} className="shrink-0 text-rose-600" />
-                    <span>{err}</span>
-                  </div>
-                ))}
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            )}
 
-            <div className="overflow-x-auto rounded border border-slate-200">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
-                  <tr>
-                    <th className="px-3 py-2 text-left">IN No</th>
-                    <th className="px-3 py-2 text-left">Bill Date</th>
-                    <th className="px-3 py-2 text-right">Bill Total</th>
-                    <th className="px-3 py-2 text-right">Current Due</th>
-                    <th className="px-3 py-2 text-right w-44">Pinned Amount (₹)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {openBills.map((bill) => (
-                    <tr key={bill.billId}>
-                      <td className="px-3 py-2 font-mono font-medium text-blue-700">{bill.inNo}</td>
-                      <td className="px-3 py-2 text-slate-500">{formatFullDate(bill.date)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-600">{formatPaiseInr(bill.netPaise)}</td>
-                      <td className="px-3 py-2 text-right font-mono font-semibold text-rose-700">
-                        {formatPaiseInr(bill.duePaise)}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <input
-                          type="text"
-                          placeholder="₹ pin"
-                          value={manualPins[bill.billId] ?? ''}
-                          onChange={(e) =>
-                            setManualPins((prev) => ({
-                              ...prev,
-                              [bill.billId]: e.target.value,
-                            }))
-                          }
-                          className="h-8 w-full rounded border border-slate-300 px-2 text-right font-mono text-xs text-slate-900 outline-none focus:border-blue-400"
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
-              <div>
-                <span className="text-slate-500">Total Pinned to Bills:</span>{' '}
-                <span className="font-mono font-bold text-slate-900">
-                  {formatPaiseInr(manualAllocationSummary.totalPinnedPaise)}
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="text-slate-500">Leftover Advance:</span>{' '}
-                <span className="font-mono font-bold text-emerald-700">
-                  {formatPaiseInr(manualAllocationSummary.advancePaise)}
-                </span>
+              <div className="flex justify-between rounded-lg bg-slate-50 p-2.5 text-xs font-semibold text-slate-700">
+                <span>Total Pinned: {formatPaiseInr(manualAllocationSummary.totalPinnedPaise)}</span>
+                <span>Unpinned Remainder: {formatPaiseInr(manualAllocationSummary.unallocatedPaise)}</span>
               </div>
             </div>
-          </div>
-        )}
-      </section>
-
-      {/* Private Notes Section */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
-        <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-          <Lock size={12} className="text-slate-400" />
-          <span>Private Notes (Internal Only)</span>
-        </label>
-        <textarea
-          rows={2}
-          placeholder="Private remark for internal record..."
-          value={privateNote}
-          onChange={(e) => setPrivateNote(e.target.value)}
-          className="w-full rounded-md border border-slate-300 p-2 text-xs text-slate-900 outline-none focus:border-blue-400"
-        />
-      </section>
+          )}
+        </section>
+      )}
     </div>
   )
 }

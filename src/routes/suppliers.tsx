@@ -71,7 +71,7 @@ const defaultSupplierFormState = (): SupplierFormState => ({
 })
 
 type FilterType = 'all' | 'due' | 'advance' | 'inactive'
-type SortKey = 'name' | 'kacha' | 'gst' | 'advance' | 'outstanding' | 'activity'
+type SortKey = 'name' | 'kacha' | 'gst' | 'advance' | 'outstanding' | 'activity' | 'bardan' | 'oldest'
 
 const FILTER_LABEL: Record<FilterType, string> = {
   all: 'All',
@@ -135,6 +135,8 @@ function SuppliersPage() {
       if (sortKey === 'kacha') return direction * (a.kachaDuePaise - b.kachaDuePaise)
       if (sortKey === 'gst') return direction * (a.gstDuePaise - b.gstDuePaise)
       if (sortKey === 'advance') return direction * (a.advancePaise - b.advancePaise)
+      if (sortKey === 'bardan') return direction * (a.bardanPendingCount - b.bardanPendingCount)
+      if (sortKey === 'oldest') return direction * ((a.oldestDueDays ?? -1) - (b.oldestDueDays ?? -1))
       if (sortKey === 'activity') return direction * (a.lastActivityDate || '').localeCompare(b.lastActivityDate || '')
       return direction * (a.outstandingPaise - b.outstandingPaise)
     })
@@ -331,6 +333,8 @@ function SuppliersPage() {
                   <SortableTh label="GST Due" active={sortKey === 'gst'} desc={sortDesc} onClick={() => toggleSort('gst')} align="right" />
                   <SortableTh label="Advance" active={sortKey === 'advance'} desc={sortDesc} onClick={() => toggleSort('advance')} align="right" />
                   <SortableTh label="Net Owed" active={sortKey === 'outstanding'} desc={sortDesc} onClick={() => toggleSort('outstanding')} align="right" />
+                  <SortableTh label="Bardan" active={sortKey === 'bardan'} desc={sortDesc} onClick={() => toggleSort('bardan')} align="right" />
+                  <SortableTh label="Oldest Due" active={sortKey === 'oldest'} desc={sortDesc} onClick={() => toggleSort('oldest')} align="right" />
                   <SortableTh label="Last Activity" active={sortKey === 'activity'} desc={sortDesc} onClick={() => toggleSort('activity')} align="right" />
                   <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>
@@ -338,7 +342,7 @@ function SuppliersPage() {
               <tbody className="divide-y divide-slate-100">
                 {visibleRows.length === 0 && (
                   <tr>
-                    <td className="px-3 py-10 text-center text-sm text-slate-500" colSpan={8}>
+                    <td className="px-3 py-10 text-center text-sm text-slate-500" colSpan={10}>
                       {allRows.length === 0 ? (
                         <>
                           <p className="font-medium text-slate-700">No suppliers registered yet.</p>
@@ -413,6 +417,32 @@ function SuppliersPage() {
                           <span className="text-xs font-medium text-slate-400">Nil</span>
                         )}
                       </td>
+                      <td className="px-3 py-2.5 text-right">
+                        {row.bardanPendingCount > 0 ? (
+                          <span className="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">
+                            {row.bardanPendingCount} pending
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-400">0</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">
+                        {row.oldestDueDays != null ? (
+                          <span
+                            className={
+                              row.oldestDueDays > 10
+                                ? 'font-bold text-rose-600'
+                                : row.oldestDueDays >= 7
+                                  ? 'font-semibold text-amber-600'
+                                  : 'text-slate-700'
+                            }
+                          >
+                            {row.oldestDueDays}d
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2.5 text-right text-xs text-slate-500">
                         {row.lastActivityDate ? formatFullDate(row.lastActivityDate) : '—'}
                       </td>
@@ -477,7 +507,7 @@ function SuppliersPage() {
                     <td className="px-3 py-3 text-right font-mono tabular-nums text-rose-700">
                       {formatPaiseDisplay(totals.outstandingPaise)}
                     </td>
-                    <td className="px-3 py-3" colSpan={2} />
+                    <td className="px-3 py-3" colSpan={4} />
                   </tr>
                 </tfoot>
               )}
