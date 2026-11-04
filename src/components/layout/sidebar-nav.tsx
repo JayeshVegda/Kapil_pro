@@ -1,8 +1,6 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState, type ComponentType } from 'react'
-import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Package, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, Truck, Users, X } from 'lucide-react'
-import { loadBardanPendingCount } from '@/data/suppliers'
+import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, Truck, Users, X } from 'lucide-react'
 import { isPathHiddenByModules } from '@/lib/module-settings'
 import { useModuleSettings } from '@/lib/use-module-settings'
 
@@ -44,11 +42,9 @@ const navGroups: NavGroup[] = [
     label: 'Purchases',
     collapsible: true,
     items: [
+      { to: '/purchase-bills', title: 'Bills', icon: ScrollText },
+      { to: '/supplier-payments', title: 'Payments', icon: CreditCard },
       { to: '/suppliers', title: 'Suppliers', icon: Truck },
-      { to: '/purchase-bills', title: 'Purchase Bills', icon: ScrollText },
-      { to: '/supplier-payments', title: 'Supplier Payments', icon: CreditCard },
-      { to: '/bardan-pending', title: 'Bardan Pending', icon: Package },
-      { to: '/purchase-items', title: 'Purchase Items', icon: Boxes },
     ],
   },
   {
@@ -69,6 +65,7 @@ const navGroups: NavGroup[] = [
       { to: '/data-health', title: 'Data Health', icon: HeartPulse },
       { to: '/backup', title: 'Backup', icon: Database },
       { to: '/settings', title: 'Settings', icon: SlidersHorizontal },
+      { to: '/purchase-items', title: 'Purchase Items', icon: Boxes },
     ],
   },
   {
@@ -98,29 +95,17 @@ export function SidebarNav() {
 /** Nav groups with switched-off modules removed, dropping any group left empty. */
 function useVisibleNavGroups() {
   const moduleSettings = useModuleSettings()
-  const bardanCountQuery = useQuery({
-    queryKey: ['bardan-pending-count'],
-    queryFn: loadBardanPendingCount,
-    staleTime: 30_000,
-  })
 
-  const pendingBardanCount = bardanCountQuery.data ?? 0
-
-  return useMemo(() => {
-    return navGroups
-      .map((group) => ({
-        ...group,
-        items: group.items
-          .filter((item) => !isPathHiddenByModules(item.to, moduleSettings))
-          .map((item) => {
-            if (item.to === '/bardan-pending' && pendingBardanCount > 0) {
-              return { ...item, badge: pendingBardanCount }
-            }
-            return item
-          }),
-      }))
-      .filter((group) => group.items.length > 0)
-  }, [moduleSettings, pendingBardanCount])
+  return useMemo(
+    () =>
+      navGroups
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => !isPathHiddenByModules(item.to, moduleSettings)),
+        }))
+        .filter((group) => group.items.length > 0),
+    [moduleSettings],
+  )
 }
 
 const DEFAULT_COLLAPSED: Record<string, boolean> = {

@@ -1,6 +1,7 @@
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
 import { nextPurchaseInNo } from '@/domain/in-no'
+import { findItemNameCollision, itemNameKey, normalizeItemName } from '@/domain/purchase-item-name'
 import {
   CREDIT_KINDS,
   computeSupplierSettlement,
@@ -503,17 +504,27 @@ export async function listPurchaseItems(): Promise<PurchaseItemView[]> {
 
 export async function createPurchaseItem(name: string): Promise<PurchaseItemView> {
   return runDataOperation('create-purchase-item', async () => {
-    const row = (await pb.collection('purchase_items').create({ name: name.trim(), active: true })) as PBRow
-    await writeAuditRow({ collection: 'purchase_items', recordId: row.id, action: 'create', after: { name: name.trim() } })
+    const candidate = normalizeItemName(name)
+    if (!candidate) throw new Error('Item name cannot be empty.')
+    const existing = await pb.collection('purchase_items').getFullList({ fields: 'name' })
+    const collision = findItemNameCollision(candidate, (existing as unknown as Array<{ name?: string }>).map((row) => ({ name: String(row.name ?? '') })))
+    if (collision) throw new Error(`Item "${collision.name}" already exists.`)
+    const row = (await pb.collection('purchase_items').create({ name: candidate, active: true })) as PBRow
+    await writeAuditRow({ collection: 'purchase_items', recordId: row.id, action: 'create', after: { name: candidate } })
     return mapItem(row)
   })
 }
 
 export async function renamePurchaseItem(itemId: string, name: string): Promise<PurchaseItemView> {
   return runDataOperation('rename-purchase-item', async () => {
+    const candidate = normalizeItemName(name)
+    if (!candidate) throw new Error('Item name cannot be empty.')
     const before = (await pb.collection('purchase_items').getOne(itemId)) as PBRow
-    const row = (await pb.collection('purchase_items').update(itemId, { name: name.trim() })) as PBRow
-    await writeAuditRow({ collection: 'purchase_items', recordId: itemId, action: 'rename', before, after: { name: name.trim() } })
+    const existing = await pb.collection('purchase_items').getFullList({ fields: 'id,name' })
+    const collision = existing.find((row) => String((row as unknown as { id: string }).id) !== itemId && itemNameKey(String((row as unknown as { name?: string }).name ?? '')) === itemNameKey(candidate))
+    if (collision) throw new Error(`Item "${String((collision as unknown as { name?: string }).name ?? '')}" already exists.`)
+    const row = (await pb.collection('purchase_items').update(itemId, { name: candidate })) as PBRow
+    await writeAuditRow({ collection: 'purchase_items', recordId: itemId, action: 'rename', before, after: { name: candidate } })
     return mapItem(row)
   })
 }

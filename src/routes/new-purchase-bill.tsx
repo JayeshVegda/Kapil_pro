@@ -6,6 +6,7 @@ import {
   Building2,
   Clock,
   FileText,
+  GripVertical,
   Image as ImageIcon,
   Lock,
   Plus,
@@ -19,6 +20,7 @@ import { toUserMessage } from '@/app/errors'
 import { invalidateAfterSupplierPurchaseWrite } from '@/app/query-invalidation'
 import { DateInput } from '@/components/ui/date-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
+import { BillChitty, type BillChittyData } from '@/components/suppliers/bill-chitty'
 import {
   bundleToSettlementInput,
   createPurchaseBill,
@@ -55,7 +57,7 @@ import {
   rateToMilli,
   rupeesToPaise,
 } from '@/domain/supplier-units'
-import { formatFullDate, getLocalIsoDate } from '@/lib/date'
+import { getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
 
 const searchSchema = z.object({
@@ -67,6 +69,9 @@ export const Route = createFileRoute('/new-purchase-bill')({
   validateSearch: searchSchema,
   component: NewPurchaseBillPage,
 })
+
+const SPLIT_PCT_KEY = 'kapil-new-bill-split-pct'
+const SPLIT_DEFAULT = 45
 
 type LineFormItem = {
   id: string
@@ -97,6 +102,21 @@ function defaultLine(): LineFormItem {
   }
 }
 
+function clampSplitPct(v: number) {
+  return Math.min(70, Math.max(30, v))
+}
+
+function loadSplitPct(): number {
+  try {
+    const raw = window.localStorage.getItem(SPLIT_PCT_KEY)
+    const v = raw == null ? NaN : parseInt(raw, 10)
+    if (!Number.isNaN(v)) return clampSplitPct(v)
+  } catch {
+    // ignore storage errors
+  }
+  return SPLIT_DEFAULT
+}
+
 function findVilaityBenchmark(
   history: Array<{ date: string; vilaityMilli: number }>,
   targetDate: string,
@@ -111,6 +131,17 @@ function findVilaityBenchmark(
   }
   const first = history[0]
   return { milli: first?.vilaityMilli ?? null, date: first?.date ?? targetDate, isFallback: true }
+}
+
+function SupplierStripCell({ label, value, tone }: { label: string; value: string; tone?: 'amber' | 'blue' | 'emerald' | 'slate' }) {
+  const toneClass =
+    tone === 'amber' ? 'text-amber-700' : tone === 'blue' ? 'text-blue-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-800'
+  return (
+    <span className="inline-flex items-baseline gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">{label}</span>
+      <span className={`font-mono text-xs font-bold tabular-nums ${toneClass}`}>{value}</span>
+    </span>
+  )
 }
 
 function ItemDropdownCell({
@@ -359,6 +390,11 @@ function NewPurchaseBillPage() {
   const [adjustments, setAdjustments] = useState<AdjustmentFormItem[]>([])
   const [statusText, setStatusText] = useState('')
 
+  // Split-screen divider position (persisted, clamped 30-70)
+  const [splitPct, setSplitPct] = useState<number>(() => loadSplitPct())
+  const splitContainerRef = useRef<HTMLDivElement>(null)
+  const isDraggingSplit = useRef(false)
+
   const suppliersQuery = useQuery({
     queryKey: ['suppliers-list'],
     queryFn: () => listSuppliers({ includeInactive: false }),
@@ -384,12 +420,25 @@ function NewPurchaseBillPage() {
     enabled: Boolean(editBillId),
   })
 
-  // Supplier context side panel bundle query
+  // Supplier context strip bundle query
   const supplierBundleQuery = useQuery({
     queryKey: ['supplier-bundle-context', supplierId],
     queryFn: () => (supplierId ? loadSupplierBundle(supplierId) : null),
     enabled: Boolean(supplierId),
   })
+
+  const supplierName = useMemo(
+    () => (suppliersQuery.data ?? []).find((s) => s.id === supplierId)?.companyName ?? '',
+    [suppliersQuery.data, supplierId],
+  )
+
+  const supplierOptions = useMemo(
+    () =>
+      (suppliersQuery.data ?? [])
+        .filter((s) => s.active !== false)
+        .map((s) => ({ id: s.id, name: s.companyName })),
+    [suppliersQuery.data],
+  )
 
   // Pre-fill if editing
   useEffect(() => {
@@ -497,37 +546,30 @@ function NewPurchaseBillPage() {
 
   const currentVilaityMilli = vilaityBenchmark.milli
 
-  // Total kg and average rate
-  const totalWeightG = useMemo(() => parsedLines.reduce((s, l) => s + l.weightG, 0), [parsedLines])
-  const totalKg = totalWeightG / 1000
-  const avgRateRupees = useMemo(() => {
-    if (totalKg <= 0) return 0
-    return (billNet.linesTotalPaise / 100) / totalKg
-  }, [totalKg, billNet.linesTotalPaise])
-
-  // Total premium over vilaity
-  const totalPremiumPaise = useMemo(() => {
-    if (currentVilaityMilli == null) return null
-    let total = 0
-    for (const l of parsedLines) {
-      if (l.weightG > 0 && l.rateMilli > 0) {
-        const diffMilli = l.rateMilli - currentVilaityMilli
-        const premiumLine = Math.round((l.weightG * diffMilli) / 10000)
-        total += premiumLine
-      }
+  // Live chitty preview data (same computation the chitty page uses)
+  const billChittyData = useMemo<BillChittyData>(() => {
+    const gstRateBp = taxMode === 'none' ? 0 : percentToBasisPoints(gstRatePercent)
+    return {
+      inNo: inNoPreview,
+      date,
+      supplierName,
+      pool,
+      taxMode,
+      gstRateBp,
+      supplierBillNo: supplierBillNo.trim(),
+      vehicleNo: vehicleNo.trim(),
+      lines: parsedLines
+        .filter((l) => l.itemName.trim() && l.weightG > 0)
+        .map((l) => ({ itemName: l.itemName, weightG: l.weightG, rateMilli: l.rateMilli, amountPaise: l.amountPaise })),
+      adjustments: parsedAdjustments
+        .filter((a) => a.amountPaise !== 0)
+        .map((a) => ({ type: a.type, amountPaise: a.amountPaise, note: a.note.trim() || undefined })),
+      bardan: [],
+      paidRows: [],
     }
-    return total
-  }, [parsedLines, currentVilaityMilli])
+  }, [inNoPreview, date, supplierName, pool, taxMode, gstRatePercent, supplierBillNo, vehicleNo, parsedLines, parsedAdjustments])
 
-  const supplierOptions = useMemo(() => {
-    return (suppliersQuery.data ?? []).map((s) => ({
-      id: s.id,
-      name: s.companyName,
-      suffix: s.city ? `(${s.city})` : undefined,
-    }))
-  }, [suppliersQuery.data])
-
-  // Supplier context panel computation
+  // Supplier context strip computation (dues / advance / bardan / last 3 rates per item)
   const supplierContext = useMemo(() => {
     if (!supplierBundleQuery.data) return null
     const bundle: SupplierBundle = supplierBundleQuery.data
@@ -681,11 +723,7 @@ function NewPurchaseBillPage() {
     onSuccess: async (savedBill) => {
       await invalidateAfterSupplierPurchaseWrite(queryClient, supplierId)
       await queryClient.invalidateQueries({ queryKey: ['purchase-bills'] })
-      void navigate({
-        to: '/supplier-ledger/$supplierId',
-        params: { supplierId },
-        search: { highlightBill: savedBill.id },
-      })
+      void navigate({ to: '/purchase-bills/$billId', params: { billId: savedBill.inNo } })
     },
     onError: (error) => setStatusText(toUserMessage(error)),
   })
@@ -708,10 +746,35 @@ function NewPurchaseBillPage() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [handleKeyDown])
 
+  // Draggable split divider
+  const onDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    isDraggingSplit.current = true
+  }
+  const onDividerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingSplit.current) return
+    const el = splitContainerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const pct = ((e.clientX - rect.left) / rect.width) * 100
+    setSplitPct(clampSplitPct(Math.round(pct)))
+  }
+  const onDividerPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingSplit.current) return
+    isDraggingSplit.current = false
+    try {
+      window.localStorage.setItem(SPLIT_PCT_KEY, String(splitPct))
+    } catch {
+      // ignore storage errors
+    }
+    e.currentTarget.releasePointerCapture(e.pointerId)
+  }
+
   return (
-    <div className="w-full space-y-4 px-3 pb-16 pt-3 sm:px-4 lg:px-6">
+    <div className="w-full pr-3 pb-12 pt-3 lg:pl-3">
       {/* Top Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-1">
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -731,42 +794,81 @@ function NewPurchaseBillPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="hidden text-xs text-slate-400 sm:inline">Press Ctrl+Enter to save</span>
+          <span className="hidden text-xs text-slate-400 sm:inline">Ctrl+Enter to save</span>
           <button
             type="button"
             onClick={() => saveMutation.mutate()}
             disabled={saveMutation.isPending}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-4 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-slate-900 px-4 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
           >
             {saveMutation.isPending ? 'Saving...' : editBillId ? 'Update Bill' : 'Save Bill'}
           </button>
         </div>
       </div>
 
-      {hasManualAllocationsWarning && (
-        <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
-          <AlertCircle size={16} className="shrink-0 text-amber-600" />
-          <span>
-            <strong>Warning:</strong> This bill has manual payment allocations assigned. Editing quantities or totals
-            will modify remaining dues.
-          </span>
-        </div>
-      )}
+      <div className="mt-3 space-y-2 px-1">
+        {hasManualAllocationsWarning && (
+          <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900">
+            <AlertCircle size={14} className="shrink-0 text-amber-600" />
+            <span>
+              <strong>Warning:</strong> This bill has manual payment allocations assigned. Editing quantities or totals
+              will modify remaining dues.
+            </span>
+          </div>
+        )}
 
-      {statusText && (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
-          {statusText}
-        </div>
-      )}
+        {statusText && (
+          <div className="rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-800">
+            {statusText}
+          </div>
+        )}
+      </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Main Entry Lane (2 cols on large screen) */}
-        <div className="space-y-4 lg:col-span-2">
+      {/* Split screen: form left, chitty preview right */}
+      <div ref={splitContainerRef} className="mt-3 flex flex-col gap-3 md:flex-row" style={{ ['--new-bill-split' as string]: `${splitPct}%` }}>
+        {/* ---- LEFT: form ---- */}
+        <div className="min-w-0 space-y-3 md:basis-[var(--new-bill-split)] md:shrink-0 md:grow">
+          {/* Supplier context strip */}
+          {supplierId && (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm">
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                <Building2 size={12} className="text-blue-600" />
+                {supplierName || 'Supplier context'}
+              </span>
+              {supplierBundleQuery.isLoading ? (
+                <span className="text-[11px] text-slate-400">Loading supplier data…</span>
+              ) : supplierContext ? (
+                <>
+                  <SupplierStripCell label="Kacha Due" value={formatPaiseInr(supplierContext.kachaDuePaise)} tone="amber" />
+                  <SupplierStripCell label="GST Due" value={formatPaiseInr(supplierContext.gstDuePaise)} tone="blue" />
+                  <SupplierStripCell label="Advance" value={formatPaiseInr(supplierContext.advancePaise)} tone="emerald" />
+                  <SupplierStripCell label="Bardan Pending" value={`${supplierContext.bardanPendingCount} bills`} tone={supplierContext.bardanPendingCount > 0 ? 'amber' : 'slate'} />
+                  <SupplierStripCell label="Vilaity" value={currentVilaityMilli != null ? `₹${milliToRateText(currentVilaityMilli)}/kg` : '—'} tone="slate" />
+                  {supplierContext.itemRates.length > 0 && (
+                    <span className="inline-flex flex-wrap items-center gap-1.5">
+                      <Clock size={11} className="text-slate-400" />
+                      {supplierContext.itemRates.map((it) => (
+                        <span key={it.itemName} className="inline-flex items-center gap-1 rounded bg-slate-50 px-1.5 py-0.5 text-[10px] ring-1 ring-slate-200" title={`Last rates for ${it.itemName}`}>
+                          <span className="font-semibold text-slate-700">{it.itemName}</span>
+                          <span className="font-mono text-slate-600">
+                            {it.rates.map((r) => `₹${milliToRateText(r.rateMilli)}`).join(' · ')}
+                          </span>
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-[11px] text-slate-400">Select a supplier with data to see dues and previous rates.</span>
+              )}
+            </div>
+          )}
+
           {/* Bill Meta Form */}
-          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
+          <section className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
               <div className="space-y-1 sm:col-span-2">
-                <label className="text-xs font-semibold text-slate-700">
+                <label className="text-xs font-semibold text-slate-500">
                   Supplier <span className="text-rose-600">*</span>
                 </label>
                 <SearchableCombobox
@@ -779,7 +881,7 @@ function NewPurchaseBillPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-700">Bill Date</label>
+                <label className="text-xs font-semibold text-slate-500">Bill Date</label>
                 <DateInput
                   value={date}
                   onChange={setDate}
@@ -788,7 +890,7 @@ function NewPurchaseBillPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-700">Pool</label>
+                <label className="text-xs font-semibold text-slate-500">Pool</label>
                 <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
                   <button
                     type="button"
@@ -824,7 +926,7 @@ function NewPurchaseBillPage() {
               {pool === 'gst' ? (
                 <>
                   <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-700">Tax Mode</label>
+                    <label className="text-xs font-semibold text-slate-500">Tax Mode</label>
                     <select
                       value={taxMode}
                       onChange={(e) => setTaxMode(e.target.value as PurchaseTaxMode)}
@@ -836,7 +938,7 @@ function NewPurchaseBillPage() {
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-700">GST Rate (%)</label>
+                    <label className="text-xs font-semibold text-slate-500">GST Rate (%)</label>
                     <select
                       value={gstRatePercent}
                       onChange={(e) => setGstRatePercent(Number(e.target.value))}
@@ -859,7 +961,7 @@ function NewPurchaseBillPage() {
               )}
 
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-700">Supplier Invoice No</label>
+                <label className="text-xs font-semibold text-slate-500">Supplier Invoice No</label>
                 <input
                   type="text"
                   placeholder="e.g. INV-1049"
@@ -870,7 +972,7 @@ function NewPurchaseBillPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-700">Vehicle No</label>
+                <label className="text-xs font-semibold text-slate-500">Vehicle No</label>
                 <input
                   type="text"
                   placeholder="GJ-10-XX-0000"
@@ -881,7 +983,7 @@ function NewPurchaseBillPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-700">Bags at Receipt (kg memo)</label>
+                <label className="text-xs font-semibold text-slate-500">Bags at Receipt (kg memo)</label>
                 <input
                   type="text"
                   placeholder="e.g. 15.500"
@@ -894,9 +996,9 @@ function NewPurchaseBillPage() {
           </section>
 
           {/* Line Items Table */}
-          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+          <section className="space-y-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">Material Items</h2>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">Material Items</h2>
               <button
                 type="button"
                 onClick={addLine}
@@ -909,13 +1011,13 @@ function NewPurchaseBillPage() {
             <div className="overflow-x-auto no-scrollbar">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                    <th className="px-3 py-2 text-left w-10">#</th>
-                    <th className="px-3 py-2 text-left min-w-[220px]">Item</th>
-                    <th className="px-3 py-2 text-right w-32">Weight (kg)</th>
-                    <th className="px-3 py-2 text-right w-36">Rate (₹/kg)</th>
-                    <th className="px-3 py-2 text-right w-44">Amount</th>
-                    <th className="px-3 py-2 text-center w-12"></th>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                    <th className="px-3 py-1.5 text-left w-10">#</th>
+                    <th className="px-3 py-1.5 text-left min-w-[220px]">Item</th>
+                    <th className="px-3 py-1.5 text-right w-32">Weight (kg)</th>
+                    <th className="px-3 py-1.5 text-right w-36">Rate (₹/kg)</th>
+                    <th className="px-3 py-1.5 text-right w-44">Amount</th>
+                    <th className="px-3 py-1.5 text-center w-12"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -999,10 +1101,10 @@ function NewPurchaseBillPage() {
           </section>
 
           {/* Adjustments */}
-          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+          <section className="space-y-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
               <div>
-                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">Adjustments</h2>
+                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">Adjustments</h2>
                 <p className="text-[11px] text-slate-400">Labour, transport, quality deductions, or other adjustments</p>
               </div>
               <button
@@ -1058,11 +1160,11 @@ function NewPurchaseBillPage() {
           </section>
 
           {/* Private Notes & Photo Attach */}
-          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">Internal Slip & Notes</h2>
+          <section className="space-y-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">Internal Slip & Notes</h2>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-700">Private Note (Never Printed)</label>
+                <label className="text-xs font-semibold text-slate-500">Private Note (Never Printed)</label>
                 <textarea
                   rows={3}
                   placeholder="Internal memo, delivery instructions, quality notes..."
@@ -1073,7 +1175,7 @@ function NewPurchaseBillPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-700">Attach Photos / Slips (Internal)</label>
+                <label className="text-xs font-semibold text-slate-500">Attach Photos / Slips (Internal)</label>
                 <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-3 text-center">
                   <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-300 hover:bg-slate-50">
                     <Upload size={13} />
@@ -1116,200 +1218,42 @@ function NewPurchaseBillPage() {
           </section>
         </div>
 
-        {/* Right Lane: Supplier Context Side Panel & Calculation Card */}
-        <div className="space-y-4">
-          {/* Live Preview Summary Card */}
-          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">Payable Summary</h2>
+        {/* ---- Divider (drag to resize, desktop only) ---- */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          tabIndex={-1}
+          onPointerDown={onDividerPointerDown}
+          onPointerMove={onDividerPointerMove}
+          onPointerUp={onDividerPointerUp}
+          onPointerCancel={onDividerPointerUp}
+          className="group relative hidden w-0 shrink-0 cursor-col-resize md:flex md:items-stretch"
+          title="Drag to resize"
+        >
+          <span className="pointer-events-none absolute inset-y-0 -left-2 -right-2" />
+          <GripVertical size={14} className="m-auto text-slate-300 transition group-hover:text-blue-500" />
+        </div>
 
-            <div className="space-y-2 border-b border-slate-100 pb-3 text-xs">
-              <div className="flex justify-between text-slate-600">
-                <span>Total Weight</span>
-                <span className="font-mono font-bold text-slate-900">{gramsToKgText(totalWeightG)} kg</span>
-              </div>
-              <div className="flex justify-between text-slate-600">
-                <span>Average Rate</span>
-                <span className="font-mono font-medium text-slate-800">
-                  {avgRateRupees > 0 ? `₹${avgRateRupees.toFixed(2)}/kg` : '—'}
-                </span>
-              </div>
-
-              {totalPremiumPaise != null && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="inline-flex items-center gap-1 text-[11px] text-amber-800">
-                    <Lock size={11} /> Premium vs Vilaity (internal):
-                  </span>
-                  <span
-                    className={`font-mono font-semibold ${
-                      totalPremiumPaise >= 0 ? 'text-amber-800' : 'text-blue-800'
-                    }`}
-                  >
-                    {totalPremiumPaise >= 0 ? '+' : '-'}
-                    {formatPaiseInr(Math.abs(totalPremiumPaise))}
-                  </span>
-                </div>
-              )}
-
-              <div className="flex justify-between text-slate-600">
-                <span>Taxable Material</span>
-                <span className="font-mono tabular-nums text-slate-900">{formatPaiseInr(billNet.taxablePaise)}</span>
-              </div>
-
-              {taxMode === 'gst' && (
-                <div className="flex justify-between text-slate-600">
-                  <span>GST ({gstRatePercent}%)</span>
-                  <span className="font-mono tabular-nums text-blue-700">+{formatPaiseInr(billNet.taxPaise)}</span>
-                </div>
-              )}
-
-              {taxMode === 'rcm' && (
-                <div className="rounded bg-amber-50 p-1.5 text-[11px] text-amber-800">
-                  <div className="flex justify-between font-medium">
-                    <span>RCM Liability ({gstRatePercent}%)</span>
-                    <span className="font-mono">{formatPaiseInr(billNet.rcmLiabilityPaise)}</span>
-                  </div>
-                  <p className="mt-0.5 text-[10px] text-amber-700">Our liability — not added to supplier payable.</p>
-                </div>
-              )}
-
-              {billNet.qualityCutPaise > 0 && (
-                <div className="flex justify-between text-slate-600">
-                  <span>Quality Cut (Deduction)</span>
-                  <span className="font-mono tabular-nums text-rose-700">
-                    -{formatPaiseInr(billNet.qualityCutPaise)}
-                  </span>
-                </div>
-              )}
-
-              {billNet.otherAdjustmentsPaise !== 0 && (
-                <div className="flex justify-between text-slate-600">
-                  <span>Other Adjustments Net</span>
-                  <span className="font-mono tabular-nums">
-                    {billNet.otherAdjustmentsPaise > 0 ? '+' : ''}
-                    {formatPaiseInr(billNet.otherAdjustmentsPaise)}
-                  </span>
-                </div>
-              )}
-
-              {billNet.roundOffPaise !== 0 && (
-                <div className="flex justify-between text-slate-400 text-[11px]">
-                  <span>Auto Round-off</span>
-                  <span className="font-mono tabular-nums">
-                    {billNet.roundOffPaise > 0 ? '+' : ''}
-                    {formatPaiseInr(billNet.roundOffPaise)}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-baseline justify-between pt-1">
-              <span className="text-xs font-bold uppercase text-slate-700">Net Payable</span>
-              <span className="font-mono text-lg font-bold text-slate-900 tabular-nums">
-                {formatPaiseInr(billNet.netPaise)}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => saveMutation.mutate()}
-              disabled={saveMutation.isPending}
-              className="mt-2 w-full rounded-lg bg-blue-600 py-2.5 text-center text-xs font-bold text-white shadow hover:bg-blue-700 disabled:opacity-50"
-            >
-              {saveMutation.isPending ? 'Saving...' : editBillId ? 'Update Bill' : 'Save Bill (Ctrl+Enter)'}
-            </button>
-          </section>
-
-          {/* Supplier Context Side Panel */}
+        {/* ---- RIGHT: live chitty preview ---- */}
+        <div className="min-w-0 md:grow">
           {supplierId ? (
-            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-              <div className="flex items-center gap-1.5 border-b border-slate-100 pb-2">
-                <Building2 size={14} className="text-blue-600" />
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Supplier Context</h3>
-              </div>
-
-              {supplierBundleQuery.isLoading ? (
-                <p className="text-xs text-slate-400">Loading supplier data...</p>
-              ) : supplierContext ? (
-                <div className="space-y-3 text-xs">
-                  {/* Account position */}
-                  <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-2.5">
-                    <div>
-                      <span className="text-[10px] uppercase tracking-wider text-slate-400">Kacha Due</span>
-                      <p className="font-mono font-bold text-amber-700">
-                        {formatPaiseInr(supplierContext.kachaDuePaise)}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] uppercase tracking-wider text-slate-400">GST Due</span>
-                      <p className="font-mono font-bold text-blue-700">
-                        {formatPaiseInr(supplierContext.gstDuePaise)}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] uppercase tracking-wider text-slate-400">Advance</span>
-                      <p className="font-mono font-bold text-emerald-700">
-                        {formatPaiseInr(supplierContext.advancePaise)}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] uppercase tracking-wider text-slate-400">Bardan Pending</span>
-                      <p className="font-mono font-bold text-slate-800">
-                        {supplierContext.bardanPendingCount} bills
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Benchmark Vilaity rate */}
-                  <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-2.5 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-amber-900">Today's Vilaity</span>
-                      <span className="font-mono font-bold text-amber-950">
-                        {currentVilaityMilli != null ? `₹${milliToRateText(currentVilaityMilli)}/kg` : '—'}
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-amber-700">
-                      {vilaityBenchmark.isFallback ? (
-                        <>Fallback date: {formatFullDate(vilaityBenchmark.date)}</>
-                      ) : (
-                        <>Exact benchmark for {formatFullDate(date)}</>
-                      )}
-                    </p>
-                  </div>
-
-                  {/* Last 3 rates per item for this supplier */}
-                  <div className="space-y-2 pt-1">
-                    <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
-                      <Clock size={12} />
-                      <span>Last 3 Rates Paid (This Supplier)</span>
-                    </div>
-
-                    {supplierContext.itemRates.length === 0 ? (
-                      <p className="text-[11px] text-slate-400 italic">No previous purchase lines found.</p>
-                    ) : (
-                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                        {supplierContext.itemRates.map((it) => (
-                          <div key={it.itemName} className="rounded border border-slate-100 bg-slate-50/80 p-1.5">
-                            <span className="font-semibold text-slate-800">{it.itemName}</span>
-                            <div className="mt-0.5 flex flex-wrap gap-1 text-[10px]">
-                              {it.rates.map((r, i) => (
-                                <span key={i} className="rounded bg-white px-1.5 py-0.5 font-mono text-slate-700 ring-1 ring-slate-200">
-                                  ₹{milliToRateText(r.rateMilli)} ({r.date.slice(5)})
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : null}
-            </section>
+            <BillChitty data={billChittyData} mode="preview" />
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">
-              Select a supplier to see their current dues, advance, and historical rates.
+            <div className="rounded-lg border border-dashed border-slate-300 bg-white/60 p-12 text-center text-xs text-slate-400">
+              Select a supplier to see the live chitty preview while you type.
             </div>
           )}
+
+          {/* Internal-only preview hints */}
+          <div className="mx-auto mt-2 max-w-[840px] space-y-1 px-1 text-[10px] text-slate-400">
+            <p>
+              This is the same chitty format printed from the bill page. Payments, bardan and totals are computed there
+              after saving.
+            </p>
+            <p className="flex justify-end font-semibold text-slate-500">
+              Net payable {formatPaiseInr(billNet.netPaise)} · {gramsToKgText(parsedLines.reduce((s, l) => s + l.weightG, 0))} kg
+            </p>
+          </div>
         </div>
       </div>
     </div>

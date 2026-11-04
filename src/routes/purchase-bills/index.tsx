@@ -1,29 +1,49 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
-  ArrowDown,
-  ArrowUp,
+  Ban,
   Download,
   Package,
   Plus,
   RefreshCw,
   Search,
+  Wallet,
   X,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { z } from 'zod'
+import { PurchasesShell } from '@/components/suppliers/purchases-shell'
+import {
+  AddBardanModal,
+  CancelBillModal,
+  RecordPaymentModal,
+  SettleToNilModal,
+  PaymentDetailsModal,
+  type PaymentPinTarget,
+} from '@/components/suppliers/bill-modals'
+import {
+  PurchaseBillsTable,
+  itemsSummary,
+  type BillsTableRow,
+} from '@/components/suppliers/purchase-bills-table'
 import { DateInput } from '@/components/ui/date-input'
 import { loadAllPurchaseBills } from '@/data/suppliers'
-import { formatFullDate, getLocalIsoDate } from '@/lib/date'
+import { computeDaysSince } from '@/domain/supplier-purchases'
+import { getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
 
+const searchSchema = z.object({
+  supplier: z.string().optional(),
+  tab: z.enum(['open', 'partial', 'nil', 'cancelled', 'bardan']).optional(),
+})
+
 export const Route = createFileRoute('/purchase-bills/')({
-  component: PurchaseBillsPage,
+  validateSearch: searchSchema,
+  component: PurchaseBillsRoute,
 })
 
 type PoolFilter = 'all' | 'kacha' | 'gst'
-type StatusFilter = 'all' | 'open' | 'partial' | 'nil' | 'cancelled'
-type BardanFilter = 'all' | 'pending' | 'settled'
-type SortKey = 'date' | 'inNo' | 'supplier' | 'totalKg' | 'net' | 'paid' | 'due' | 'status'
+type TabKey = 'all' | 'open' | 'partial' | 'nil' | 'cancelled' | 'bardan'
 
 function downloadCsv(filename: string, content: string) {
   const blob = new Blob([content], { type: 'text/csv;charset=utf-8' })
@@ -48,50 +68,26 @@ function toCsv(rows: Array<Array<unknown>>): string {
     .join('\n')
 }
 
-function SortableTh({
-  label,
-  active,
-  desc,
-  onClick,
-  align = 'left',
-}: {
-  label: string
-  active: boolean
-  desc: boolean
-  onClick: () => void
-  align?: 'left' | 'right' | 'center'
-}) {
+function PurchaseBillsRoute() {
   return (
-    <th
-      className={`cursor-pointer select-none px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] transition hover:bg-slate-100 ${
-        align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
-      } ${active ? 'text-blue-700' : 'text-slate-600'}`}
-      onClick={onClick}
-    >
-      <span className={`inline-flex items-center gap-1 ${align === 'right' ? 'flex-row-reverse' : ''}`}>
-        <span>{label}</span>
-        {active ? (
-          desc ? <ArrowDown size={13} className="text-blue-600" /> : <ArrowUp size={13} className="text-blue-600" />
-        ) : (
-          <span className="w-3" />
-        )}
-      </span>
-    </th>
+    <PurchasesShell>
+      <PurchaseBillsPage />
+    </PurchasesShell>
   )
 }
 
 function PurchaseBillsPage() {
+  const { supplier: supplierFilter, tab = 'all' } = Route.useSearch()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [poolFilter, setPoolFilter] = useState<PoolFilter>('all')
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [bardanFilter, setBardanFilter] = useState<BardanFilter>('all')
-  const [sortKey, setSortKey] = useState<SortKey>('date')
-  const [sortDesc, setSortDesc] = useState(true)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [modal, setModal] = useState<null | { type: 'bardan' | 'payment' | 'settleNil' | 'cancelBill'; row: BillsTableRow }>(null)
+  const [multiPay, setMultiPay] = useState(false)
+  const [paymentDetailsId, setPaymentDetailsId] = useState<string | null>(null)
 
-  
   const billsQuery = useQuery({
     queryKey: ['purchase-bills'],
     queryFn: loadAllPurchaseBills,
@@ -99,96 +95,100 @@ function PurchaseBillsPage() {
 
   const allBills = billsQuery.data ?? []
 
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDesc(!sortDesc)
-    } else {
-      setSortKey(key)
-      setSortDesc(key === 'date' || key === 'net' || key === 'paid' || key === 'due' || key === 'totalKg')
-    }
-  }
+  const rows = useMemo<BillsTableRow[]>(
+    () =>
+      allBills.map((b) => ({
+        id: b.id,
+        inNo: b.inNo,
+        date: b.date,
+        supplierId: b.supplierId,
+        supplierName: b.supplierName,
+        pool: b.pool,
+        itemsSummary: itemsSummary(b.lines),
+        totalKg: b.totalKg,
+        netPaise: b.netPaise,
+        paidPaise: b.paidPaise,
+        duePaise: b.duePaise,
+        daysOld: computeDaysSince(b.date),
+        bardanPending: b.bardanPending,
+        status: (b.status as BillsTableRow['status']) ?? (b.cancelled ? 'cancelled' : 'open'),
+        cancelled: b.cancelled,
+      })),
+    [allBills],
+  )
 
-  const filteredBills = useMemo(() => {
+  // Filters applied BEFORE the tab/status filter; tab counts come from this set.
+  const preTabRows = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    return allBills.filter((b) => {
-      if (poolFilter !== 'all' && b.pool !== poolFilter) return false
-      if (statusFilter !== 'all' && b.status !== statusFilter) return false
-      if (bardanFilter === 'pending' && (!b.bardanPending || b.cancelled)) return false
-      if (bardanFilter === 'settled' && (b.bardanPending && !b.cancelled)) return false
-      if (fromDate && b.date < fromDate) return false
-      if (toDate && b.date > toDate) return false
-
+    return rows.filter((r) => {
+      if (supplierFilter && r.supplierId !== supplierFilter) return false
+      if (poolFilter !== 'all' && r.pool !== poolFilter) return false
+      if (fromDate && r.date < fromDate) return false
+      if (toDate && r.date > toDate) return false
       if (needle) {
-        const inMatch = b.inNo.toLowerCase().includes(needle)
-        const supplierMatch = b.supplierName.toLowerCase().includes(needle)
-        const billNoMatch = (b.supplierBillNo ?? '').toLowerCase().includes(needle)
-        const itemMatch = b.lines.some((l) => l.itemName.toLowerCase().includes(needle))
+        const bill = allBills.find((b) => b.id === r.id)
+        const inMatch = r.inNo.toLowerCase().includes(needle)
+        const supplierMatch = r.supplierName.toLowerCase().includes(needle)
+        const billNoMatch = (bill?.supplierBillNo ?? '').toLowerCase().includes(needle)
+        const itemMatch = (bill?.lines ?? []).some((l) => l.itemName.toLowerCase().includes(needle))
         if (!inMatch && !supplierMatch && !billNoMatch && !itemMatch) return false
       }
-
       return true
     })
-  }, [allBills, query, poolFilter, statusFilter, bardanFilter, fromDate, toDate])
+  }, [rows, allBills, supplierFilter, poolFilter, fromDate, toDate, query])
 
-  const sortedBills = useMemo(() => {
-    const rows = [...filteredBills]
-    rows.sort((a, b) => {
-      let cmp = 0
-      switch (sortKey) {
-        case 'date':
-          cmp = a.date.localeCompare(b.date) || a.created.localeCompare(b.created) || a.id.localeCompare(b.id)
-          break
-        case 'inNo':
-          cmp = a.inNo.localeCompare(b.inNo)
-          break
-        case 'supplier':
-          cmp = a.supplierName.localeCompare(b.supplierName)
-          break
-        case 'totalKg':
-          cmp = a.totalKg - b.totalKg
-          break
-        case 'net':
-          cmp = a.netPaise - b.netPaise
-          break
-        case 'paid':
-          cmp = a.paidPaise - b.paidPaise
-          break
-        case 'due':
-          cmp = a.duePaise - b.duePaise
-          break
-        case 'status':
-          cmp = a.status.localeCompare(b.status)
-          break
-      }
-      return sortDesc ? -cmp : cmp
+  const tabCounts = useMemo(() => {
+    let open = 0
+    let partial = 0
+    let nil = 0
+    let bardan = 0
+    let cancelled = 0
+    for (const r of preTabRows) {
+      if (r.cancelled) cancelled++
+      else if (r.status === 'open') open++
+      else if (r.status === 'partial') partial++
+      else if (r.status === 'nil') nil++
+      if (r.bardanPending && !r.cancelled) bardan++
+    }
+    return { all: preTabRows.length, open, partial, nil, cancelled, bardan }
+  }, [preTabRows])
+
+  const tabRows = useMemo(() => {
+    switch (tab) {
+      case 'open':
+        return preTabRows.filter((r) => !r.cancelled && r.status === 'open')
+      case 'partial':
+        return preTabRows.filter((r) => !r.cancelled && r.status === 'partial')
+      case 'nil':
+        return preTabRows.filter((r) => !r.cancelled && r.status === 'nil')
+      case 'cancelled':
+        return preTabRows.filter((r) => r.cancelled)
+      case 'bardan':
+        return preTabRows.filter((r) => r.bardanPending && !r.cancelled)
+      default:
+        return preTabRows
+    }
+  }, [preTabRows, tab])
+
+  const selectedRows = useMemo(() => rows.filter((r) => selectedIds.has(r.id)), [rows, selectedIds])
+  const payableRows = useMemo(() => selectedRows.filter((r) => r.duePaise > 0 && !r.cancelled), [selectedRows])
+  const payablePaise = payableRows.reduce((s, r) => s + r.duePaise, 0)
+
+  const payPins = useMemo<PaymentPinTarget[]>(() => {
+    const billMap = new Map(allBills.map((b) => [b.id, b]))
+    const src = [...payableRows]
+    src.sort((a, b) => `${a.date}|${billMap.get(a.id)?.created ?? ''}`.localeCompare(`${b.date}|${billMap.get(b.id)?.created ?? ''}`) || a.id.localeCompare(b.id))
+    return src.map((r) => ({ billId: r.id, inNo: r.inNo, duePaise: r.duePaise }))
+  }, [payableRows, allBills])
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
     })
-    return rows
-  }, [filteredBills, sortKey, sortDesc])
-
-  const totals = useMemo(() => {
-    let totalKg = 0
-    let totalNetPaise = 0
-    let totalPaidPaise = 0
-    let totalDuePaise = 0
-    let pendingBardanCount = 0
-
-    for (const b of filteredBills) {
-      totalKg += b.totalKg
-      totalNetPaise += b.netPaise
-      totalPaidPaise += b.paidPaise
-      totalDuePaise += b.duePaise
-      if (b.bardanPending && !b.cancelled) pendingBardanCount++
-    }
-
-    return {
-      count: filteredBills.length,
-      totalKg,
-      totalNetPaise,
-      totalPaidPaise,
-      totalDuePaise,
-      pendingBardanCount,
-    }
-  }, [filteredBills])
+  }
 
   const handleExportCsv = () => {
     const headers = [
@@ -209,376 +209,247 @@ function PurchaseBillsPage() {
       'Bags at Receipt (kg)',
       'Note',
     ]
-
-    const rows = sortedBills.map((b) => [
-      b.inNo,
-      b.date,
-      b.supplierName,
-      b.pool.toUpperCase(),
-      b.taxMode.toUpperCase(),
-      b.gstRateBp ? (b.gstRateBp / 100).toFixed(2) : '0',
-      b.supplierBillNo ?? '',
-      b.vehicleNo ?? '',
-      b.totalKg.toFixed(3),
-      (b.netPaise / 100).toFixed(2),
-      (b.paidPaise / 100).toFixed(2),
-      (b.duePaise / 100).toFixed(2),
-      b.status.toUpperCase(),
-      b.bardanPending && !b.cancelled ? 'PENDING' : 'SETTLED',
-      b.bagsAtReceiptKg != null ? b.bagsAtReceiptKg.toFixed(3) : '',
-      b.userNote,
-    ])
-
-    const dateStr = getLocalIsoDate()
-    downloadCsv(`purchase-bills-${dateStr}.csv`, toCsv([headers, ...rows]))
+    const rowsCsv = tabRows.map((r) => {
+      const bill = allBills.find((b) => b.id === r.id)
+      return [
+        r.inNo,
+        r.date,
+        r.supplierName,
+        r.pool.toUpperCase(),
+        (bill?.taxMode ?? '').toUpperCase(),
+        bill?.gstRateBp ? (bill.gstRateBp / 100).toFixed(2) : '0',
+        bill?.supplierBillNo ?? '',
+        bill?.vehicleNo ?? '',
+        r.totalKg.toFixed(3),
+        (r.netPaise / 100).toFixed(2),
+        (r.paidPaise / 100).toFixed(2),
+        (r.duePaise / 100).toFixed(2),
+        r.status.toUpperCase(),
+        r.bardanPending && !r.cancelled ? 'PENDING' : 'SETTLED',
+        bill?.bagsAtReceiptKg != null ? bill.bagsAtReceiptKg.toFixed(3) : '',
+        bill?.userNote ?? '',
+      ]
+    })
+    downloadCsv(`purchase-bills-${getLocalIsoDate()}.csv`, toCsv([headers, ...rowsCsv]))
   }
 
   const hasActiveFilters =
-    query.trim() !== '' ||
-    fromDate !== '' ||
-    toDate !== '' ||
-    poolFilter !== 'all' ||
-    statusFilter !== 'all' ||
-    bardanFilter !== 'all'
+    query.trim() !== '' || fromDate !== '' || toDate !== '' || poolFilter !== 'all' || supplierFilter != null
 
-  const clearFilters = () => {
-    setQuery('')
-    setFromDate('')
-    setToDate('')
-    setPoolFilter('all')
-    setStatusFilter('all')
-    setBardanFilter('all')
-  }
+  const supplierName = supplierFilter ? (allBills.find((b) => b.supplierId === supplierFilter)?.supplierName ?? null) : null
+
+  const emptyMessage =
+    tab === 'bardan'
+      ? 'No bills with pending bardan.'
+      : tab === 'cancelled'
+        ? 'No cancelled bills.'
+        : tab === 'nil'
+          ? 'No fully paid (NIL) bills.'
+          : tab === 'partial'
+            ? 'No partially paid bills.'
+            : tab === 'open'
+              ? 'No open bills.'
+              : 'No purchase bills match.'
 
   return (
-    <div className="w-full space-y-4 px-3 pb-12 pt-3 sm:px-4 lg:px-6">
-      {/* Top Header Card */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-semibold text-slate-900">Purchase Bills</h2>
-            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">
-              {allBills.length} Total
-            </span>
-            {totals.totalDuePaise > 0 && (
-              <span className="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-rose-200">
-                Due: {formatPaiseInr(totals.totalDuePaise)}
-              </span>
-            )}
-            {totals.pendingBardanCount > 0 && (
-              <Link
-                to="/bardan-pending"
-                className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-300 hover:bg-amber-100"
-              >
-                {totals.pendingBardanCount} Bardan Pending
-              </Link>
-            )}
-          </div>
+    <div className="min-w-0 px-3 pb-10 pt-2 sm:px-4">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <h1 className="text-base font-bold text-slate-900">Purchase Bills</h1>
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">{allBills.length} total</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={tabRows.length === 0}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+          >
+            <Download size={13} /> CSV
+          </button>
+          <Link
+            to="/new-purchase-bill"
+            className="inline-flex h-8 items-center gap-1 rounded-md bg-blue-600 px-2.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700"
+          >
+            <Plus size={13} /> Bill
+          </Link>
+        </div>
+      </div>
 
-          <div className="flex items-center gap-2">
+      {/* Toolbar */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-2 text-xs">
+        <div className="relative min-w-52 flex-1">
+          <Search size={13} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="search"
+            placeholder="Search IN no, supplier, bill no, item…"
+            className="h-7 w-full rounded-md border border-slate-300 bg-white pl-7 pr-2 text-xs text-slate-900 outline-none placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <div className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-0.5 font-semibold">
+          {(['all', 'kacha', 'gst'] as PoolFilter[]).map((pf) => (
+            <button
+              key={pf}
+              type="button"
+              onClick={() => setPoolFilter(pf)}
+              className={`rounded px-2.5 py-1 transition ${poolFilter === pf ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              {pf === 'all' ? 'All Pools' : pf === 'kacha' ? 'Kacha' : 'GST'}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 text-slate-500">
+          <DateInput className="h-7 w-28 rounded border border-slate-300 px-1.5 text-xs" value={fromDate} onChange={setFromDate} />
+          <span>→</span>
+          <DateInput className="h-7 w-28 rounded border border-slate-300 px-1.5 text-xs" value={toDate} onChange={setToDate} />
+          {(fromDate || toDate) && (
+            <button type="button" onClick={() => { setFromDate(''); setToDate('') }} className="px-1 text-[10px] text-blue-600 hover:underline">
+              Clear
+            </button>
+          )}
+        </div>
+        {supplierFilter && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700 ring-1 ring-blue-200">
+            {supplierName ?? `Supplier ${supplierFilter.slice(0, 8)}`}
             <button
               type="button"
-              onClick={handleExportCsv}
-              disabled={sortedBills.length === 0}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"
+              aria-label="Clear supplier filter"
+              onClick={() => void navigate({ from: '/purchase-bills/', search: (prev) => ({ tab: prev.tab }) })}
+              className="rounded-full p-0.5 hover:bg-blue-100"
             >
-              <Download size={14} /> Export CSV
+              <X size={10} />
             </button>
-            <Link
-              to="/new-purchase-bill"
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
-            >
-              <Plus size={14} /> New Purchase Bill
-            </Link>
-          </div>
-        </div>
+          </span>
+        )}
+        {selectedIds.size > 0 && (
+          <button
+            type="button"
+            onClick={() => setSelectedIds(new Set())}
+            className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-200"
+          >
+            <Ban size={10} /> {selectedIds.size} selected · Clear
+          </button>
+        )}
+      </div>
 
-        {/* Filters Toolbar */}
-        <div className="mt-4 grid grid-cols-1 gap-2.5 md:grid-cols-2 lg:grid-cols-12 lg:items-center">
-          {/* Search Bar */}
-          <div className="relative lg:col-span-4">
-            <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="search"
-              placeholder="Search IN no, supplier, bill no, item..."
-              className="h-9 w-full rounded-md border border-slate-300 bg-white pl-8 pr-3 text-xs text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </div>
-
-          {/* Date Range */}
-          <div className="flex items-center gap-1.5 lg:col-span-3">
-            <div className="w-1/2">
-              <DateInput
-                value={fromDate}
-                onChange={setFromDate}
-                className="h-9 w-full rounded-md border border-slate-300 px-2 text-xs"
-              />
-            </div>
-            <span className="text-xs text-slate-400">to</span>
-            <div className="w-1/2">
-              <DateInput
-                value={toDate}
-                onChange={setToDate}
-                className="h-9 w-full rounded-md border border-slate-300 px-2 text-xs"
-              />
-            </div>
-          </div>
-
-          {/* Pool Filter */}
-          <div className="lg:col-span-2">
-            <select
-              value={poolFilter}
-              onChange={(e) => setPoolFilter(e.target.value as PoolFilter)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-xs text-slate-800 outline-none focus:border-blue-400"
-            >
-              <option value="all">All Pools</option>
-              <option value="kacha">Kacha Pool</option>
-              <option value="gst">GST Pool</option>
-            </select>
-          </div>
-
-          {/* Status Filter */}
-          <div className="lg:col-span-1.5">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400"
-            >
-              <option value="all">All Status</option>
-              <option value="open">Open</option>
-              <option value="partial">Partial</option>
-              <option value="nil">NIL (Paid)</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </div>
-
-          {/* Bardan Filter */}
-          <div className="lg:col-span-1.5">
-            <select
-              value={bardanFilter}
-              onChange={(e) => setBardanFilter(e.target.value as BardanFilter)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400"
-            >
-              <option value="all">All Bardan</option>
-              <option value="pending">Pending</option>
-              <option value="settled">Settled</option>
-            </select>
-          </div>
-        </div>
-
-        {hasActiveFilters && (
-          <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500">
-            <span>
-              Showing {filteredBills.length} of {allBills.length} bills
+      {/* Tabs with counts */}
+      <div className="mt-2 inline-flex max-w-full flex-wrap gap-0.5 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
+        {(
+          [
+            ['all', 'All'],
+            ['open', 'Open'],
+            ['partial', 'Partial'],
+            ['nil', 'NIL'],
+            ['bardan', 'Bardan Pending'],
+            ['cancelled', 'Cancelled'],
+          ] as Array<[TabKey, string]>
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => void navigate({ from: '/purchase-bills/', search: (prev) => (key === 'all' ? { supplier: prev.supplier } : { supplier: prev.supplier, tab: key }) })}
+            className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 transition ${tab === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+          >
+            {label}
+            <span className={`rounded px-1 text-[10px] font-bold tabular-nums ${tab === key ? 'bg-slate-100 text-slate-700' : 'bg-slate-100 text-slate-500'}`}>
+              {tabCounts[key]}
             </span>
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-800"
-            >
-              <X size={12} /> Clear all filters
-            </button>
-          </div>
-        )}
-      </section>
+          </button>
+        ))}
+      </div>
 
-      {/* Main Table */}
-      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        {billsQuery.isLoading && (
-          <div className="p-8 text-center text-sm text-slate-500">
-            <RefreshCw size={18} className="mx-auto mb-2 animate-spin text-slate-400" />
-            Loading purchase bills...
-          </div>
-        )}
-        {billsQuery.isError && (
-          <div className="p-8 text-center text-sm text-rose-600">
-            Unable to load purchase bills. Please refresh.
-          </div>
-        )}
-        {!billsQuery.isLoading && !billsQuery.isError && sortedBills.length === 0 && (
-          <div className="p-12 text-center text-slate-500">
-            <Package size={28} className="mx-auto mb-2 text-slate-300" />
-            <p className="text-sm font-medium text-slate-700">No purchase bills found</p>
-            <p className="mt-1 text-xs text-slate-500">
-              {hasActiveFilters ? 'Try adjusting your search filters.' : 'Create your first incoming scrap purchase bill.'}
-            </p>
-          </div>
-        )}
+      {/* Pay Selected bar */}
+      {payableRows.length > 0 && (
+        <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs">
+          <span className="font-semibold text-blue-900">
+            {selectedRows.length} bill{selectedRows.length === 1 ? '' : 's'} selected · payable due <span className="font-mono tabular-nums">{formatPaiseInr(payablePaise)}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setMultiPay(true)}
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-blue-600 px-3 font-semibold text-white shadow-sm hover:bg-blue-700"
+          >
+            <Wallet size={13} /> Pay Selected ({payableRows.length}) · {formatPaiseInr(payablePaise)}
+          </button>
+        </div>
+      )}
 
-        {!billsQuery.isLoading && !billsQuery.isError && sortedBills.length > 0 && (
-          <div className="overflow-x-auto no-scrollbar">
-            <table className="w-full min-w-[1020px] text-xs">
-              <thead className="border-b border-slate-200 bg-slate-50">
-                <tr className="text-left text-slate-500">
-                  <SortableTh label="IN No" active={sortKey === 'inNo'} desc={sortDesc} onClick={() => toggleSort('inNo')} />
-                  <SortableTh label="Date" active={sortKey === 'date'} desc={sortDesc} onClick={() => toggleSort('date')} />
-                  <SortableTh label="Supplier" active={sortKey === 'supplier'} desc={sortDesc} onClick={() => toggleSort('supplier')} />
-                  <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-[0.06em]">Pool</th>
-                  <SortableTh label="Total kg" active={sortKey === 'totalKg'} desc={sortDesc} onClick={() => toggleSort('totalKg')} align="right" />
-                  <SortableTh label="Net Amount" active={sortKey === 'net'} desc={sortDesc} onClick={() => toggleSort('net')} align="right" />
-                  <SortableTh label="Paid" active={sortKey === 'paid'} desc={sortDesc} onClick={() => toggleSort('paid')} align="right" />
-                  <SortableTh label="Due" active={sortKey === 'due'} desc={sortDesc} onClick={() => toggleSort('due')} align="right" />
-                  <SortableTh label="Status" active={sortKey === 'status'} desc={sortDesc} onClick={() => toggleSort('status')} align="center" />
-                  <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-[0.06em]">Bardan</th>
-                  <th className="px-3 py-2.5 text-right font-semibold uppercase tracking-[0.06em]">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700">
-                {sortedBills.map((b) => {
-                  return (
-                    <tr
-                      key={b.id}
-                      onClick={() => void navigate({ to: '/purchase-bills/$billId', params: { billId: b.inNo } })}
-                      className={`cursor-pointer transition hover:bg-blue-50/40 ${
-                        b.cancelled ? 'bg-slate-50/70 opacity-60' : ''
-                      }`}
-                    >
-                      {/* IN No */}
-                      <td className="px-3 py-2.5 font-mono font-semibold text-blue-700">
-                        {b.inNo}
-                        {b.supplierBillNo && (
-                          <span className="ml-1.5 text-[10px] font-normal text-slate-500">
-                            (Bill: {b.supplierBillNo})
-                          </span>
-                        )}
-                      </td>
+      {/* Loading / table */}
+      {billsQuery.isLoading ? (
+        <div className="mt-2 rounded-lg border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+          <RefreshCw size={18} className="mx-auto mb-2 animate-spin text-slate-400" />
+          Loading purchase bills…
+        </div>
+      ) : billsQuery.isError ? (
+        <div className="mt-2 rounded-lg border border-slate-200 bg-white p-10 text-center text-sm text-rose-600">
+          Unable to load purchase bills. Please refresh.
+        </div>
+      ) : (
+        <div className="mt-2 overflow-hidden rounded-xl bg-white">
+          <PurchaseBillsTable
+            rows={tabRows}
+            showSupplier={!supplierFilter}
+            selection={{ selectedIds, onToggle: toggleSelect }}
+            actions={{
+              onRecordPayment: (row) => setModal({ type: 'payment', row }),
+              onAddBardan: (row) => setModal({ type: 'bardan', row }),
+              onSettleNil: (row) => setModal({ type: 'settleNil', row }),
+              onEdit: (row) => void navigate({ to: '/new-purchase-bill', search: { editBillId: row.id } }),
+              onCancel: (row) => setModal({ type: 'cancelBill', row }),
+            }}
+            emptyMessage={emptyMessage}
+          />
+          {billsQuery.data?.length === 0 && (
+            <div className="p-10 text-center text-slate-500">
+              <Package size={28} className="mx-auto mb-2 text-slate-300" />
+              <p className="text-sm font-medium text-slate-700">No purchase bills yet</p>
+              <p className="mt-1 text-xs text-slate-500">Create your first incoming scrap purchase bill.</p>
+            </div>
+          )}
+        </div>
+      )}
 
-                      {/* Date */}
-                      <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">
-                        {formatFullDate(b.date)}
-                      </td>
+      {hasActiveFilters && (
+        <p className="mt-1.5 px-1 text-[10px] text-slate-400">
+          Showing {tabRows.length} of {rows.length} bills
+        </p>
+      )}
 
-                      {/* Supplier */}
-                      <td className="px-3 py-2.5 font-medium text-slate-900">
-                        <Link
-                          to="/supplier-ledger/$supplierId"
-                          params={{ supplierId: b.supplierId }}
-                          onClick={(e) => e.stopPropagation()}
-                          className="hover:text-blue-600 hover:underline"
-                        >
-                          {b.supplierName}
-                        </Link>
-                        {b.lines.length > 0 && (
-                          <div className="line-clamp-1 text-[11px] font-normal text-slate-500">
-                            {b.lines.map((l) => `${l.itemName} (${(l.weightG / 1000).toFixed(1)}k)`).join(', ')}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Pool */}
-                      <td className="px-3 py-2.5 text-center">
-                        <span
-                          className={`inline-block rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
-                            b.pool === 'kacha'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-blue-100 text-blue-800'
-                          }`}
-                        >
-                          {b.pool}
-                        </span>
-                      </td>
-
-                      {/* Total kg */}
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono text-slate-900">
-                        {b.totalKg.toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} kg
-                      </td>
-
-                      {/* Net */}
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono font-semibold text-slate-900">
-                        {formatPaiseInr(b.netPaise)}
-                      </td>
-
-                      {/* Paid */}
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono text-emerald-700">
-                        {b.paidPaise > 0 ? formatPaiseInr(b.paidPaise) : '—'}
-                      </td>
-
-                      {/* Due */}
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono font-bold text-rose-700">
-                        {b.duePaise > 0 ? formatPaiseInr(b.duePaise) : '—'}
-                      </td>
-
-                      {/* Status */}
-                      <td className="whitespace-nowrap px-3 py-2.5 text-center">
-                        {b.cancelled ? (
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                            Cancelled
-                          </span>
-                        ) : b.status === 'nil' ? (
-                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
-                            NIL (Paid)
-                          </span>
-                        ) : b.status === 'partial' ? (
-                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-                            Partial
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
-                            Open
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Bardan */}
-                      <td className="whitespace-nowrap px-3 py-2.5 text-center">
-                        {b.cancelled ? (
-                          <span className="text-[10px] text-slate-400">—</span>
-                        ) : b.bardanPending ? (
-                          <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-                            Pending
-                          </span>
-                        ) : (
-                          <span className="inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-                            Settled ({b.bardanEntryCount})
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Action */}
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void navigate({ to: '/purchase-bills/$billId', params: { billId: b.inNo } })
-                          }}
-                          className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-                        >
-                          View
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-
-              {/* Totals Footer */}
-              <tfoot className="border-t-2 border-slate-300 bg-slate-50 font-semibold text-slate-900">
-                <tr>
-                  <td colSpan={4} className="px-3 py-2.5 text-xs">
-                    Totals for {totals.count} bill{totals.count === 1 ? '' : 's'}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono text-xs">
-                    {totals.totalKg.toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} kg
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono text-xs">
-                    {formatPaiseInr(totals.totalNetPaise)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono text-xs text-emerald-700">
-                    {formatPaiseInr(totals.totalPaidPaise)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right font-mono text-xs text-rose-700">
-                    {formatPaiseInr(totals.totalDuePaise)}
-                  </td>
-                  <td colSpan={3} className="px-3 py-2.5" />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        )}
-      </section>
+      {/* Modals */}
+      {modal?.type === 'bardan' && <AddBardanModal billId={modal.row.id} onClose={() => setModal(null)} />}
+      {modal?.type === 'payment' && (
+        <RecordPaymentModal
+          supplierId={modal.row.supplierId}
+          supplierName={modal.row.supplierName}
+          pool={modal.row.pool}
+          pins={[{ billId: modal.row.id, inNo: modal.row.inNo, duePaise: modal.row.duePaise }]}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal?.type === 'settleNil' && (
+        <SettleToNilModal
+          supplierId={modal.row.supplierId}
+          pool={modal.row.pool}
+          billId={modal.row.id}
+          inNo={modal.row.inNo}
+          duePaise={modal.row.duePaise}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal?.type === 'cancelBill' && <CancelBillModal billId={modal.row.id} inNo={modal.row.inNo} onClose={() => setModal(null)} />}
+      {multiPay && (
+        <RecordPaymentModal
+          supplierId={payableRows[0]?.supplierId}
+          supplierName={payableRows[0]?.supplierName}
+          pool={(payableRows[0]?.pool ?? 'kacha') as 'kacha' | 'gst'}
+          pins={payPins}
+          onClose={() => setMultiPay(false)}
+        />
+      )}
+      {paymentDetailsId && <PaymentDetailsModal paymentId={paymentDetailsId} onClose={() => setPaymentDetailsId(null)} />}
     </div>
   )
 }

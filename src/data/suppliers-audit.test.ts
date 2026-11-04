@@ -56,6 +56,7 @@ describe('Purchase Audit Log Integration', () => {
     mockTable.create.mockImplementation(async (payload) => ({ id: 'rec_created', ...payload }))
     mockTable.update.mockImplementation(async (id, payload) => ({ id, ...payload }))
     mockTable.getOne.mockImplementation(async (id) => ({ id, company_name: 'Old Co', name: 'Old Name', active: true }))
+    mockTable.getFullList.mockResolvedValue([])
     auditTable.create.mockResolvedValue({ id: 'audit_rec_1' })
   })
 
