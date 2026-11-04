@@ -38,9 +38,9 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/suppliers': { title: 'Suppliers', subtitle: 'Supplier purchase balances & master' },
   '/supplier-ledger': { title: 'Supplier Ledger', subtitle: 'Supplier purchase history, balances, and bill details' },
   '/purchase-bills': { title: 'Purchase Bills', subtitle: 'Incoming scrap purchase bills' },
-  '/purchase-bills/new': { title: 'New Purchase Bill', subtitle: 'Record incoming scrap purchase bill' },
+  '/new-purchase-bill': { title: 'New Purchase Bill', subtitle: 'Record incoming scrap purchase bill' },
   '/supplier-payments': { title: 'Supplier Payments', subtitle: 'Supplier payments and settlement records' },
-  '/supplier-payments/new': { title: 'New Supplier Payment', subtitle: 'Record payment to scrap supplier' },
+  '/new-supplier-payment': { title: 'New Supplier Payment', subtitle: 'Record payment to scrap supplier' },
   '/bardan-pending': { title: 'Bardan Pending', subtitle: 'Worklist of purchase bills with pending bardan settlements' },
   '/purchase-items': { title: 'Purchase Items', subtitle: 'Raw material scrap item catalog' },
   '/items': { title: 'Items', subtitle: 'Manage item master and defaults' },
@@ -54,6 +54,14 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/casting/log': { title: 'Casting Log', subtitle: 'Review and edit casting sessions' },
   '/casting/materials': { title: 'Casting Materials', subtitle: 'Material usage from casting logs' },
   '/casting/bill': { title: 'Casting Bill', subtitle: 'Print-style furnace session cost sheet' },
+}
+
+/** Dynamic purchase routes fall back to section titles (exact keys stay in pageMeta). */
+function resolvePageMeta(pathname: string): { title: string; subtitle: string } {
+  if (pageMeta[pathname]) return pageMeta[pathname]
+  if (pathname.startsWith('/purchase-bills/')) return { title: 'Purchase Bill', subtitle: 'Chitty, payments, and bardan' }
+  if (pathname.startsWith('/supplier-ledger/')) return { title: 'Supplier', subtitle: 'Ledger, bills, and payments' }
+  return { title: 'Kapil Billing', subtitle: 'Business billing workspace' }
 }
 
 const DOC_TITLE_SUFFIX = 'Kapil Billing'
@@ -71,9 +79,9 @@ const commandRoutes = [
   { label: 'Customers', path: '/customers' },
   { label: 'Suppliers', path: '/suppliers' },
   { label: 'Purchase Bills', path: '/purchase-bills' },
-  { label: 'New Purchase Bill', path: '/purchase-bills/new' },
+  { label: 'New Purchase Bill', path: '/new-purchase-bill' },
   { label: 'Supplier Payments', path: '/supplier-payments' },
-  { label: 'New Supplier Payment', path: '/supplier-payments/new' },
+  { label: 'New Supplier Payment', path: '/new-supplier-payment' },
   { label: 'Bardan Pending', path: '/bardan-pending' },
   { label: 'Purchase Items', path: '/purchase-items' },
   { label: 'Items', path: '/items' },
@@ -136,7 +144,7 @@ export function AppShell() {
   const quickSearchPaletteRef = useRef<HTMLDivElement | null>(null)
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const meta = pageMeta[pathname] ?? { title: 'Kapil Billing', subtitle: 'Business billing workspace' }
+  const meta = resolvePageMeta(pathname)
   const normalizedQuickSearch = quickSearch.trim()
   const normalizedDebouncedQuickSearch = debouncedQuickSearch.trim()
   const quickSearchQuery = useQuery({

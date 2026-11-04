@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "db:seed:purchase": "node scripts/seed-purchase-demo.mjs",
     "db:seed:large": "node scripts/seed-large-demo.mjs",
     "brass:watch": "node scripts/brass-rss-watch.mjs",
     "brass:test": "node scripts/brass-rss-watch.mjs --dry-run",

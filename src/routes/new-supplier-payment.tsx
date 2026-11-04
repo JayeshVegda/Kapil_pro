@@ -39,7 +39,7 @@ const searchSchema = z.object({
   billId: z.string().optional(),
 })
 
-export const Route = createFileRoute('/supplier-payments/new')({
+export const Route = createFileRoute('/new-supplier-payment')({
   validateSearch: searchSchema,
   component: NewSupplierPaymentPage,
 })

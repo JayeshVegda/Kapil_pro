@@ -326,7 +326,7 @@ function SupplierPaymentsPage() {
               <Download size={14} /> Export CSV
             </button>
             <Link
-              to="/supplier-payments/new"
+              to="/new-supplier-payment"
               className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
             >
               <Plus size={14} /> New Supplier Payment

@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -10,7 +10,6 @@ import {
   Search,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { BillDetailsDrawer } from '@/components/suppliers/bill-details-drawer'
 import { loadAllPurchaseBills } from '@/data/suppliers'
 import {
   computeBardanAgeBucket,
@@ -48,11 +47,10 @@ function toCsv(rows: Array<Array<unknown>>): string {
 }
 
 function BardanPendingPage() {
+  const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [bucketFilter, setBucketFilter] = useState<'all' | BardanAgeBucket>('all')
-  const [drawerBillId, setDrawerBillId] = useState<string | null>(null)
-  const [showAddBardanDirect, setShowAddBardanDirect] = useState(false)
-
+    
   const billsQuery = useQuery({
     queryKey: ['purchase-bills'],
     queryFn: loadAllPurchaseBills,
@@ -149,9 +147,8 @@ function BardanPendingPage() {
     downloadCsv(`bardan-pending-${dateStr}.csv`, toCsv([headers, ...rows]))
   }
 
-  const openBardanEntry = (billId: string) => {
-    setDrawerBillId(billId)
-    setShowAddBardanDirect(true)
+  const openBardanEntry = (inNo: string) => {
+    void navigate({ to: '/purchase-bills/$billId', params: { billId: inNo } })
   }
 
   return (
@@ -352,9 +349,8 @@ function BardanPendingPage() {
                     <tr
                       key={item.id}
                       onClick={() => {
-                        setDrawerBillId(item.id)
-                        setShowAddBardanDirect(false)
-                      }}
+                        void navigate({ to: '/purchase-bills/$billId', params: { billId: item.inNo } })
+                                              }}
                       className={`cursor-pointer transition hover:bg-blue-50/50 ${
                         isCritical
                           ? 'bg-rose-50/70 border-l-4 border-l-rose-500'
@@ -433,7 +429,7 @@ function BardanPendingPage() {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation()
-                            openBardanEntry(item.id)
+                            openBardanEntry(item.inNo)
                           }}
                           className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
                         >
@@ -448,16 +444,6 @@ function BardanPendingPage() {
           </div>
         )}
       </section>
-
-      {/* Bill Drawer Host */}
-      <BillDetailsDrawer
-        billId={drawerBillId}
-        initialShowAddBardan={showAddBardanDirect}
-        onClose={() => {
-          setDrawerBillId(null)
-          setShowAddBardanDirect(false)
-        }}
-      />
     </div>
   )
 }

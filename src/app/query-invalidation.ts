@@ -23,6 +23,12 @@ export async function invalidateAfterSupplierPurchaseWrite(queryClient: QueryCli
     queryClient.invalidateQueries({ queryKey: ['purchase-items'] }),
     queryClient.invalidateQueries({ queryKey: ['purchase-bills'] }),
     queryClient.invalidateQueries({ queryKey: ['supplier-payments'] }),
+    queryClient.invalidateQueries({ queryKey: ['bardan-pending-count'] }),
+    queryClient.invalidateQueries({ queryKey: ['purchase-bill'] }),
+    // The new-bill screen keys its side panel and edit prefill separately from
+    // ['supplier-bundle', id]; both must be dropped or stale dues leak into them.
+    queryClient.invalidateQueries({ queryKey: ['supplier-bundle-context'] }),
+    queryClient.invalidateQueries({ queryKey: ['purchase-bill-edit'] }),
   ]
   if (supplierId) {
     promises.push(queryClient.invalidateQueries({ queryKey: ['supplier-bundle', supplierId] }))

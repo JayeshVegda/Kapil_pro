@@ -1,8 +1,8 @@
 import { Link, useRouterState } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState, type ComponentType } from 'react'
-import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Package, Plus, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, Truck, Users, X } from 'lucide-react'
-import { loadAllPurchaseBills } from '@/data/suppliers'
+import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Package, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, Truck, Users, X } from 'lucide-react'
+import { loadBardanPendingCount } from '@/data/suppliers'
 import { isPathHiddenByModules } from '@/lib/module-settings'
 import { useModuleSettings } from '@/lib/use-module-settings'
 
@@ -45,10 +45,8 @@ const navGroups: NavGroup[] = [
     collapsible: true,
     items: [
       { to: '/suppliers', title: 'Suppliers', icon: Truck },
-      { to: '/purchase-bills', title: 'Bills', icon: ScrollText },
-      { to: '/purchase-bills/new', title: 'New Bill', icon: FilePlus2 },
-      { to: '/supplier-payments', title: 'Payments', icon: CreditCard },
-      { to: '/supplier-payments/new', title: 'New Payment', icon: Plus },
+      { to: '/purchase-bills', title: 'Purchase Bills', icon: ScrollText },
+      { to: '/supplier-payments', title: 'Supplier Payments', icon: CreditCard },
       { to: '/bardan-pending', title: 'Bardan Pending', icon: Package },
       { to: '/purchase-items', title: 'Purchase Items', icon: Boxes },
     ],
@@ -100,15 +98,13 @@ export function SidebarNav() {
 /** Nav groups with switched-off modules removed, dropping any group left empty. */
 function useVisibleNavGroups() {
   const moduleSettings = useModuleSettings()
-  const billsQuery = useQuery({
-    queryKey: ['purchase-bills'],
-    queryFn: loadAllPurchaseBills,
+  const bardanCountQuery = useQuery({
+    queryKey: ['bardan-pending-count'],
+    queryFn: loadBardanPendingCount,
     staleTime: 30_000,
   })
 
-  const pendingBardanCount = useMemo(() => {
-    return (billsQuery.data ?? []).filter((b) => b.bardanPending && !b.cancelled).length
-  }, [billsQuery.data])
+  const pendingBardanCount = bardanCountQuery.data ?? 0
 
   return useMemo(() => {
     return navGroups
@@ -139,7 +135,9 @@ function loadSavedCollapsed(): Record<string, boolean> {
   try {
     const raw = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null
     if (raw) return { ...DEFAULT_COLLAPSED, ...JSON.parse(raw) }
-  } catch {}
+  } catch (error) {
+    console.warn('[sidebar-nav] failed to read saved collapsed groups', error)
+  }
   return DEFAULT_COLLAPSED
 }
 
@@ -152,7 +150,9 @@ function NavGroupsList({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?
       const next = { ...prev, [label]: !prev[label] }
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-      } catch {}
+      } catch (error) {
+        console.warn('[sidebar-nav] failed to persist collapsed groups', error)
+      }
       return next
     })
   }

@@ -2,6 +2,7 @@ import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
 import { nextPurchaseInNo } from '@/domain/in-no'
 import {
+  CREDIT_KINDS,
   computeSupplierSettlement,
   type SupplierSettlementBillRow,
   type SupplierSettlementInput,
@@ -667,7 +668,7 @@ export type PurchaseBillUpdateInput = {
   vehicleNo?: string
   privateNote?: string
   photos?: File[]
-  lines: Array<{ itemId?: string; itemName: string; weightG: number; rateMilli: number; amountPaise: number }>
+  lines: Array<{ id?: string; itemId?: string; itemName: string; weightG: number; rateMilli: number; amountPaise: number }>
   adjustments?: Array<{ type: string; amountPaise: number; note?: string }>
 }
 
@@ -688,26 +689,58 @@ export async function updatePurchaseBill(billId: string, input: PurchaseBillUpda
       private_note: input.privateNote ?? '',
     }
 
+    // Keep existing line ids wherever the edit still carries them: bardan
+    // entries reference rate lines by id, and rewriting every id would orphan
+    // (or, with the old cascadeDelete, silently destroy) those entries.
+    const oldLineIds = new Set(oldLines.map((row) => row.id))
+    const claimedLineIds = new Set<string>()
+    const lineOps = input.lines.map((line) => {
+      const keepId = line.id && oldLineIds.has(line.id) && !claimedLineIds.has(line.id) ? line.id : ''
+      if (keepId) claimedLineIds.add(keepId)
+      return { line, keepId }
+    })
+
     const batch = pb.createBatch()
     batch.collection('purchase_bills').update(billId, billPayload)
 
-    for (const oldLine of oldLines) {
-      batch.collection('purchase_bill_lines').delete(oldLine.id)
-    }
-    for (const oldAdj of oldAdjustments) {
-      batch.collection('purchase_bill_adjustments').delete(oldAdj.id)
-    }
-
-    for (const line of input.lines) {
-      batch.collection('purchase_bill_lines').create({
-        id: generateRecordId(),
+    for (const { line, keepId } of lineOps) {
+      const linePayload = {
         bill: billId,
         item: line.itemId ?? '',
         item_name: line.itemName,
         weight_g: line.weightG,
         rate_milli: line.rateMilli,
         amount_paise: line.amountPaise,
-      })
+      }
+      if (keepId) {
+        batch.collection('purchase_bill_lines').update(keepId, linePayload)
+      } else {
+        batch.collection('purchase_bill_lines').create({ id: generateRecordId(), ...linePayload })
+      }
+    }
+
+    // Lines removed by the edit are unlinked from bardan first, so the entries
+    // survive with their rate_milli snapshot instead of being cascade-deleted.
+    for (const oldLine of oldLines) {
+      if (claimedLineIds.has(oldLine.id)) continue
+      const linkedBardan = await pb.collection('purchase_bardan').getFullList({ filter: `rate_line = "${oldLine.id}"` })
+      for (const entry of linkedBardan) {
+        const unlinkPayload = { rate_line: '' }
+        batch.collection('purchase_bardan').update(entry.id, unlinkPayload)
+        batch.collection('purchase_audit_log').create({
+          collection: 'purchase_bardan',
+          record_id: entry.id,
+          action: 'unlink_rate_line',
+          before_json: JSON.stringify({ rate_line: oldLine.id }),
+          after_json: JSON.stringify(unlinkPayload),
+          actor: currentActor(),
+        })
+      }
+      batch.collection('purchase_bill_lines').delete(oldLine.id)
+    }
+
+    for (const oldAdj of oldAdjustments) {
+      batch.collection('purchase_bill_adjustments').delete(oldAdj.id)
     }
 
     for (const adjustment of input.adjustments ?? []) {
@@ -916,6 +949,13 @@ export type PurchaseBillDetail = {
   adjustments: PurchaseAdjustmentView[]
   bardan: PurchaseBardanView[]
   allocations: SupplierAllocationView[]
+}
+
+/** Look up a purchase bill by its IN document number (globally unique). */
+export async function loadPurchaseBillIdByInNo(inNo: string): Promise<string | null> {
+  const safe = String(inNo ?? '').replace(/"/g, '\\"')
+  const row = await pb.collection('purchase_bills').getFirstListItem(`in_no = "${safe}"`, { fields: 'id' }).catch(() => null)
+  return row ? String(row.id) : null
 }
 
 export async function loadPurchaseBill(billId: string): Promise<PurchaseBillDetail> {
@@ -1261,9 +1301,12 @@ export async function loadAllPurchaseBills(): Promise<EnrichedPurchaseBill[]> {
 
 export async function loadAllSupplierPayments(): Promise<EnrichedSupplierPayment[]> {
   return runDataOperation('load-all-supplier-payments', async () => {
-    const [suppliers, allBills, allPayments, allAllocations] = await Promise.all([
+    const [suppliers, allBills, allLines, allAdjustments, allBardan, allPayments, allAllocations] = await Promise.all([
       fetchAll<SupplierView>('suppliers', mapSupplier),
       fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill, { sort: 'date,created,id' }),
+      fetchAll<PurchaseLineView>(SUPPLIER_COLLECTIONS.lines, mapLine, { sort: 'created,id' }),
+      fetchAll<PurchaseAdjustmentView>(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment, { sort: 'created,id' }),
+      fetchAll<PurchaseBardanView>(SUPPLIER_COLLECTIONS.bardan, mapBardan, { sort: 'date,created,id' }),
       fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment, { sort: '-date,-created,-id' }),
       fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation, { sort: 'created,id' }),
     ])
@@ -1276,14 +1319,21 @@ export async function loadAllSupplierPayments(): Promise<EnrichedSupplierPayment
       const supplierBills = allBills.filter((b) => b.supplierId === supplier.id)
       const supplierPayments = allPayments.filter((p) => p.supplierId === supplier.id)
       if (supplierPayments.length === 0) continue
+      const billIds = new Set(supplierBills.map((b) => b.id))
       const paymentIds = new Set(supplierPayments.map((p) => p.id))
 
+      // Full bill inputs are required here: without line amounts every bill net
+      // is 0, no payables exist, and every payment would report as pure advance.
       const settlement = computeSupplierSettlement({
         supplier: { openingKachaPaise: supplier.openingKachaPaise, openingGstPaise: supplier.openingGstPaise },
         bills: supplierBills,
-        lines: [],
-        adjustments: [],
-        bardan: [],
+        lines: allLines.filter((l) => billIds.has(l.billId)).map((l) => ({ billId: l.billId, amountPaise: l.amountPaise })),
+        adjustments: allAdjustments
+          .filter((a) => billIds.has(a.billId))
+          .map((a) => ({ billId: a.billId, type: a.type, amountPaise: a.amountPaise })),
+        bardan: allBardan
+          .filter((b) => billIds.has(b.billId))
+          .map((b) => ({ billId: b.billId, method: b.method, creditPaise: b.creditPaise, cashAmountPaise: b.cashAmountPaise, note: b.note })),
         payments: supplierPayments.map((p) => ({
           id: p.id,
           date: p.date,
@@ -1314,7 +1364,8 @@ export async function loadAllSupplierPayments(): Promise<EnrichedSupplierPayment
       const supplier = supplierMap.get(payment.supplierId)
       const pRow = settlementPaymentMap.get(payment.id)
       const appliedPaise = pRow?.appliedPaise ?? 0
-      const advancePaise = Math.max(0, payment.amountPaise - appliedPaise)
+      // Only credit kinds can leave advance; refunds are payables, not prepayments.
+      const advancePaise = CREDIT_KINDS.has(payment.kind) ? Math.max(0, payment.amountPaise - appliedPaise) : 0
       const manualAllocs = allocsByPayment.get(payment.id) ?? []
 
       const allocations = manualAllocs.map((a) => ({
@@ -1360,6 +1411,26 @@ export async function loadVilaityHistory(): Promise<Array<{ date: string; vilait
       vilaityMilli: Math.round(num(row.vilaity) * 1000),
     }))
     return rows.filter((row, index, list) => index === 0 || list[index - 1].date !== row.date)
+  })
+}
+
+/**
+ * Lightweight bardan-pending count for the sidebar badge: active bills with no
+ * bardan entries. Same rule as the settlement engine's bardanPending, without
+ * pulling lines/payments or running the settlement.
+ */
+export async function loadBardanPendingCount(): Promise<number> {
+  return runDataOperation('load-bardan-pending-count', async () => {
+    const [bills, bardan] = await Promise.all([
+      pb.collection('purchase_bills').getFullList({ fields: 'id,cancelled' }),
+      pb.collection('purchase_bardan').getFullList({ fields: 'bill' }),
+    ])
+    const billsWithBardan = new Set(
+      (bardan as unknown as Array<{ bill?: string }>).map((row) => String(row.bill ?? '')),
+    )
+    return (bills as unknown as Array<{ id: string; cancelled?: boolean }>).filter(
+      (bill) => !bill.cancelled && !billsWithBardan.has(bill.id),
+    ).length
   })
 }
 

@@ -63,7 +63,7 @@ const searchSchema = z.object({
   editBillId: z.string().optional(),
 })
 
-export const Route = createFileRoute('/purchase-bills/new')({
+export const Route = createFileRoute('/new-purchase-bill')({
   validateSearch: searchSchema,
   component: NewPurchaseBillPage,
 })
@@ -567,7 +567,12 @@ function NewPurchaseBillPage() {
     }
   }, [supplierBundleQuery.data])
 
+  // Bardan "advance" entries mint a supplier payment in the bill's pool; moving
+  // the bill to the other pool would strand that payment, so the pool is locked.
+  const poolLocked = Boolean(editBillId) && (editBillQuery.data?.bardan.some((b) => b.method === 'advance') ?? false)
+
   const addLine = () => setLines((prev) => [...prev, defaultLine()])
+
   const removeLine = (id: string) => {
     if (lines.length === 1) return
     setLines((prev) => prev.filter((l) => l.id !== id))
@@ -591,10 +596,7 @@ function NewPurchaseBillPage() {
     setAdjustments((prev) => prev.filter((a) => a.id !== id))
   }
   const updateAdjustment = (id: string, patch: Partial<AdjustmentFormItem>) => {
-    setAdjustments((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : l(a))))
-    function l(item: AdjustmentFormItem) {
-      return item.id === id ? { ...item, ...patch } : item
-    }
+    setAdjustments((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)))
   }
 
   const handleCreateNewItem = async (name: string) => {
@@ -630,6 +632,7 @@ function NewPurchaseBillPage() {
           privateNote: fullNote,
           photos: photos.length > 0 ? photos : undefined,
           lines: validLines.map((l) => ({
+            id: l.id,
             itemId: l.itemId || undefined,
             itemName: l.itemName.trim(),
             weightG: l.weightG,
@@ -789,7 +792,9 @@ function NewPurchaseBillPage() {
                 <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
                   <button
                     type="button"
-                    className={`rounded-md py-1.5 transition ${
+                    disabled={poolLocked}
+                    title={poolLocked ? 'Pool is locked: this bill has bardan advance entries tied to its pool.' : undefined}
+                    className={`rounded-md py-1.5 transition disabled:cursor-not-allowed disabled:opacity-60 ${
                       pool === 'kacha' ? 'bg-amber-100 text-amber-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
                     }`}
                     onClick={() => handlePoolChange('kacha')}
@@ -798,7 +803,9 @@ function NewPurchaseBillPage() {
                   </button>
                   <button
                     type="button"
-                    className={`rounded-md py-1.5 transition ${
+                    disabled={poolLocked}
+                    title={poolLocked ? 'Pool is locked: this bill has bardan advance entries tied to its pool.' : undefined}
+                    className={`rounded-md py-1.5 transition disabled:cursor-not-allowed disabled:opacity-60 ${
                       pool === 'gst' ? 'bg-blue-100 text-blue-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
                     }`}
                     onClick={() => handlePoolChange('gst')}
@@ -806,6 +813,9 @@ function NewPurchaseBillPage() {
                     GST
                   </button>
                 </div>
+                {poolLocked && (
+                  <p className="text-[10px] text-amber-700">Locked: bardan advance entries are tied to this pool.</p>
+                )}
               </div>
             </div>
 

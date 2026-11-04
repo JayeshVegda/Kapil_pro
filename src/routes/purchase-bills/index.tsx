@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
   ArrowDown,
@@ -12,12 +12,11 @@ import {
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { DateInput } from '@/components/ui/date-input'
-import { BillDetailsDrawer } from '@/components/suppliers/bill-details-drawer'
 import { loadAllPurchaseBills } from '@/data/suppliers'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
 
-export const Route = createFileRoute('/purchase-bills')({
+export const Route = createFileRoute('/purchase-bills/')({
   component: PurchaseBillsPage,
 })
 
@@ -82,6 +81,7 @@ function SortableTh({
 }
 
 function PurchaseBillsPage() {
+  const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
@@ -91,8 +91,7 @@ function PurchaseBillsPage() {
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDesc, setSortDesc] = useState(true)
 
-  const [drawerBillId, setDrawerBillId] = useState<string | null>(null)
-
+  
   const billsQuery = useQuery({
     queryKey: ['purchase-bills'],
     queryFn: loadAllPurchaseBills,
@@ -286,7 +285,7 @@ function PurchaseBillsPage() {
               <Download size={14} /> Export CSV
             </button>
             <Link
-              to="/purchase-bills/new"
+              to="/new-purchase-bill"
               className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
             >
               <Plus size={14} /> New Purchase Bill
@@ -431,7 +430,7 @@ function PurchaseBillsPage() {
                   return (
                     <tr
                       key={b.id}
-                      onClick={() => setDrawerBillId(b.id)}
+                      onClick={() => void navigate({ to: '/purchase-bills/$billId', params: { billId: b.inNo } })}
                       className={`cursor-pointer transition hover:bg-blue-50/40 ${
                         b.cancelled ? 'bg-slate-50/70 opacity-60' : ''
                       }`}
@@ -543,7 +542,7 @@ function PurchaseBillsPage() {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation()
-                            setDrawerBillId(b.id)
+                            void navigate({ to: '/purchase-bills/$billId', params: { billId: b.inNo } })
                           }}
                           className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
                         >
@@ -580,12 +579,6 @@ function PurchaseBillsPage() {
           </div>
         )}
       </section>
-
-      {/* Bill Drawer Host */}
-      <BillDetailsDrawer
-        billId={drawerBillId}
-        onClose={() => setDrawerBillId(null)}
-      />
     </div>
   )
 }

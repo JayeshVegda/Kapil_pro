@@ -55,6 +55,39 @@
   }
 }
 
+/* Print: only the print-chitty card (never the internal strip, action bar, or shell) */
+@page {
+  size: A4;
+  margin: 12mm;
+}
+
+@media print {
+  body {
+    background: #ffffff;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .print-chitty,
+  .print-chitty * {
+    visibility: visible;
+  }
+
+  .print-chitty {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+}
+
 @layer base {
   @media (max-width: 1023px) {
     input,

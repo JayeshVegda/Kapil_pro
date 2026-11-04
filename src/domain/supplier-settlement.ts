@@ -155,7 +155,7 @@ export function settlementOrderKey(year: { date: string; created: string; id: st
   return `${year.date || ''}|${year.created || ''}|${year.id || ''}`
 }
 
-const CREDIT_KINDS = new Set(['payment', 'paid_on_behalf', 'settle_off', 'bardan_advance'])
+export const CREDIT_KINDS = new Set(['payment', 'paid_on_behalf', 'settle_off', 'bardan_advance'])
 const OWED_KINDS = new Set(['refund_received'])
 
 /**
