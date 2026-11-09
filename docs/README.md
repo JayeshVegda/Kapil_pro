@@ -19,10 +19,18 @@ All project documentation is indexed here with its current validity status.
 
 | Path | Status | Purpose | Notes |
 | :--- | :---: | :--- | :--- |
+| `CURRENT-STATE.md` | `Current` | Live routes, collections, data-flows, and settings architecture. | Updated 2026-11-09. |
+| `DECISIONS.md` | `Current` | Durable one-line rationale for every major architectural decision. | Core architectural record. |
 | `AI-CONTEXT.md` | `Current` | Master architecture & invariants briefing for new coding agents. | Covers isolation, money, and data layers. |
 | `project-architecture-and-data-flow.md` | `Current` | System architecture, frontend-backend flow, and subsystem map. | Visual diagrams and dataflow. |
 
-## 3. Active Restructure Plans (`docs/features/`)
+## 3. UI Design System (`docs/ui/`)
+
+| Path | Status | Purpose | Notes |
+| :--- | :---: | :--- | :--- |
+| `CONVENTIONS.md` | `Current` | Design language, canonical component kit, banned patterns, cookbook. | Single UI standard. |
+
+## 4. Active Restructure Plans (`docs/features/`)
 
 | Path | Status | Purpose | Notes |
 | :--- | :---: | :--- | :--- |
@@ -32,7 +40,7 @@ All project documentation is indexed here with its current validity status.
 | `restructure-progress.md` | `Current` | Active tracking checklist of completed restructuring phases. | Live progress tracker. |
 | `keyboard-first-new-bill-and-payment.md` | `Current` | Keyboard-first entry specifications for `Alt+B` rapid billing. | Active UX feature spec. |
 
-## 4. Operations & Diagnostics (`docs/operations/`)
+## 5. Operations & Diagnostics (`docs/operations/`)
 
 | Path | Status | Purpose | Notes |
 | :--- | :---: | :--- | :--- |
@@ -43,7 +51,7 @@ All project documentation is indexed here with its current validity status.
 | `incident-notes.md` | `Current` | Production postmortems and incident resolution history. | Historical incident record. |
 | `deploy/` | `Current` | Nginx reverse-proxy and deployment configurations. | Deployment reference. |
 
-## 5. Historical Archive (`docs/archive/`)
+## 6. Historical Archive (`docs/archive/`)
 *Ignored by agents during coding tasks. Maintained for git audit history only.*
 
 | Path | Status | Original Subject | Archival Reason |

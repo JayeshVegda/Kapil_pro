@@ -1,88 +1,110 @@
-# Kapil Pro Agent Workflow
+# 🛡️ Kapil Billing — Canonical Agent Operating Guide
 
-## Windows Local-Primary Authority
+> **Single Source of Truth** for any AI agent or developer working in this repository.  
+> **Host Environment:** Arch Linux / CachyOS (Dev) · Windows PC (Designated Production Host)  
+> **Primary Command:** `npm run verify` (`npm run typecheck && npm test && npm run build`)
 
-This `kapil-windows` branch is the Windows-PC-only edition. Read `WINDOWS-SETUP.md`,
-`DATABASE-RUNBOOK.md`, and `TROUBLESHOOTING.md` before changing runtime or database
-behavior.
+---
 
-- The sole writable database is `runtime/data/data.db` on the Windows PC.
-- PocketBase listens only on `127.0.0.1:8090`; Caddy listens only on `127.0.0.1:4174`.
-- Never change either listener to `0.0.0.0` or a LAN address unless the owner explicitly requests a new security design.
-- Never commit anything under `runtime/`, any `.env`, database, backup, executable, log, or credential.
-- Before database-affecting work, run `windows/health-check.ps1` and `windows/backup-kapil.ps1`.
-- Never copy, replace, compress, or edit an active SQLite database. Use the supplied stop/backup/restore scripts.
-- Never create bidirectional synchronization or a second writable database.
-- Do not use VPS deployment scripts on this branch. Windows operations belong in `windows/`.
-- Run `npm run verify` after application changes and inspect `git status --ignored` before committing.
+## 1. What This System Is
 
-The safe operator commands are:
+Kapil Billing is a high-speed, keyboard-first operations and financial management system built for a brass hardware manufacturer in Jamnagar, Gujarat. The entire software is operated by a **single user (the business owner)** across three operational modules:
+1. **Sales Billing** (GST-compliant outbound invoice generation for brass hardware, customer ledgers, collections).
+2. **Purchase / Procurement** (Scrap brass intake, supplier khata with dual Kacha & GST pools, weight deductions, bardan/bag tracking).
+3. **Casting & Melting** (Foundry batches, scrap melting logs, wire-out yield tracking, casting bills).
 
-```powershell
-.\windows\start-kapil.ps1
-.\windows\stop-kapil.ps1
-.\windows\health-check.ps1
-.\windows\backup-kapil.ps1
-.\windows\restore-kapil.ps1 -Archive <verified-zip>
+**Stack:** React 19, TanStack Router & TanStack Query v5, Tailwind CSS v4, Vite, PocketBase (SQLite with WAL mode).
+
+---
+
+## 2. Core Architectural & Financial Invariants
+
+### Rule 1: Strict Three-Module Isolation
+Sales, Purchase, and Casting are **completely independent data worlds**.
+- **Separate Items Tables:** `items` (Sales), `purchase_items` (Purchase), `casting_materials` (Casting). Even if an item shares the identical name (e.g. "Brass Scrap"), **never link them by ID, foreign key, or name matching**.
+- **Separate Party Tables:** `customers` (Sales) and `suppliers` (Purchase). **Never net balances** across customers and suppliers into a single combined figure.
+
+### Rule 2: Dual Monetary Precision Standard
+- **Sales Module:** Floating-point Indian Rupees (`rate`, `cgst_rate`, `subtotal`, `grand_total`) with standard half-up rounding.
+- **Purchase Module:** High-precision integer Paise and Milli-rupees:
+  - `weight_g`: integer grams (1 kg = 1,000 g).
+  - `rate_milli`: integer milli-rupees per kg (₹450.50/kg = 450,500 milli-rupees).
+  - `amount_paise`, `kacha_due_paise`, `gst_due_paise`: integer paise (₹1.00 = 100 paise).
+  - **NEVER convert purchase money to floats.**
+
+### Rule 3: Soft-Delete vs Delete-Protection
+- **Parties (Customers & Suppliers):** Never hard-deleted. They are deactivated (`active: false`) to preserve accounting ledger integrity.
+- **Items:** Hard-delete is blocked if an item is referenced in any historical bill, line, or casting log. Referenced items can only be deactivated (`active: false`).
+
+### Rule 4: Append-Only Database Migrations
+- Never edit or rename existing files in `pb_migrations/`. PocketBase executes migrations strictly in chronological order by timestamp prefix.
+- The designated production runtime is the Windows PC. When migrations are deployed, PocketBase applies pending migrations upon restart. The owner must run `windows\backup-kapil.ps1` before any restart.
+
+### Rule 5: Module Toggles & Guards
+- Purchase and Casting can be toggled on/off in `/settings`.
+- State is stored in the database collection `app_settings` (`id: "globalsettings1"`, fields: `purchase_enabled`, `casting_enabled`), cached in `src/data/module-settings.ts`.
+- When a module is disabled, its pages, navigation items, Ctrl+K commands, and tab headers are completely hidden. Deep links redirect to `/`.
+
+### Rule 6: Muse AI Constraints
+- External Muse automations interact only through draft collections: `bill_drafts` and `payment_drafts`.
+- Muse has **zero direct write access** to live ledgers, bills, or payment records. All drafts must be approved by the owner via `/drafts`.
+
+---
+
+## 3. ⛔ Never Do This List
+
+1. **NEVER link items or parties across modules:** Sales, Purchase, and Casting do not share foreign keys or name-matching heuristics.
+2. **NEVER net customer and supplier balances:** Keep customer receivables and supplier payables strictly isolated.
+3. **NEVER use floats for Purchase calculations:** Always use integer grams, milli-rupees, and paise.
+4. **NEVER edit, rename, or reorder applied migrations in `pb_migrations/`:** Always create a new file with an increasing timestamp.
+5. **NEVER write raw Tailwind styling where a kit component exists:** Use `Panel`, `DataTable`, `StatusChip`, `MoneyCell`, `ConfirmDialog`, `form-control-classes.ts`.
+6. **NEVER introduce side drawers or complex slide-overs:** Modals must be centered, focused dialogs.
+7. **NEVER use blue for primary action buttons:** Primary buttons must use `bg-slate-900 text-white`. Blue is strictly reserved for selections and informational badges.
+8. **NEVER read, import from, or copy patterns from `archive/` or `docs/archive/`:** Archived files contain obsolete and dropped architectures.
+
+---
+
+## 4. Codebase Layout & Directory Map
+
+```
+/home/arch/project/Kapil_pro/
+├── src/
+│   ├── routes/              # TanStack Router file-based routes (41 routes)
+│   ├── components/
+│   │   ├── ui/              # Reusable UI primitives & business kit
+│   │   ├── layout/          # AppShell, SidebarNav, FocusLayout, QuickSearch
+│   │   ├── logging/         # LogsShell, LogsPager, LogsDateWindow
+│   │   ├── billing/         # Bill print layout, print styles, CSS
+│   │   ├── suppliers/       # Purchase bill entry, physical Chitty, modals
+│   │   ├── reports/         # Recharts charts and summary tables
+│   │   ├── items/           # Specialized item components
+│   │   └── ledger/          # Party ledger rail and trend visuals
+│   ├── data/                # PocketBase API queries, mutations, reliability wrappers
+│   ├── domain/              # Pure calculations: bill-books, supplier-settlement, units
+│   ├── lib/                 # Formatting (inr-format), dates, commands, exports
+│   └── app/                 # Router bootstrap, React Query provider, errors
+├── pb_migrations/           # PocketBase JavaScript migration scripts
+├── windows/                 # Windows production scripts (start, stop, backup, restore)
+├── docs/
+│   ├── architecture/        # CURRENT-STATE.md, DECISIONS.md, AI-CONTEXT.md
+│   ├── ui/                  # CONVENTIONS.md (design system, component catalog)
+│   ├── features/            # Active restructure plans & progress notes
+│   ├── operations/          # Runbooks, disaster recovery, declutter inventory
+│   └── archive/             # Historical specs, audits, muse prompts, old notes
 ```
 
-Use the installed skills as part of normal work in this project. Pick the smallest relevant set for the task, read each selected skill before acting, and mention which skills are being used.
+---
 
-## Project Direction
+## 5. Verification Commands
 
-Kapil Pro should move toward a modern, practical, simple business interface:
+Run verification after every code change:
+```bash
+npm run verify                           # Typecheck + Vitest + Vite build
+npx vitest run windows/windows-package.test.ts  # Windows production package checks
+```
 
-- clear hierarchy before decoration
-- data visualizations that explain decisions, not just charts
-- compact operational screens for fast entry
-- readable financial numbers with consistent labels and drill-down paths
-- mobile layouts that prioritize the most common actions
-
-## Theme Preference
-
-Prefer a modern, practical, simple Kapil Pro theme over dramatic redesigns:
-
-- use the existing slate/blue business-tool identity as the default
-- keep surfaces calm: white panels, slate dividers, soft blue highlights, restrained green/red/amber status colors
-- avoid black feature blocks, heavy gradients, loud shadows, decorative cards, or finance-terminal styling unless explicitly requested
-- make improvements feel integrated with the current app, not like a separate dashboard template
-- optimize for fast operator scanning: compact spacing, aligned numbers, tabular figures, clear labels, and minimal visual noise
-
-## Skill Routing
-
-- `using-superpowers`: general skill-discovery discipline at the start of work.
-- `brainstorming`: required before creative product work, new features, behavior changes, or page redesigns.
-- `frontend-design`: visual direction, typography, layout personality, and avoiding generic dashboard UI.
-- `vercel-react-best-practices`: React, TanStack-style UI state, component structure, performance, or frontend architecture changes.
-- `webapp-testing`: browser testing, screenshots, responsive checks, accessibility smoke tests, and end-to-end user flows.
-- `tdd`: financial math, ledger logic, parser behavior, allocation, status engines, and risky domain changes.
-- `qa`: release checks, regression sweeps, acceptance criteria, and manual verification plans.
-- `improve-codebase-architecture`: larger refactors, page decomposition, shared domain/data boundaries, and preparing new modules.
-- `architecture-review`: evaluating stack additions such as chart libraries, reporting tools, backend services, or deployment changes.
-- `shadcn`: shared UI primitives, Tailwind component patterns, forms, dialogs, tables, buttons, tabs, and design-system consistency.
-- `xlsx`: Excel import/export, workbook generation, CSV/XLSX report work, and spreadsheet compatibility.
-- `pdf`: report PDFs, bill PDFs, statement PDFs, print/export formatting, and PDF inspection.
-- `docx`: Word document generation or parsing when business documents are involved.
-- `handoff`: long-running work, major redesigns, or sessions that need continuity for another agent.
-- `web-design-guidelines`: UI/UX review, accessibility, responsive design, and visual quality audits.
-- `kibana-dashboards`: dashboard thinking for observability-style panels, filtering, drill-down, and operational data views.
-- `data-visualizer`: chart and visualization planning when turning raw business data into understandable views.
-- `chart-designer`: chart selection, dashboard layout, chart configuration, and visual encoding for business metrics.
-
-## Skills Not Used By Default
-
-The following installed skills are available globally but should not be part of the normal Kapil Pro workflow unless a task explicitly needs them:
-
-- `homelab-network-setup`, `homelab-network-readiness`: only for network/router/VPN/DNS work.
-- `azure-enterprise-infra-planner`: only for Azure infrastructure planning.
-- `crm-builder`: only if building a separate CRM-style domain from a domain brief.
-- `trading-analysis`, `trading-signal`: only for market/trading requests, not Kapil billing UI.
-- `find-skills`: only when discovering or installing more skills.
-
-## Kapil-Specific Guardrails
-
-- Keep calculations in `src/domain`, PocketBase reads/writes in `src/data`, and page orchestration in `src/routes`.
-- Do not duplicate outstanding balance, bill status, or payment allocation logic inside route components.
-- Preserve financial ordering: business date, then created timestamp, then record id.
-- Prefer incremental redesigns of high-value pages first: Dashboard, Party Ledger, Company Report, Calendar, and Casting.
-- For visualization work, keep audit tables available but lead with summary, trend, risk, ranking, and drill-down views.
+For deeper architectural context, consult:
+- `docs/architecture/CURRENT-STATE.md` (Live routes, collections, data flows)
+- `docs/architecture/DECISIONS.md` (One-line rationale for every architectural decision)
+- `docs/ui/CONVENTIONS.md` (Design system, component catalog, banned patterns)
+- `docs/README.md` (Complete documentation index)

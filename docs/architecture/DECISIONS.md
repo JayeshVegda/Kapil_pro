@@ -1,0 +1,16 @@
+# Kapil Billing — Architectural Decisions Record
+
+> **Purpose:** Durable record of foundational architectural decisions, their rationale, and trade-offs.
+
+1. **Three-Module Isolation Rule:** Sales, Purchase, and Casting items and party tables are strictly isolated with no foreign keys or name-matching between them because the physical brass lifecycle has different scrap grades, finished parts, and clients that must never contaminate each other's financial accounting.
+2. **Integer Monetary Units in Purchase:** Purchase calculations use integer grams (`weight_g`), milli-rupees (`rate_milli`), and paise (`amount_paise`) because floating-point rounding errors on multi-ton metal deliveries accumulate into substantial monetary discrepancies.
+3. **Floating-point Indian Rupees in Sales:** Sales billing uses standard floating-point rupees because tax invoices require standard Indian GST percentage calculations, half-up rounding, and standard roundoff reconciliation.
+4. **Dual Kacha & GST Supplier Pools:** Suppliers maintain two separate, non-netted balance pools (`opening_kacha_paise` and `opening_gst_paise`) because official tax-invoice purchases and internal scrap transactions operate under separate settlement rhythms.
+5. **FIFO Plus Manual Pin Settlement:** Supplier bill settlements default to FIFO allocation while allowing operators to manually pin payments to specific bills so specific invoices can be disputed or cleared out of order without corrupting automated running balances.
+6. **Bardan (Bags) Tracking Method:** Bags are tracked as pending physical units tied to specific purchase bills rather than monetary line items because gunny bags are physical assets returned empty by the supplier after inspection.
+7. **Soft-Delete for Parties (Customers & Suppliers):** Customers and suppliers are never hard-deleted (`active: false`) because deleting a party record would break historical ledger integrity, transaction logs, and financial statement generation.
+8. **Delete-Blocking for Used Items:** Items referenced in any bill, line, or session cannot be hard-deleted (only deactivated) to prevent orphaned foreign keys and corrupt bill reproductions, while unreferenced scratch items delete cleanly.
+9. **Tabbed Consolidation on Items and Party Ledger:** Items (`/items` with 3 tabs) and Party Ledger (`/ledger` with 2 tabs) replace fragmented individual pages so the operator has unified operational hubs with zero cross-module linking.
+10. **Dedicated Log Windows (`LogsShell`):** Transaction log views use a default 90-day time window and paginated shell (`LogsShell`) so historical databases with tens of thousands of rows render instantly without bogging down browser memory.
+11. **Database-Backed Module Settings:** Module toggles are stored in PocketBase (`app_settings` collection) rather than browser `localStorage` so disabling or enabling a module synchronizes instantly across all operator devices (PC, tablet, mobile).
+12. **Windows Local-Primary Architecture:** The primary production database runs locally on the factory Windows PC under SQLite WAL mode rather than in the cloud to guarantee zero-latency billing and 100% offline operational resilience during factory network outages.
