@@ -1,141 +1,54 @@
 # Kapil Billing
 
-Billing and ledger application for Kapil Trading workflows. On the `kapil-windows` branch, the production target is one Windows PC using native PocketBase and Caddy with no Docker requirement.
+High-speed, single-operator desktop accounting and operations ERP built for a brass hardware manufacturer in Jamnagar, Gujarat.
 
-## Windows Local-Primary Edition
+The system encompasses three strictly decoupled operational modules:
+1. **Sales Billing** — Outbound GST sales invoices, customer khata, and payment collections.
+2. **Purchase / Procurement** — Inbound scrap intake, dual Kacha/GST supplier pools, and bag (bardan) tracking.
+3. **Casting & Melting** — Foundry heats, melting loss %, wire output yields, and casting bills.
 
-Start with [WINDOWS-SETUP.md](WINDOWS-SETUP.md). Database safety and recovery are documented in [DATABASE-RUNBOOK.md](DATABASE-RUNBOOK.md), and common failures are covered in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+---
 
-The Windows service is intentionally available only at `http://127.0.0.1:4174`. Live data, backups, binaries, credentials, and logs remain under Git-ignored `runtime/` and must never be pushed to GitHub.
+## 1. Production Architecture (Windows Local-Primary)
 
-## What This Repo Contains
+The production target is the factory Windows PC running native **PocketBase** (SQLite with WAL mode) and **Caddy**:
+- **Caddy Web Server:** `http://127.0.0.1:4174`
+- **PocketBase API:** `http://127.0.0.1:8090`
+- **Writable Database:** `runtime/data/data.db` (Git-ignored)
+- **Production Setup Runbook:** [WINDOWS-SETUP.md](WINDOWS-SETUP.md) · [DATABASE-RUNBOOK.md](DATABASE-RUNBOOK.md) · [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 
-- bill creation, payment entry, transaction editing, customer and item management
-- dashboard, ledger, reports, and print-friendly bill flows
-- PocketBase-backed business data with production-oriented utility scripts
-- deployment and operations notes for the current VPS-based hosting model
+---
 
-## Repository Structure
+## 2. Developer Commands
 
-### App and Runtime
-
-- `src/` - application code, domain logic, data layer, routes, and shared UI
-- `public/` - static assets served by the frontend
-- `pb_data/` - local PocketBase runtime directory; only minimal repo-safe scaffolding should live here
-
-### Tooling and Deployment
-
-- `scripts/` - maintenance, import, backfill, and deployment scripts
-- `Dockerfile` - production frontend image build
-- `docker-compose.yml` - container orchestration for the deployed stack
-- `nginx.conf` - web/proxy config for the frontend container
-- `vite.config.ts`, `tsconfig*.json`, `eslint.config.js` - build and lint configuration
-
-### Documentation
-
-- `docs/README.md` - documentation index
-- `docs/architecture/` - architecture and data-flow notes
-- `docs/features/` - feature/page behavior notes
-- `docs/operations/` - deployment, incident, and audit notes
-- `docs/data/` - schema, migration, and imported data references
-- `docs/archive/` - historical notes, specs, audits, and past agent worklogs
-
-### Archived Material
-
-- `archive/` - heavy or historical reference material not part of the active production surface
-
-## Local Development
-
-Install dependencies, start PocketBase locally, then run the frontend:
+Development and testing run in Linux/macOS/Windows environments:
 
 ```bash
+# 1. Install dependencies
 npm install
-npm run db:start
+
+# 2. Start development server
 npm run dev
+
+# 3. Generate route tree (when editing src/routes/)
+npm run router:generate
+
+# 4. Verify everything (Typecheck + Vitest tests + Vite build)
+npm run verify
+
+# 5. Windows package test
+cd windows && npx vitest run windows-package.test.ts
 ```
 
-Useful local commands:
+---
 
-```bash
-npm run typecheck
-npm run test
-npm run build
-npm run db:logs
-```
+## 3. Documentation Index
 
-## Production Workflow
+For all development rules, architectural invariants, and conventions, see:
 
-Frontend production build:
-
-```bash
-npm run build
-npm run preview -- --host 0.0.0.0 --port 4174
-```
-
-For the current VPS deployment path, use the repo deployment script and container config already checked into the repository. See:
-
-- `scripts/deploy-low-ram.sh`
-- `docs/operations/doppler-secrets.md`
-- `docs/operations/deploy/`
-- `docs/operations/audits/vps-ram-and-restart-audit-2026-04-25.md`
-
-## Business Rules That Must Not Drift
-
-### Dates and Sorting
-
-- Business date (`date`) and record timestamp (`created`) are different concepts.
-- Financial ordering must use: business date, then created timestamp, then id.
-- Inclusion logic is range-based (`<= asOfDate`), not exact-day equality.
-
-### Bill Book Numbering
-
-- A physical book holds 50 bills and its book number is also its first bill number: book 1 covers bills 1-50, book 51 covers 51-100, book 101 covers 101-150.
-- Bill numbers run continuously across books and are never reused.
-- Book/bill logic is centralized in `src/domain/bill-books.ts`; `bills` carries the unique index `idx_bills_book_no_bill_no_unique` on `(book_no, bill_no)` as the final guard.
-- `scripts/apply-bill-number-guards.mjs` verifies that guard on any instance (dry run by default).
-- Numbers skipped between the first and last entered bill of a book are surfaced in Data Health as likely un-entered or cancelled bills.
-
-### Outstanding and Status Logic
-
-- Outstanding balance calculations must stay centralized in `src/domain/records.ts` through `computeCustomerOutstanding()`.
-- Bill status persistence must stay centralized through `computeBillStatuses()` in `src/domain/bills.ts`.
-- After write operations, all affected React Query keys should be invalidated immediately.
-
-### Market Rate Rules
-
-- `brass_rates` is the source of truth for historical brass market rates.
-- `vilaity` is the official bill market rate used in `new-bill`.
-- `honey_gulf` and `honey_europe` are preserved for historical reference only.
-- Backdated bills should load the exact saved day first, then the nearest earlier saved day.
-- Active market-rate history should not be stored in `misc_expenses`.
-
-## PocketBase Notes
-
-Recent schema/runtime expectations:
-
-- `bills` and `payments` include `created` and `updated` in API responses.
-- `bills` includes persisted `status` values: `pending`, `partial`, `paid`.
-- historical brass rates live in `brass_rates`
-- main supporting indexes in use:
-  - `bills(date)`, `bills(customer)`
-  - `payments(date)`, `payments(customer)`
-  - `bill_items(bill)`
-
-## Key Maintenance Scripts
-
-- `scripts/deploy-low-ram.sh` - low-memory deployment path for the VPS
-- `scripts/import-brass-rates.mjs` - imports and maintains historical brass rate data
-- `scripts/import-opening-balances.mjs` - customer opening-balance import flow
-- `scripts/import-legacy-and-fake.mjs` - legacy/fake data bootstrap path
-- `scripts/backfill-created-updated-sqlite.py` - backfill helper for existing PocketBase rows
-- `scripts/backfill-bags-from-qty.mjs` - recomputes bag counts from quantity data
-
-## Documentation Entry Points
-
-Start here when you need deeper context:
-
-- `docs/README.md`
-- `docs/architecture/project-architecture-and-data-flow.md`
-- `docs/features/keyboard-first-new-bill-and-payment.md`
-- `docs/operations/incident-notes.md`
-- `docs/architecture/AI-CONTEXT.md`
+- [**`AGENTS.md`**](AGENTS.md) — **Single Source of Truth** for AI agents and developers. Contains invariants, business rules that must not drift, protected paths, and the "never do this" list.
+- [**`CLAUDE.md`**](CLAUDE.md) — Concise command and workflow pointer for Claude Code.
+- [**`docs/architecture/CURRENT-STATE.md`**](docs/architecture/CURRENT-STATE.md) — Verified live routes, collection schemas, data flows, and test tooling.
+- [**`docs/architecture/DECISIONS.md`**](docs/architecture/DECISIONS.md) — Durable architectural decisions with one-line rationales.
+- [**`docs/ui/CONVENTIONS.md`**](docs/ui/CONVENTIONS.md) — Design tokens, component catalog, colour/status map, and developer cookbook.
+- [**`docs/README.md`**](docs/README.md) — Master registry of all documentation files.

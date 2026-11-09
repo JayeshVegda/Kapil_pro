@@ -6,7 +6,7 @@ All project documentation is indexed here with its current validity status.
 
 | Path | Status | Purpose | Notes |
 | :--- | :---: | :--- | :--- |
-| `AGENTS.md` | `Current` | Workstation harness and global operating environment rules. | Single source of truth for AI agents. |
+| `AGENTS.md` | `Current` | Workstation harness, invariants, drift-prevention business rules. | Single source of truth for AI agents. |
 | `CLAUDE.md` | `Current` | Developer command reference, test rules, and financial invariants. | Quick developer pointer. |
 | `README.md` | `Current` | Human-facing project overview and Windows local-primary intro. | Entry point for repository. |
 | `PRODUCT.md` | `Current` | High-level product summary and business goals. | Kept brief. |
@@ -19,16 +19,15 @@ All project documentation is indexed here with its current validity status.
 
 | Path | Status | Purpose | Notes |
 | :--- | :---: | :--- | :--- |
-| `CURRENT-STATE.md` | `Current` | Live routes, collections, data-flows, and settings architecture. | Updated 2026-11-09. |
-| `DECISIONS.md` | `Current` | Durable one-line rationale for every major architectural decision. | Core architectural record. |
-| `AI-CONTEXT.md` | `Current` | Master architecture & invariants briefing for new coding agents. | Covers isolation, money, and data layers. |
+| `CURRENT-STATE.md` | `Current` | Live routes, verified collections, data-flows, and settings architecture. | Updated 2026-11-09. |
+| `DECISIONS.md` | `Current` | Durable one-line rationale for every major architectural decision. | Core architectural record (22 decisions). |
 | `project-architecture-and-data-flow.md` | `Current` | System architecture, frontend-backend flow, and subsystem map. | Visual diagrams and dataflow. |
 
 ## 3. UI Design System (`docs/ui/`)
 
 | Path | Status | Purpose | Notes |
 | :--- | :---: | :--- | :--- |
-| `CONVENTIONS.md` | `Current` | Design language, canonical component kit, banned patterns, cookbook. | Single UI standard. |
+| `CONVENTIONS.md` | `Current` | Design tokens, canonical component kit, colour/status map, cookbook. | Single UI standard. |
 
 ## 4. Active Restructure Plans (`docs/features/`)
 
@@ -38,7 +37,7 @@ All project documentation is indexed here with its current validity status.
 | `kapil-restructure-build-plan.md`| `Current` | Master 8-phase implementation plan for 3-module system architecture. | Active reference for ongoing restructure. |
 | `restructure-plan.md` | `Current` | High-level requirements for unified items and party ledger hubs. | Initial scope brief. |
 | `restructure-progress.md` | `Current` | Active tracking checklist of completed restructuring phases. | Live progress tracker. |
-| `keyboard-first-new-bill-and-payment.md` | `Current` | Keyboard-first entry specifications for `Alt+B` rapid billing. | Active UX feature spec. |
+| `keyboard-first-new-bill-and-payment.md` | `Current` | Keyboard-first entry specifications for rapid billing. | Active UX feature spec. |
 
 ## 5. Operations & Diagnostics (`docs/operations/`)
 
@@ -49,18 +48,17 @@ All project documentation is indexed here with its current validity status.
 | `security-auth-setup.md` | `Current` | PocketBase admin credentials and network security policies. | Security reference. |
 | `doppler-secrets.md` | `Current` | Environment secrets management documentation. | Reference. |
 | `incident-notes.md` | `Current` | Production postmortems and incident resolution history. | Historical incident record. |
-| `deploy/` | `Current` | Nginx reverse-proxy and deployment configurations. | Deployment reference. |
 
 ## 6. Historical Archive (`docs/archive/`)
 *Ignored by agents during coding tasks. Maintained for git audit history only.*
 
 | Path | Status | Original Subject | Archival Reason |
 | :--- | :---: | :--- | :--- |
+| `archive/notes/AI-CONTEXT.md` | `Archived` | Early AI agent briefing. | Superseded by canonical `AGENTS.md` and `CURRENT-STATE.md`. |
 | `archive/notes/cursor_project_scope_and_organization_d.md` | `Archived` | Early Cursor project handoff dump (125 KB). | Superseded by current architecture docs. |
-| `archive/notes/billing-system-explained.md` | `Archived` | Early explanation of billing formulas. | Replaced by `AI-CONTEXT.md`. |
-| `archive/notes/procurement-casting-sales-workflow.md` | `Archived` | Early scrap buying workflow proposal. | Describes dropped Scrap Buying designs. |
-| `archive/notes/*-page-notes.md` | `Archived` | Individual page notes (new-bill, new-payment, customers, etc.). | Superseded by unified 3-module hub layout. |
-| `archive/audits/` | `Archived` | Point-in-time audits (`PURCHASE-MODULE-AUDIT...`, `update-*.md`, `system-map.md`, `ui-system-audit.md`). | Pre-restructure point-in-time snapshots. |
-| `archive/muse/` | `Archived` | `MUSE_*.md` (5 files): Prompting & business rules for external Muse sessions. | Retired from root per owner confirmation. |
-| `archive/specs/` | `Archived` | `docs/superpowers/` plans and specs from May–Aug 2026. | Historical feature iterations. |
-| `archive/agent-work/` | `Archived` | `AgentRouterWork/` scratch worklogs and browser verification artifacts. | Historical AI session artifacts. |
+| `archive/notes/billing-system-explained.md` | `Archived` | Early explanation of billing formulas. | Replaced by `CURRENT-STATE.md`. |
+| `archive/notes/procurement-casting-sales-workflow.md` | `Archived` | Old Scrap Buying workflow notes. | Replaced by new Purchase/Procurement specs. |
+| `archive/muse/` | `Archived` | Muse prompt iterations (`MUSE_PROMPT.md`, etc.). | Preserved for prompt engineering history. |
+| `archive/specs/` | `Archived` | Superpowers plans (`superpowers/specs/`). | Completed redesign cycles. |
+| `archive/audits/` | `Archived` | Historic RAM audits and performance postmortems. | Diagnostic history. |
+| `archive/agent-work/` | `Archived` | AgentRouterWork directory and session notes. | Archival record of previous agent tasks. |
