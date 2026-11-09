@@ -1,0 +1,190 @@
+{
+  "target": "http://127.0.0.1:4174",
+  "date": "2026-11-07T13:44:45.163Z",
+  "results": [
+    {
+      "check": "new bill filled preview",
+      "width": 1440,
+      "viewport": 1440,
+      "document": 1440,
+      "passed": true
+    },
+    {
+      "check": "saved chitty",
+      "width": 1440,
+      "viewport": 1440,
+      "document": 1440,
+      "passed": true
+    },
+    {
+      "check": "saved bill/payment/memo round trip",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "check": "edited receipt memo persisted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "check": "payment lost-response confirmation",
+      "width": 1440,
+      "viewport": 1440,
+      "document": 1440,
+      "passed": true
+    },
+    {
+      "check": "lost batch response reconciled without duplicate",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "check": "/purchase-bills",
+      "width": 1440,
+      "viewport": 1440,
+      "document": 1440,
+      "passed": true
+    },
+    {
+      "check": "/suppliers",
+      "width": 1440,
+      "viewport": 1440,
+      "document": 1440,
+      "passed": true
+    },
+    {
+      "check": "/supplier-ledger/supplier0000002",
+      "width": 1440,
+      "viewport": 1440,
+      "document": 1440,
+      "passed": true
+    },
+    {
+      "check": "/purchase-logs",
+      "width": 1440,
+      "viewport": 1440,
+      "document": 1440,
+      "passed": true
+    },
+    {
+      "check": "/print-purchase-bills",
+      "width": 1440,
+      "viewport": 1440,
+      "document": 1440,
+      "passed": true
+    },
+    {
+      "check": "/purchase-dashboard",
+      "width": 1440,
+      "viewport": 1440,
+      "document": 1440,
+      "passed": true
+    },
+    {
+      "check": "/new-bill",
+      "width": 1440,
+      "viewport": 1440,
+      "document": 1440,
+      "passed": true
+    },
+    {
+      "check": "all writes intercepted by synthetic API",
+      "width": 1440,
+      "liveWrites": 0,
+      "passed": true
+    },
+    {
+      "check": "new bill filled preview",
+      "width": 390,
+      "viewport": 390,
+      "document": 390,
+      "passed": true
+    },
+    {
+      "check": "saved chitty",
+      "width": 390,
+      "viewport": 390,
+      "document": 390,
+      "passed": true
+    },
+    {
+      "check": "saved bill/payment/memo round trip",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "check": "edited receipt memo persisted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "check": "payment lost-response confirmation",
+      "width": 390,
+      "viewport": 390,
+      "document": 390,
+      "passed": true
+    },
+    {
+      "check": "lost batch response reconciled without duplicate",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "check": "/purchase-bills",
+      "width": 390,
+      "viewport": 390,
+      "document": 390,
+      "passed": true
+    },
+    {
+      "check": "/suppliers",
+      "width": 390,
+      "viewport": 390,
+      "document": 390,
+      "passed": true
+    },
+    {
+      "check": "/supplier-ledger/supplier0000002",
+      "width": 390,
+      "viewport": 390,
+      "document": 390,
+      "passed": true
+    },
+    {
+      "check": "/purchase-logs",
+      "width": 390,
+      "viewport": 390,
+      "document": 390,
+      "passed": true
+    },
+    {
+      "check": "/print-purchase-bills",
+      "width": 390,
+      "viewport": 390,
+      "document": 390,
+      "passed": true
+    },
+    {
+      "check": "/purchase-dashboard",
+      "width": 390,
+      "viewport": 390,
+      "document": 390,
+      "passed": true
+    },
+    {
+      "check": "/new-bill",
+      "width": 390,
+      "viewport": 390,
+      "document": 390,
+      "passed": true
+    },
+    {
+      "check": "all writes intercepted by synthetic API",
+      "width": 390,
+      "liveWrites": 0,
+      "passed": true
+    }
+  ],
+  "issues": [],
+  "liveDatabaseWrites": 0
+}

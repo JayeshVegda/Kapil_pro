@@ -38,7 +38,7 @@ The Windows service is intentionally available only at `http://127.0.0.1:4174`. 
 - `docs/features/` - feature/page behavior notes
 - `docs/operations/` - deployment, incident, and audit notes
 - `docs/data/` - schema, migration, and imported data references
-- `cursor_project_scope_and_organization_d.md` - long-form project handoff and historical decision log
+- `docs/archive/` - historical notes, specs, audits, and past agent worklogs
 
 ### Archived Material
 
@@ -138,4 +138,4 @@ Start here when you need deeper context:
 - `docs/architecture/project-architecture-and-data-flow.md`
 - `docs/features/keyboard-first-new-bill-and-payment.md`
 - `docs/operations/incident-notes.md`
-- `cursor_project_scope_and_organization_d.md`
+- `docs/architecture/AI-CONTEXT.md`

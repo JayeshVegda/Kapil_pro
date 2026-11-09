@@ -1,6 +1,15 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code and AI coding assistants when working with code in this repository.
+
+> **CRITICAL ARCHITECTURE BRIEFING:**
+> Before making changes, read **[`docs/architecture/AI-CONTEXT.md`](docs/architecture/AI-CONTEXT.md)**.
+> Kapil Billing has **three strictly segregated business modules**: **SALES**, **PURCHASE**, and **CASTING**.
+> - **Never link items or parties across modules**, even if names match.
+> - **Never net customer receivables against supplier payables.** Sales is float Rupees; Purchase is integer Paise.
+> - **Never edit old migrations.** Add new migration files with fresh timestamps only.
+> - **Soft-delete philosophy:** referenced items and parties are deactivated (`active: false`), not deleted.
+> - **Design reference:** `/print-bill` and `/new-payment` (`#f1f5f9` bg, slate-900 primary buttons, no blue-600 buttons, no duplicate H1s, centered Radix modals).
 
 ## Development commands
 
@@ -152,4 +161,4 @@ For details beyond this summary, start with:
 - `docs/architecture/project-architecture-and-data-flow.md`
 - `docs/features/`
 - `docs/operations/security-auth-setup.md`
-- `cursor_project_scope_and_organization_d.md`
+- `docs/architecture/AI-CONTEXT.md`
