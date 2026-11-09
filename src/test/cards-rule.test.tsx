@@ -268,6 +268,46 @@ describe('Chart Kit Visuals & Cards Rule', () => {
       expect(result.violations).toHaveLength(0)
     })
 
+    it('validates the Company Report (/monthly-report) layout complies strictly with the Cards Rule', () => {
+      const companyReportLayout = (
+        <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+          <Panel className="p-4">Header Bar</Panel>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <SectionCard title="Sales Position">Snapshot</SectionCard>
+            <SectionCard title="Purchase Position">Snapshot</SectionCard>
+            <SectionCard title="Casting Position">Snapshot</SectionCard>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <Panel>Sales</Panel>
+            <Panel>Collections</Panel>
+            <Panel>Receivable</Panel>
+            <Panel>Efficiency</Panel>
+            <Panel>Cash Gap</Panel>
+          </div>
+          <SectionCard title="Priority Signals">Signals</SectionCard>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+            <SectionCard title="Sales vs Collections Trend" className="xl:col-span-8 xl:row-span-2">Chart</SectionCard>
+            <SectionCard title="Collection Progress" className="xl:col-span-4">Gauge</SectionCard>
+            <SectionCard title="Receivable Ageing" className="xl:col-span-4">Bars</SectionCard>
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionCard title="Top Customers by Sales">Ranked</SectionCard>
+            <SectionCard title="Top Debtors by Outstanding">Ranked</SectionCard>
+          </div>
+          <SectionCard title="Receivable Ageing Customers">Table</SectionCard>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+            <SectionCard title="Weekly Sales Rhythm" className="xl:col-span-7">Chart</SectionCard>
+            <SectionCard title="Financial Year Comparison" className="xl:col-span-5">Summary</SectionCard>
+          </div>
+          <SectionCard title="Gas Sales Performance">Breakdown</SectionCard>
+        </div>
+      )
+
+      const result = validateCardsRule(companyReportLayout)
+      expect(result.valid).toBe(true)
+      expect(result.violations).toHaveLength(0)
+    })
+
     it('fails the Cards Rule when bare floating elements sit directly on the background', () => {
       const nonConformingDashboard = (
         <div id="dashboard-container" className="space-y-4">

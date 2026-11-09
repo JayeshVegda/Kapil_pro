@@ -3,8 +3,8 @@ import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, PolarAngle
 import { formatFullDate, formatMonthYear } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
-const BLUE = '#3b82f6'
-const GREEN = '#10b981'
+const BLUE = '#2563eb'
+const GREEN = '#059669'
 const SLATE = '#64748b'
 const GRID = '#e2e8f0'
 
@@ -37,6 +37,29 @@ export function SalesCollectionTrendChart({ data }: { data: Array<{ month: strin
         <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={8} />
         <Bar dataKey="sales" name="Sales" fill={BLUE} radius={[3, 3, 0, 0]} maxBarSize={24} />
         <Bar dataKey="collections" name="Collections" fill={GREEN} radius={[3, 3, 0, 0]} maxBarSize={24} />
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+/** Monthly purchase value vs supplier payments, the purchases report's main trend view. */
+export function PurchasedVsPaidTrendChart({ data }: { data: Array<{ month: string; purchased: number; paid: number }> }) {
+  if (data.length === 0) return <p className="py-10 text-center text-xs text-slate-400">No monthly purchase activity yet.</p>
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <BarChart data={data} margin={{ top: 8, right: 4, bottom: 0, left: 4 }} barCategoryGap="26%">
+        <CartesianGrid vertical={false} stroke={GRID} />
+        <XAxis dataKey="month" tickFormatter={formatMonthYear} tick={{ fontSize: 11, fill: SLATE }} axisLine={{ stroke: '#cbd5e1' }} tickLine={false} />
+        <YAxis tickFormatter={compactInr} tick={{ fontSize: 11, fill: SLATE }} axisLine={false} tickLine={false} width={54} />
+        <Tooltip
+          cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }}
+          formatter={(value, name) => [formatInrInteger(Number(value ?? 0)), String(name ?? '')]}
+          labelFormatter={(label) => formatMonthYear(String(label))}
+          contentStyle={tooltipStyle}
+        />
+        <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={8} />
+        <Bar dataKey="purchased" name="Purchased" fill={BLUE} radius={[3, 3, 0, 0]} maxBarSize={24} />
+        <Bar dataKey="paid" name="Paid" fill={GREEN} radius={[3, 3, 0, 0]} maxBarSize={24} />
       </BarChart>
     </ResponsiveContainer>
   )
@@ -94,10 +117,10 @@ export function CollectionEfficiencyGauge({ value, tone }: { value: number; tone
 export type AgingBucketKey = 'current' | 'days31to60' | 'days61to90' | 'above90'
 
 const AGING_META: Array<{ key: AgingBucketKey; label: string; color: string }> = [
-  { key: 'current', label: '0–30d', color: '#93c5fd' },
-  { key: 'days31to60', label: '31–60d', color: '#fbbf24' },
-  { key: 'days61to90', label: '61–90d', color: '#fb923c' },
-  { key: 'above90', label: '90d+', color: '#f43f5e' },
+  { key: 'current', label: '0–30d', color: '#3b82f6' },
+  { key: 'days31to60', label: '31–60d', color: '#f59e0b' },
+  { key: 'days61to90', label: '61–90d', color: '#ea580c' },
+  { key: 'above90', label: '90d+', color: '#e11d48' },
 ]
 
 /** Receivable aging as clickable horizontal bars; clicking selects the drill-down bucket. */
