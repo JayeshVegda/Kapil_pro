@@ -65,10 +65,10 @@ describe('Chart Kit Visuals & Cards Rule', () => {
       expect(renderToStaticMarkup(<Sparkline values={[100]} />)).toBe('')
     })
 
-    it('renders SVG polyline when 2 or more points are provided', () => {
+    it('renders SVG path and circle when 2 or more points are provided', () => {
       const html = renderToStaticMarkup(<Sparkline values={[10, 25, 18, 40]} />)
       expect(html).toContain('<svg')
-      expect(html).toContain('<polyline')
+      expect(html).toContain('<path')
       expect(html).toContain('<circle')
     })
   })
