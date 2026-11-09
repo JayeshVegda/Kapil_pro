@@ -204,6 +204,41 @@ describe('Chart Kit Visuals & Cards Rule', () => {
       expect(result.violations).toHaveLength(0)
     })
 
+    it('validates the Purchase Dashboard (Step 4) layout complies strictly with the Cards Rule', () => {
+      const purchaseDashboardLayout = (
+        <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+          <DashboardToolbar mode="month" onModeChange={() => {}} />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <KpiCard label="Bought" value="100 kg" />
+            <KpiCard label="Paid Out" value="₹50k" />
+            <KpiCard label="We Owe" value="₹20k" />
+            <KpiCard label="Advance Held" value="₹10k" />
+            <KpiCard label="Bardan Pending" value="2 lots" />
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionCard title="Bought vs Paid Out">Chart</SectionCard>
+            <SectionCard title="Payable Ageing">Chart</SectionCard>
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionCard title="What We Buy">List</SectionCard>
+            <SectionCard title="Rate vs Market">Chart</SectionCard>
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionCard title="Pay Next">List</SectionCard>
+            <SectionCard title="Bardan Pending">Table</SectionCard>
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionCard title="Recent Purchase Bills">Table</SectionCard>
+            <SectionCard title="Recent Payments">Table</SectionCard>
+          </div>
+        </div>
+      )
+
+      const result = validateCardsRule(purchaseDashboardLayout)
+      expect(result.valid).toBe(true)
+      expect(result.violations).toHaveLength(0)
+    })
+
     it('fails the Cards Rule when bare floating elements sit directly on the background', () => {
       const nonConformingDashboard = (
         <div id="dashboard-container" className="space-y-4">
