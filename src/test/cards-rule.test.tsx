@@ -151,9 +151,6 @@ describe('Chart Kit Visuals & Cards Rule', () => {
       const mainDashboardLayout = (
         <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
           <DashboardToolbar mode="month" onModeChange={() => {}} />
-          <SectionCard title="Needs Attention">
-            <span>Nothing needs attention</span>
-          </SectionCard>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <SectionCard title="Sales">Sales content</SectionCard>
             <SectionCard title="Purchase">Purchase content</SectionCard>
@@ -171,6 +168,38 @@ describe('Chart Kit Visuals & Cards Rule', () => {
       )
 
       const result = validateCardsRule(mainDashboardLayout)
+      expect(result.valid).toBe(true)
+      expect(result.violations).toHaveLength(0)
+    })
+
+    it('validates the Sales Dashboard (Step 3) layout complies strictly with the Cards Rule', () => {
+      const salesDashboardLayout = (
+        <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+          <DashboardToolbar mode="month" onModeChange={() => {}} />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <KpiCard label="Billed" value="100" />
+            <KpiCard label="Collected" value="80" />
+            <KpiCard label="Avg Bill" value="50" />
+            <KpiCard label="Bills Billed" value="2" />
+            <KpiCard label="Still to Receive" value="200" />
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionCard title="Billed vs Collected">Chart</SectionCard>
+            <SectionCard title="Receivable Ageing">Chart</SectionCard>
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionCard title="How Customers Pay">Chart</SectionCard>
+            <SectionCard title="Top Items">List</SectionCard>
+          </div>
+          <SectionCard title="Top Customers by Outstanding">List</SectionCard>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionCard title="Recent Sale Bills">Table</SectionCard>
+            <SectionCard title="Recent Payments">Table</SectionCard>
+          </div>
+        </div>
+      )
+
+      const result = validateCardsRule(salesDashboardLayout)
       expect(result.valid).toBe(true)
       expect(result.violations).toHaveLength(0)
     })

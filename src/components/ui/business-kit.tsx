@@ -82,7 +82,7 @@ export function KpiCard({
       <div className="mt-2 flex items-baseline justify-between gap-2">
         <strong
           className={cn(
-            'block font-mono text-lg font-semibold tabular-nums',
+            'block font-mono text-xl font-bold tracking-tight tabular-nums sm:text-2xl',
             tone === 'positive'
               ? 'text-emerald-700'
               : tone === 'warning'
