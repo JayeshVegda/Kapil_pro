@@ -35,7 +35,7 @@ export function BookRegisterPanel() {
       </div>
 
       {registerQuery.isLoading && <p className="mt-4 text-sm text-slate-500">Reading bill books...</p>}
-      {registerQuery.isError && <p className="mt-4 text-sm text-red-600">Unable to read the book register.</p>}
+      {registerQuery.isError && <p className="mt-4 text-sm text-rose-600">Unable to read the book register.</p>}
 
       {!registerQuery.isLoading && !registerQuery.isError && books.length === 0 && (
         <p className="mt-4 text-sm text-slate-500">No bills recorded yet.</p>

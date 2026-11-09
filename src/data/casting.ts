@@ -6,8 +6,16 @@ import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
 import { calculateCastingCost, type CastingBatchCostInput, type CastingInputRow } from '@/domain/casting-calculations'
 import type { CastingBatchRecord, CastingInputRecord, CastingMaterialRecord, CastingSessionRecord, CastingSessionWithInputs } from '@/domain/casting-types'
+import { countItemReferences, countNameOnlyReferences } from '@/data/item-usage'
+import { itemNameKey, normalizeItemName } from '@/domain/purchase-item-name'
 
 type PBRecord = Record<string, unknown> & { id: string }
+function generateRecordId(): string {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  const bytes = crypto.getRandomValues(new Uint8Array(15))
+  return Array.from(bytes, (byte) => chars[byte % chars.length]).join('')
+}
+
 const PAGE_SIZE = 200
 const XLS_STANDARD_MATERIALS = ['Brass', 'Chol', 'Plate', 'Zinc', 'Lead'] as const
 
@@ -263,10 +271,33 @@ export async function loadCastingMaterials(): Promise<CastingMaterialRecord[]> {
   }
 }
 
+export async function loadCastingItemsWithUsage(): Promise<Array<CastingMaterialRecord & { usageCount: number }>> {
+  const [materials, inputs] = await Promise.all([
+    pb.collection('casting_materials').getFullList({ sort: 'name' }),
+    pb.collection('casting_batch_inputs').getFullList({ fields: 'material,material_name' }),
+  ])
+  return materials.map((row) => {
+    const material = mapMaterial(row as PBRecord)
+    const usageCount = inputs.filter((input) => String(input.material ?? '') === material.id || String(input.material_name ?? '').trim().toLowerCase() === material.name.trim().toLowerCase()).length
+    return { ...material, usageCount }
+  })
+}
+
+export async function deleteCastingMaterial(materialId: string): Promise<void> {
+  await runDataOperation('delete-casting-material', async () => {
+    const row = await pb.collection('casting_materials').getOne(materialId)
+    const count = await countItemReferences('casting', materialId, String(row.name ?? ''))
+    if (count > 0) throw new Error(`Used in ${count} casting inputs. Deactivate this material instead.`)
+    await pb.collection('casting_materials').delete(materialId)
+  })
+}
+
 export async function createCastingMaterial(payload: { name: string; code?: string; category?: string }): Promise<CastingMaterialRecord> {
   return await runDataOperation('create-casting-material', async () => {
-    const name = String(payload.name ?? '').trim()
+    const name = normalizeItemName(payload.name)
     if (!name) throw new Error('Material name is required')
+    const existing = await pb.collection('casting_materials').getFullList({ fields: 'id,name' })
+    if (existing.some((row) => itemNameKey(String(row.name ?? '')) === itemNameKey(name))) throw new Error('This Casting item already exists')
     const created = await pb.collection('casting_materials').create({
       name,
       code: String(payload.code ?? '').trim(),
@@ -282,8 +313,12 @@ export async function updateCastingMaterial(
   payload: { name: string; code?: string; category?: string; isActive?: boolean },
 ): Promise<CastingMaterialRecord> {
   return await runDataOperation('update-casting-material', async () => {
-    const name = String(payload.name ?? '').trim()
+    const name = normalizeItemName(payload.name)
     if (!name) throw new Error('Material name is required')
+    const existing = await pb.collection('casting_materials').getFullList({ fields: 'id,name' })
+    if (existing.some((row) => row.id !== materialId && itemNameKey(String(row.name ?? '')) === itemNameKey(name))) throw new Error('This Casting item already exists')
+    const current = existing.find((row) => row.id === materialId)
+    if (current && itemNameKey(String(current.name ?? '')) !== itemNameKey(name) && await countNameOnlyReferences('casting', String(current.name ?? '')) > 0) throw new Error('Old casting inputs use this name without an item link. Deactivate it and add a new item instead.')
     const updated = await pb.collection('casting_materials').update(materialId, {
       name,
       code: String(payload.code ?? '').trim(),
@@ -541,7 +576,7 @@ export async function updateCastingSession(sessionId: string, payload: SaveCasti
 
   await runDataOperation('update-casting-session', async () => {
     await ensureMaterialMap(inputs.map((r) => r.materialName))
-    const existingBatches = await listAllPaged('casting_batches', { filter: `session = "${sessionId}"` }).catch(() => [])
+    const existingBatches = await listAllPaged('casting_batches', { filter: `session = "${sessionId}"` })
     const existingBatchIds = existingBatches.map((row) => row.id)
     const existingInputs = existingBatchIds.length
       ? (
@@ -551,43 +586,24 @@ export async function updateCastingSession(sessionId: string, payload: SaveCasti
         ).flat()
       : []
 
-    const createdBatchIds: string[] = []
-    const createdInputIds: string[] = []
-    try {
-      for (const batch of batches) {
-        const createdBatch = await pb.collection('casting_batches').create({
-          session: sessionId,
-          batch_number: batch.batchNumber,
-          wire_out: batch.wireOut,
-          mel: batch.mel,
+    const batchRequest = pb.createBatch()
+    for (const oldInput of existingInputs) batchRequest.collection('casting_batch_inputs').delete(oldInput.id)
+    for (const oldBatchId of existingBatchIds) batchRequest.collection('casting_batches').delete(oldBatchId)
+    for (const batch of batches) {
+      const batchId = generateRecordId()
+      batchRequest.collection('casting_batches').create({
+        id: batchId, session: sessionId, batch_number: batch.batchNumber,
+        wire_out: batch.wireOut, mel: batch.mel,
+      })
+      for (const row of batch.inputs) {
+        batchRequest.collection('casting_batch_inputs').create({
+          id: generateRecordId(), batch: batchId, material_name: row.materialName,
+          qty: row.qty, rate: row.rate, amount: row.qty * row.rate,
         })
-        createdBatchIds.push(createdBatch.id)
-        for (const row of batch.inputs) {
-          const created = await pb.collection('casting_batch_inputs').create({
-            batch: createdBatch.id,
-            material_name: row.materialName,
-            qty: row.qty,
-            rate: row.rate,
-            amount: row.qty * row.rate,
-          })
-          createdInputIds.push(created.id)
-        }
       }
-    } catch (error) {
-      await Promise.allSettled(createdInputIds.map((id) => pb.collection('casting_batch_inputs').delete(id)))
-      await Promise.allSettled(createdBatchIds.map((id) => pb.collection('casting_batches').delete(id)))
-      throw new Error(error instanceof Error ? error.message : 'Failed to replace casting inputs', { cause: error })
     }
 
-    const deleteOldInputResults = await Promise.allSettled(existingInputs.map((row) => pb.collection('casting_batch_inputs').delete(row.id)))
-    const deleteOldBatchResults = await Promise.allSettled(existingBatchIds.map((id) => pb.collection('casting_batches').delete(id)))
-    const deleteOldResults = [...deleteOldInputResults, ...deleteOldBatchResults]
-    const failedOldDeletes = deleteOldResults.filter((r) => r.status === 'rejected')
-    if (failedOldDeletes.length > 0) {
-      throw new Error('Failed to clean old input rows. Session not finalized; please retry update.')
-    }
-
-    await pb.collection('casting_sessions').update(sessionId, {
+    batchRequest.collection('casting_sessions').update(sessionId, {
       date: payload.date.slice(0, 10),
       unit: batches.length,
       coal_kg: num(payload.coalKg),
@@ -603,6 +619,7 @@ export async function updateCastingSession(sessionId: string, payload: SaveCasti
       total_input_kg: cost.totalInputKg,
       note: String(payload.note ?? ''),
     })
+    await batchRequest.send()
   })
 }
 
@@ -625,7 +642,7 @@ export async function deleteCastingSession(sessionId: string): Promise<void> {
 
 export async function loadLatestMaterialRates(): Promise<Record<string, number>> {
   try {
-    const latestSessionPage = await pb.collection('casting_sessions').getList(1, 1, { sort: '-date,-created' })
+    const latestSessionPage = await pb.collection('casting_sessions').getList(1, 1, { sort: '-date,-created,-id' })
     const latestSession = (latestSessionPage.items?.[0] as PBRecord | undefined) ?? undefined
     if (!latestSession?.id) return {}
 
@@ -652,15 +669,15 @@ export async function loadLatestMaterialRates(): Promise<Record<string, number>>
   }
 }
 
-export async function loadLatestCastingDefaults(): Promise<{ coalRate: number; materialRates: Record<string, number> }> {
+export async function loadLatestCastingDefaults(): Promise<{ coalKg: number; coalRate: number; workerSalary: number; materialRates: Record<string, number> }> {
   try {
-    const latestSessionPage = await pb.collection('casting_sessions').getList(1, 1, { sort: '-date,-created' })
+    const latestSessionPage = await pb.collection('casting_sessions').getList(1, 1, { sort: '-date,-created,-id' })
     const latestSession = (latestSessionPage.items?.[0] as PBRecord | undefined) ?? undefined
-    if (!latestSession?.id) return { coalRate: 0, materialRates: {} }
+    if (!latestSession?.id) return { coalKg: 0, coalRate: 0, workerSalary: 0, materialRates: {} }
     const materialRates = await loadLatestMaterialRates()
-    return { coalRate: num(latestSession.coal_rate), materialRates }
+    return { coalKg: num(latestSession.coal_kg), coalRate: num(latestSession.coal_rate), workerSalary: num(latestSession.worker_salary), materialRates }
   } catch {
-    return { coalRate: 0, materialRates: {} }
+    return { coalKg: 0, coalRate: 0, workerSalary: 0, materialRates: {} }
   }
 }
 

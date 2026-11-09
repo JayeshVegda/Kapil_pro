@@ -213,7 +213,7 @@ function IssuesPage() {
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-slate-200 text-[10px] uppercase font-bold text-slate-500">
+              <tr className="border-b border-slate-200 text-[11px] uppercase font-bold text-slate-500">
                 <th className="py-2 pr-3">Collection</th>
                 <th className="py-2 pr-3">Status</th>
                 <th className="py-2">Rows</th>

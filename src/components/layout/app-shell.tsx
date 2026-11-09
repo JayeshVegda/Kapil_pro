@@ -16,7 +16,7 @@ import { PENDING_COMMAND_STORAGE_KEY, splitCommandPrefix, inferCommandKind, getC
 import { rememberQuickSearchResult } from '@/lib/recent-items'
 import { filterRankedNameMatches, findBestNameMatch } from '@/lib/search'
 import { defaultModuleSettings, isPathHiddenByModules, type ModuleSettings } from '@/lib/module-settings'
-import { useModuleSettings } from '@/lib/use-module-settings'
+import { useModules } from '@/lib/use-module-settings'
 import { isBackgroundSyncQuery } from '@/lib/query-scope'
 import { QuickSearchPreview } from './quick-search-preview'
 import { MobileBottomNav, SidebarNavPanel } from './sidebar-nav'
@@ -24,34 +24,39 @@ import { BillPrintLayout } from '@/components/billing/bill-print-layout'
 import { TransactionEditorHost } from '@/components/transactions/transaction-editor-host'
 
 const pageMeta: Record<string, { title: string; subtitle: string }> = {
+  '/dev/components': { title: 'Component Preview', subtitle: 'Shared interface states with synthetic data' },
   '/': { title: 'Dashboard', subtitle: 'Live business overview and pending actions' },
-  '/new-bill': { title: 'Bills', subtitle: 'Create and preview new sale bills' },
+  '/sales-dashboard': { title: 'Sales Dashboard', subtitle: 'Sales, collections, customer exposure and item volume' },
+  '/new-bill': { title: 'Sale Bills', subtitle: 'Create and preview new sale bills' },
   '/drafts': { title: 'AI Drafts', subtitle: 'Review and approve bills staged by Muse AI' },
-  '/new-payment': { title: 'Payments', subtitle: 'Record collections and adjustments' },
-  '/transactions': { title: 'Logs', subtitle: 'Manage recent bills and payments with CRUD actions' },
-  '/ledger': { title: 'Party', subtitle: 'Single-party ledger and analytics' },
+  '/new-payment': { title: 'Sales Payment', subtitle: 'Record collections and adjustments' },
+  '/transactions': { title: 'Sales Logs', subtitle: 'Manage recent bills and payments with CRUD actions' },
+  '/ledger': { title: 'Party Ledger', subtitle: 'Single-party ledger and analytics' },
   '/monthly-report': { title: 'Company Report', subtitle: 'Company-level sales, collections, and gas performance' },
-  '/monthly-sales-calendar': { title: 'Monthly Sales Calendar', subtitle: 'Daily gas selling, market rates, sales, and collections' },
-  '/calendar': { title: 'Monthly Sales Calendar', subtitle: 'Daily gas selling, market rates, sales, and collections' },
+  '/reports/sales': { title: 'Sales Report', subtitle: 'Customers, items, trend and receivable ageing' },
+  '/reports/purchase': { title: 'Purchase Report', subtitle: 'Suppliers, scrap rates, payable ageing and RCM' },
+  '/reports/casting': { title: 'Casting Report', subtitle: 'Sessions, wastage, recovery and material costs' },
+  '/monthly-sales-calendar': { title: 'Calendar', subtitle: 'Daily gas selling, market rates, sales, and collections' },
+  '/calendar': { title: 'Calendar', subtitle: 'Daily gas selling, market rates, sales, and collections' },
   '/export-reports': { title: 'Exports', subtitle: 'Download ledger, company, and backup reports' },
   '/customers': { title: 'Customers', subtitle: 'Manage customer master data' },
   '/suppliers': { title: 'Suppliers', subtitle: 'Supplier purchase balances & master' },
   '/supplier-ledger': { title: 'Supplier Ledger', subtitle: 'Supplier purchase history, balances, and bill details' },
+  '/purchase-dashboard': { title: 'Purchase Dashboard', subtitle: 'Supplier payables, scrap procurement, and material consumption' },
   '/purchase-bills': { title: 'Purchase Bills', subtitle: 'Incoming scrap purchase bills' },
   '/new-purchase-bill': { title: 'New Purchase Bill', subtitle: 'Record incoming scrap purchase bill' },
-  '/supplier-payments': { title: 'Supplier Payments', subtitle: 'Supplier payments and settlement records' },
-'/new-supplier-payment': { title: 'New Supplier Payment', subtitle: 'Record payment to scrap supplier' },
-'/purchase-items': { title: 'Purchase Items', subtitle: 'Raw material scrap item catalog' },
-  '/items': { title: 'Items', subtitle: 'Manage item master and defaults' },
+  '/supplier-payments': { title: 'Supplier Payments', subtitle: 'Record outgoing payment and auto-settle bills' },
+  '/new-supplier-payment': { title: 'New Purchase Payment', subtitle: 'Record outgoing payment and auto-settle bills' },
+  '/purchase-items': { title: 'Items Master', subtitle: 'Manage selling products and raw scrap catalog' },
+  '/items': { title: 'Items Master', subtitle: 'Manage selling products and raw scrap catalog' },
   '/data-health': { title: 'Data Health', subtitle: 'Find bill and setup data issues' },
   '/issues': { title: 'Issues', subtitle: 'Live system, sync, and data issues console' },
   '/backup': { title: 'Backup', subtitle: 'Export and validate data snapshots' },
-  '/print-bill': { title: 'Print Bill', subtitle: 'Filter, preview, and print bills' },
+  '/print-bill': { title: 'Print Sale Bills', subtitle: 'Filter, preview, and print bills' },
   '/control-room': { title: 'Control Room', subtitle: 'Admin operations, command workflows, and system controls' },
-  '/casting': { title: 'Casting Overview', subtitle: 'Furnace sessions, output, and cost signals' },
+  '/casting': { title: 'Casting Dashboard', subtitle: 'Furnace sessions, output, and cost signals' },
   '/casting/new-session': { title: 'New Casting Session', subtitle: 'Record material inputs and furnace output' },
-  '/casting/log': { title: 'Casting Log', subtitle: 'Review and edit casting sessions' },
-  '/casting/materials': { title: 'Casting Materials', subtitle: 'Material usage from casting logs' },
+  '/casting/log': { title: 'Casting Logs', subtitle: 'Review and edit casting sessions' },
   '/casting/bill': { title: 'Casting Bill', subtitle: 'Print-style furnace session cost sheet' },
 }
 
@@ -68,29 +73,32 @@ const COMMAND_HISTORY_STORAGE_KEY = 'kapil-command-history-v1'
 const COMMAND_HISTORY_LIMIT = 20
 
 const commandRoutes = [
+  { label: 'Component preview', path: '/dev/components' },
   { label: 'Dashboard', path: '/' },
-  { label: 'New Bill', path: '/new-bill' },
   { label: 'AI Drafts', path: '/drafts' },
-  { label: 'New Payment', path: '/new-payment' },
-  { label: 'Transactions', path: '/transactions' },
-  { label: 'Ledger', path: '/ledger' },
-  { label: 'Monthly Sales Calendar', path: '/monthly-sales-calendar' },
-  { label: 'Customers', path: '/customers' },
-  { label: 'Suppliers', path: '/suppliers' },
+  { label: 'Party Ledger', path: '/ledger' },
+  { label: 'Sales Dashboard', path: '/sales-dashboard' },
+  { label: 'Sale Bills', path: '/new-bill' },
+  { label: 'Sales Payment', path: '/new-payment' },
+  { label: 'Sales Logs', path: '/transactions' },
+  { label: 'Print Sale Bills', path: '/print-bill' },
+  { label: 'Purchase Dashboard', path: '/purchase-dashboard' },
+  { label: 'New Purchase Payment', path: '/new-supplier-payment' },
+  { label: 'Purchase Logs', path: '/purchase-logs' },
+  { label: 'Calendar', path: '/monthly-sales-calendar' },
+  { label: 'Sales Report', path: '/reports/sales' },
+  { label: 'Purchase Report', path: '/reports/purchase' },
+  { label: 'Casting Report', path: '/reports/casting' },
   { label: 'Purchase Bills', path: '/purchase-bills' },
   { label: 'New Purchase Bill', path: '/new-purchase-bill' },
-  { label: 'Supplier Payments', path: '/supplier-payments' },
-  { label: 'New Supplier Payment', path: '/new-supplier-payment' },
-  { label: 'Purchase Items', path: '/purchase-items' },
   { label: 'Items', path: '/items' },
   { label: 'Data Health', path: '/data-health' },
   { label: 'Issues', path: '/issues' },
   { label: 'Backup', path: '/backup' },
   { label: 'Control Room', path: '/control-room' },
-  { label: 'Casting Overview', path: '/casting' },
+  { label: 'Casting Dashboard', path: '/casting' },
   { label: 'New Casting Session', path: '/casting/new-session' },
-  { label: 'Casting Log', path: '/casting/log' },
-  { label: 'Casting Materials', path: '/casting/materials' },
+  { label: 'Casting Logs', path: '/casting/log' },
   { label: 'Casting Bill', path: '/casting/bill' },
 ]
 
@@ -120,11 +128,14 @@ type BillSession = {
 }
 
 export function AppShell() {
-  // The headless preview renderer loads /preview-bill/<id> as a bare page —
-  // no sidebar, header, or shell queries, so it can signal readiness fast.
+  // The preview route gets a separate component so shell hooks keep a stable order.
   if (typeof window !== 'undefined' && window.location.pathname.startsWith('/preview-bill')) {
     return <Outlet />
   }
+  return <AppShellContent />
+}
+
+function AppShellContent() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [quickSearch, setQuickSearch] = useState('')
   const [debouncedQuickSearch, setDebouncedQuickSearch] = useState('')
@@ -157,7 +168,7 @@ export function AppShell() {
   const activeQuickSearchResult = visibleQuickSearchResults[activeQuickSearchIndex] ?? visibleQuickSearchResults[0]
   const commandRegistry = useMemo(() => getCommandRegistry(), [adminSettings])
   const today = useMemo(() => getLocalIsoDate(), [])
-  const moduleSettings = useModuleSettings()
+  const moduleSettings = useModules()
   const { marketRate, refreshMarketRate } = useMarketRate(today)
   const mktDeltaQuery = useQuery({
     queryKey: ['mkt-pill-delta'],
@@ -258,7 +269,7 @@ export function AppShell() {
           companyName: String(r.company_name ?? ''),
           customerName: String(r.name ?? ''),
         })),
-        items: itemsRaw.map((r) => ({
+        items: itemsRaw.filter((r) => Boolean(r.active ?? true)).map((r) => ({
           id: r.id,
           name: String(r.name ?? ''),
           defaultRate: Number(r.default_rate ?? 0),
@@ -724,9 +735,9 @@ export function AppShell() {
                 }}
                 onFocus={() => setQuickSearchOpen(true)}
                 onKeyDown={handleQuickSearchKeyDown}
-                className="h-9 w-[250px] rounded-full border border-slate-200 bg-white pl-9 pr-20 text-sm text-slate-700 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-300 xl:w-[300px]"
+                className="h-9 w-[250px] rounded-full border border-slate-200 bg-white pl-9 pr-20 text-sm text-slate-700 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-slate-500 xl:w-[300px]"
               />
-              <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 xl:block">Ctrl /</span>
+              <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold text-slate-500 xl:block">Ctrl /</span>
             </label>
             <button
               type="button"
@@ -757,10 +768,10 @@ export function AppShell() {
               title={`${marketRate.status}${marketRate.rateDate ? ` | ${marketRate.rateDate}` : ''}${mktDelta ? ` | ${mktDelta.delta >= 0 ? '+' : '-'}₹${Math.abs(mktDelta.delta)} vs previous saved rate` : ''}`}
               onClick={() => void refreshMarketRate()}
             >
-              <span className="text-[10px] uppercase tracking-[0.08em] text-amber-600">MKT</span>
+              <span className="text-[11px] uppercase tracking-[0.08em] text-amber-600">MKT</span>
               <span className="font-mono tabular-nums">{marketRate.rate > 0 ? formatInrInteger(Math.round(marketRate.rate)) : '—'}</span>
               {mktDelta && (
-                <span className={`font-mono text-[10px] tabular-nums ${mktDelta.delta >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                <span className={`font-mono text-[11px] tabular-nums ${mktDelta.delta >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                   {mktDelta.delta >= 0 ? '▲' : '▼'}{Math.abs(mktDelta.delta)}
                 </span>
               )}
@@ -784,7 +795,7 @@ export function AppShell() {
             >
               <span
                 className={`grid h-5 w-5 place-items-center rounded-full ${
-                  syncState === 'error' ? 'bg-red-100 text-red-700' : syncState === 'outdated' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'
+                  syncState === 'error' ? 'bg-rose-100 text-rose-700' : syncState === 'outdated' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
                 }`}
               >
                 {syncState === 'syncing' && <Loader2 size={13} className="animate-spin" />}
@@ -812,6 +823,7 @@ export function AppShell() {
             </button>
           </div>
         </header>
+        {moduleSettings.error && <div role="alert" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">Shared module settings could not load. Purchase and Casting remain visible. Check the PocketBase connection and pending migration.</div>}
         <div className="w-full pb-20 lg:pb-0 2xl:mx-auto 2xl:max-w-[1680px]">
           <Outlet />
         </div>
@@ -832,7 +844,7 @@ export function AppShell() {
                 <Command size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   autoFocus
-                  className="h-12 w-full rounded-lg border border-slate-200 bg-white pl-11 pr-3 text-base text-slate-950 outline-none focus:border-blue-300 sm:pr-24"
+                  className="h-12 w-full rounded-lg border border-slate-200 bg-white pl-11 pr-3 text-base text-slate-950 outline-none focus:border-slate-500 sm:pr-24"
                   value={commandInput}
                   onChange={(event) => {
                     setCommandInput(event.target.value)
@@ -879,7 +891,7 @@ export function AppShell() {
                 />
                 <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500 sm:block">Ctrl K</span>
               </div>
-              {commandError && <p className="mt-2 text-xs text-red-600">{commandError}</p>}
+              {commandError && <p className="mt-2 text-xs text-rose-600">{commandError}</p>}
             </div>
             <div className="grid min-h-0 flex-1 md:grid-cols-[minmax(0,3fr)_minmax(380px,2fr)]">
               <section className="order-2 min-h-0 overflow-auto border-t border-slate-100 bg-white md:order-1 md:max-h-[76dvh] md:border-r md:border-t-0">
@@ -937,7 +949,7 @@ export function AppShell() {
                 <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   autoFocus
-                  className="h-12 w-full rounded-lg border border-slate-200 bg-white pl-11 pr-3 text-base text-slate-950 outline-none focus:border-blue-300 sm:pr-24"
+                  className="h-12 w-full rounded-lg border border-slate-200 bg-white pl-11 pr-3 text-base text-slate-950 outline-none focus:border-slate-500 sm:pr-24"
                   value={quickSearch}
                   onChange={(event) => setQuickSearch(event.target.value)}
                   onKeyDown={handleQuickSearchKeyDown}
@@ -952,7 +964,7 @@ export function AppShell() {
                   <div className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">Recent</div>
                 )}
                 {quickSearchQuery.isLoading && <QuickSearchSkeleton />}
-                {quickSearchQuery.isError && <div className="px-3 py-10 text-center text-sm text-red-600">Unable to search right now.</div>}
+                {quickSearchQuery.isError && <div className="px-3 py-10 text-center text-sm text-rose-600">Unable to search right now.</div>}
                 {!quickSearchQuery.isLoading && !quickSearchQuery.isError && quickSearchResults.length === 0 && (
                   <div className="px-3 py-10 text-center">
                     <p className="text-sm font-semibold text-slate-700">No matches</p>
@@ -1152,7 +1164,7 @@ function QuickSearchSection({
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
                   <span className="truncate text-base font-medium">{result.title}</span>
-                  {result.isRecent ? <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-blue-700">Recent</span> : null}
+                  {result.isRecent ? <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-700">Recent</span> : null}
                 </span>
                 <span className="mt-0.5 block truncate text-sm text-slate-500">{result.subtitle}</span>
               </span>
@@ -1474,15 +1486,15 @@ function CommandBillDocumentPreview({ command, bookBill, currentBalance, summary
       </article>
       <article className="hidden">
         <header className="border-b-2 border-slate-900 px-4 py-4 text-center">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate-500">Live bill preview</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-slate-500">Live bill preview</p>
           <h3 className="mt-1 text-xl font-black tracking-wide text-slate-950">KAPIL PRODUCTS</h3>
           <p className="mt-1 text-xs text-slate-500">Sales Invoice</p>
         </header>
         <div className="grid grid-cols-2 border-b border-slate-300 text-xs">
-          <div className="border-r border-slate-300 px-3 py-2"><span className="block text-[10px] uppercase text-slate-500">Party</span><strong className="text-sm text-slate-950">{command.customer.name}</strong></div>
-          <div className="px-3 py-2 text-right"><span className="block text-[10px] uppercase text-slate-500">Bill / Date</span><strong className="text-slate-950">{bookBill}</strong><span className="block text-slate-600">{formatFullDate(command.date)}</span></div>
+          <div className="border-r border-slate-300 px-3 py-2"><span className="block text-[11px] uppercase text-slate-500">Party</span><strong className="text-sm text-slate-950">{command.customer.name}</strong></div>
+          <div className="px-3 py-2 text-right"><span className="block text-[11px] uppercase text-slate-500">Bill / Date</span><strong className="text-slate-950">{bookBill}</strong><span className="block text-slate-600">{formatFullDate(command.date)}</span></div>
         </div>
-        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] border-b border-slate-900 bg-slate-100 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] border-b border-slate-900 bg-slate-100 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-600">
           <span>Item</span><span className="w-14 text-right">Qty</span><span className="w-16 text-right">Rate</span><span className="w-20 text-right">Amount</span>
         </div>
         {command.items.map((line, index) => (
@@ -1524,7 +1536,7 @@ function PreviewLine({ label, value, tone = '' }: { label: string; value: string
 function CommandExample({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-      <span className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">{label}</span>
+      <span className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">{label}</span>
       <span className="mt-0.5 block font-mono text-xs font-medium text-slate-700">{value}</span>
     </div>
   )
@@ -1562,7 +1574,7 @@ function CommandSuggestionList({
             <span className="block truncate text-sm font-semibold">{suggestion.label}</span>
             <span className="block truncate text-xs text-slate-500">{suggestion.detail}</span>
           </span>
-          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{suggestion.kind}</span>
+          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{suggestion.kind}</span>
         </button>
       ))}
     </div>

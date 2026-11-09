@@ -13,7 +13,11 @@ import { Route as TransactionsRouteImport } from './routes/transactions'
 import { Route as SuppliersRouteImport } from './routes/suppliers'
 import { Route as SupplierPaymentsRouteImport } from './routes/supplier-payments'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as SalesDashboardRouteImport } from './routes/sales-dashboard'
+import { Route as PurchaseLogsRouteImport } from './routes/purchase-logs'
 import { Route as PurchaseItemsRouteImport } from './routes/purchase-items'
+import { Route as PurchaseDashboardRouteImport } from './routes/purchase-dashboard'
+import { Route as PrintPurchaseBillsRouteImport } from './routes/print-purchase-bills'
 import { Route as PrintBillRouteImport } from './routes/print-bill'
 import { Route as NewSupplierPaymentRouteImport } from './routes/new-supplier-payment'
 import { Route as NewPurchaseBillRouteImport } from './routes/new-purchase-bill'
@@ -37,7 +41,11 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as PurchaseBillsIndexRouteImport } from './routes/purchase-bills/index'
 import { Route as CastingIndexRouteImport } from './routes/casting/index'
 import { Route as SupplierLedgerSupplierIdRouteImport } from './routes/supplier-ledger.$supplierId'
+import { Route as ReportsSalesRouteImport } from './routes/reports/sales'
+import { Route as ReportsPurchaseRouteImport } from './routes/reports/purchase'
+import { Route as ReportsCastingRouteImport } from './routes/reports/casting'
 import { Route as PurchaseBillsBillIdRouteImport } from './routes/purchase-bills/$billId'
+import { Route as DevComponentsRouteImport } from './routes/dev/components'
 import { Route as CastingNewSessionRouteImport } from './routes/casting/new-session'
 import { Route as CastingMaterialsRouteImport } from './routes/casting/materials'
 import { Route as CastingLogRouteImport } from './routes/casting/log'
@@ -63,9 +71,29 @@ const SettingsRoute = SettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SalesDashboardRoute = SalesDashboardRouteImport.update({
+  id: '/sales-dashboard',
+  path: '/sales-dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PurchaseLogsRoute = PurchaseLogsRouteImport.update({
+  id: '/purchase-logs',
+  path: '/purchase-logs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PurchaseItemsRoute = PurchaseItemsRouteImport.update({
   id: '/purchase-items',
   path: '/purchase-items',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PurchaseDashboardRoute = PurchaseDashboardRouteImport.update({
+  id: '/purchase-dashboard',
+  path: '/purchase-dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrintPurchaseBillsRoute = PrintPurchaseBillsRouteImport.update({
+  id: '/print-purchase-bills',
+  path: '/print-purchase-bills',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PrintBillRoute = PrintBillRouteImport.update({
@@ -184,9 +212,29 @@ const SupplierLedgerSupplierIdRoute =
     path: '/supplier-ledger/$supplierId',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ReportsSalesRoute = ReportsSalesRouteImport.update({
+  id: '/reports/sales',
+  path: '/reports/sales',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReportsPurchaseRoute = ReportsPurchaseRouteImport.update({
+  id: '/reports/purchase',
+  path: '/reports/purchase',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReportsCastingRoute = ReportsCastingRouteImport.update({
+  id: '/reports/casting',
+  path: '/reports/casting',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PurchaseBillsBillIdRoute = PurchaseBillsBillIdRouteImport.update({
   id: '/purchase-bills/$billId',
   path: '/purchase-bills/$billId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DevComponentsRoute = DevComponentsRouteImport.update({
+  id: '/dev/components',
+  path: '/dev/components',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CastingNewSessionRoute = CastingNewSessionRouteImport.update({
@@ -231,7 +279,11 @@ export interface FileRoutesByFullPath {
   '/new-purchase-bill': typeof NewPurchaseBillRoute
   '/new-supplier-payment': typeof NewSupplierPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/print-purchase-bills': typeof PrintPurchaseBillsRoute
+  '/purchase-dashboard': typeof PurchaseDashboardRoute
   '/purchase-items': typeof PurchaseItemsRoute
+  '/purchase-logs': typeof PurchaseLogsRoute
+  '/sales-dashboard': typeof SalesDashboardRoute
   '/settings': typeof SettingsRoute
   '/supplier-payments': typeof SupplierPaymentsRoute
   '/suppliers': typeof SuppliersRoute
@@ -240,7 +292,11 @@ export interface FileRoutesByFullPath {
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/dev/components': typeof DevComponentsRoute
   '/purchase-bills/$billId': typeof PurchaseBillsBillIdRoute
+  '/reports/casting': typeof ReportsCastingRoute
+  '/reports/purchase': typeof ReportsPurchaseRoute
+  '/reports/sales': typeof ReportsSalesRoute
   '/supplier-ledger/$supplierId': typeof SupplierLedgerSupplierIdRoute
   '/casting/': typeof CastingIndexRoute
   '/purchase-bills/': typeof PurchaseBillsIndexRoute
@@ -265,7 +321,11 @@ export interface FileRoutesByTo {
   '/new-purchase-bill': typeof NewPurchaseBillRoute
   '/new-supplier-payment': typeof NewSupplierPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/print-purchase-bills': typeof PrintPurchaseBillsRoute
+  '/purchase-dashboard': typeof PurchaseDashboardRoute
   '/purchase-items': typeof PurchaseItemsRoute
+  '/purchase-logs': typeof PurchaseLogsRoute
+  '/sales-dashboard': typeof SalesDashboardRoute
   '/settings': typeof SettingsRoute
   '/supplier-payments': typeof SupplierPaymentsRoute
   '/suppliers': typeof SuppliersRoute
@@ -274,7 +334,11 @@ export interface FileRoutesByTo {
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/dev/components': typeof DevComponentsRoute
   '/purchase-bills/$billId': typeof PurchaseBillsBillIdRoute
+  '/reports/casting': typeof ReportsCastingRoute
+  '/reports/purchase': typeof ReportsPurchaseRoute
+  '/reports/sales': typeof ReportsSalesRoute
   '/supplier-ledger/$supplierId': typeof SupplierLedgerSupplierIdRoute
   '/casting': typeof CastingIndexRoute
   '/purchase-bills': typeof PurchaseBillsIndexRoute
@@ -301,7 +365,11 @@ export interface FileRoutesById {
   '/new-purchase-bill': typeof NewPurchaseBillRoute
   '/new-supplier-payment': typeof NewSupplierPaymentRoute
   '/print-bill': typeof PrintBillRoute
+  '/print-purchase-bills': typeof PrintPurchaseBillsRoute
+  '/purchase-dashboard': typeof PurchaseDashboardRoute
   '/purchase-items': typeof PurchaseItemsRoute
+  '/purchase-logs': typeof PurchaseLogsRoute
+  '/sales-dashboard': typeof SalesDashboardRoute
   '/settings': typeof SettingsRoute
   '/supplier-payments': typeof SupplierPaymentsRoute
   '/suppliers': typeof SuppliersRoute
@@ -310,7 +378,11 @@ export interface FileRoutesById {
   '/casting/log': typeof CastingLogRoute
   '/casting/materials': typeof CastingMaterialsRoute
   '/casting/new-session': typeof CastingNewSessionRoute
+  '/dev/components': typeof DevComponentsRoute
   '/purchase-bills/$billId': typeof PurchaseBillsBillIdRoute
+  '/reports/casting': typeof ReportsCastingRoute
+  '/reports/purchase': typeof ReportsPurchaseRoute
+  '/reports/sales': typeof ReportsSalesRoute
   '/supplier-ledger/$supplierId': typeof SupplierLedgerSupplierIdRoute
   '/casting/': typeof CastingIndexRoute
   '/purchase-bills/': typeof PurchaseBillsIndexRoute
@@ -338,7 +410,11 @@ export interface FileRouteTypes {
     | '/new-purchase-bill'
     | '/new-supplier-payment'
     | '/print-bill'
+    | '/print-purchase-bills'
+    | '/purchase-dashboard'
     | '/purchase-items'
+    | '/purchase-logs'
+    | '/sales-dashboard'
     | '/settings'
     | '/supplier-payments'
     | '/suppliers'
@@ -347,7 +423,11 @@ export interface FileRouteTypes {
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
+    | '/dev/components'
     | '/purchase-bills/$billId'
+    | '/reports/casting'
+    | '/reports/purchase'
+    | '/reports/sales'
     | '/supplier-ledger/$supplierId'
     | '/casting/'
     | '/purchase-bills/'
@@ -372,7 +452,11 @@ export interface FileRouteTypes {
     | '/new-purchase-bill'
     | '/new-supplier-payment'
     | '/print-bill'
+    | '/print-purchase-bills'
+    | '/purchase-dashboard'
     | '/purchase-items'
+    | '/purchase-logs'
+    | '/sales-dashboard'
     | '/settings'
     | '/supplier-payments'
     | '/suppliers'
@@ -381,7 +465,11 @@ export interface FileRouteTypes {
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
+    | '/dev/components'
     | '/purchase-bills/$billId'
+    | '/reports/casting'
+    | '/reports/purchase'
+    | '/reports/sales'
     | '/supplier-ledger/$supplierId'
     | '/casting'
     | '/purchase-bills'
@@ -407,7 +495,11 @@ export interface FileRouteTypes {
     | '/new-purchase-bill'
     | '/new-supplier-payment'
     | '/print-bill'
+    | '/print-purchase-bills'
+    | '/purchase-dashboard'
     | '/purchase-items'
+    | '/purchase-logs'
+    | '/sales-dashboard'
     | '/settings'
     | '/supplier-payments'
     | '/suppliers'
@@ -416,7 +508,11 @@ export interface FileRouteTypes {
     | '/casting/log'
     | '/casting/materials'
     | '/casting/new-session'
+    | '/dev/components'
     | '/purchase-bills/$billId'
+    | '/reports/casting'
+    | '/reports/purchase'
+    | '/reports/sales'
     | '/supplier-ledger/$supplierId'
     | '/casting/'
     | '/purchase-bills/'
@@ -443,12 +539,20 @@ export interface RootRouteChildren {
   NewPurchaseBillRoute: typeof NewPurchaseBillRoute
   NewSupplierPaymentRoute: typeof NewSupplierPaymentRoute
   PrintBillRoute: typeof PrintBillRoute
+  PrintPurchaseBillsRoute: typeof PrintPurchaseBillsRoute
+  PurchaseDashboardRoute: typeof PurchaseDashboardRoute
   PurchaseItemsRoute: typeof PurchaseItemsRoute
+  PurchaseLogsRoute: typeof PurchaseLogsRoute
+  SalesDashboardRoute: typeof SalesDashboardRoute
   SettingsRoute: typeof SettingsRoute
   SupplierPaymentsRoute: typeof SupplierPaymentsRoute
   SuppliersRoute: typeof SuppliersRoute
   TransactionsRoute: typeof TransactionsRoute
+  DevComponentsRoute: typeof DevComponentsRoute
   PurchaseBillsBillIdRoute: typeof PurchaseBillsBillIdRoute
+  ReportsCastingRoute: typeof ReportsCastingRoute
+  ReportsPurchaseRoute: typeof ReportsPurchaseRoute
+  ReportsSalesRoute: typeof ReportsSalesRoute
   SupplierLedgerSupplierIdRoute: typeof SupplierLedgerSupplierIdRoute
   PurchaseBillsIndexRoute: typeof PurchaseBillsIndexRoute
 }
@@ -483,11 +587,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/sales-dashboard': {
+      id: '/sales-dashboard'
+      path: '/sales-dashboard'
+      fullPath: '/sales-dashboard'
+      preLoaderRoute: typeof SalesDashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/purchase-logs': {
+      id: '/purchase-logs'
+      path: '/purchase-logs'
+      fullPath: '/purchase-logs'
+      preLoaderRoute: typeof PurchaseLogsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/purchase-items': {
       id: '/purchase-items'
       path: '/purchase-items'
       fullPath: '/purchase-items'
       preLoaderRoute: typeof PurchaseItemsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/purchase-dashboard': {
+      id: '/purchase-dashboard'
+      path: '/purchase-dashboard'
+      fullPath: '/purchase-dashboard'
+      preLoaderRoute: typeof PurchaseDashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/print-purchase-bills': {
+      id: '/print-purchase-bills'
+      path: '/print-purchase-bills'
+      fullPath: '/print-purchase-bills'
+      preLoaderRoute: typeof PrintPurchaseBillsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/print-bill': {
@@ -651,11 +783,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SupplierLedgerSupplierIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/reports/sales': {
+      id: '/reports/sales'
+      path: '/reports/sales'
+      fullPath: '/reports/sales'
+      preLoaderRoute: typeof ReportsSalesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reports/purchase': {
+      id: '/reports/purchase'
+      path: '/reports/purchase'
+      fullPath: '/reports/purchase'
+      preLoaderRoute: typeof ReportsPurchaseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reports/casting': {
+      id: '/reports/casting'
+      path: '/reports/casting'
+      fullPath: '/reports/casting'
+      preLoaderRoute: typeof ReportsCastingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/purchase-bills/$billId': {
       id: '/purchase-bills/$billId'
       path: '/purchase-bills/$billId'
       fullPath: '/purchase-bills/$billId'
       preLoaderRoute: typeof PurchaseBillsBillIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dev/components': {
+      id: '/dev/components'
+      path: '/dev/components'
+      fullPath: '/dev/components'
+      preLoaderRoute: typeof DevComponentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/casting/new-session': {
@@ -729,12 +889,20 @@ const rootRouteChildren: RootRouteChildren = {
   NewPurchaseBillRoute: NewPurchaseBillRoute,
   NewSupplierPaymentRoute: NewSupplierPaymentRoute,
   PrintBillRoute: PrintBillRoute,
+  PrintPurchaseBillsRoute: PrintPurchaseBillsRoute,
+  PurchaseDashboardRoute: PurchaseDashboardRoute,
   PurchaseItemsRoute: PurchaseItemsRoute,
+  PurchaseLogsRoute: PurchaseLogsRoute,
+  SalesDashboardRoute: SalesDashboardRoute,
   SettingsRoute: SettingsRoute,
   SupplierPaymentsRoute: SupplierPaymentsRoute,
   SuppliersRoute: SuppliersRoute,
   TransactionsRoute: TransactionsRoute,
+  DevComponentsRoute: DevComponentsRoute,
   PurchaseBillsBillIdRoute: PurchaseBillsBillIdRoute,
+  ReportsCastingRoute: ReportsCastingRoute,
+  ReportsPurchaseRoute: ReportsPurchaseRoute,
+  ReportsSalesRoute: ReportsSalesRoute,
   SupplierLedgerSupplierIdRoute: SupplierLedgerSupplierIdRoute,
   PurchaseBillsIndexRoute: PurchaseBillsIndexRoute,
 }

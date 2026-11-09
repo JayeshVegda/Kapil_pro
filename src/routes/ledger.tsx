@@ -1,7 +1,13 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, isRedirect, redirect, useNavigate } from '@tanstack/react-router'
+import { toast } from 'sonner'
+import { loadModuleSettingsForGuard } from '@/data/module-settings'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, FileText, Printer } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { z } from 'zod'
+import { useModuleSettings } from '@/lib/use-module-settings'
+import { CustomersPage } from '@/routes/customers'
+import { SuppliersPage } from '@/routes/suppliers'
 import { BillPrintLayout, BILL_PRINT_PAGE_WIDTH_CM, type BillPrintLayoutProps } from '@/components/billing/bill-print-layout'
 import { PartyListPanel } from '@/components/ledger/party-list-panel'
 import { PartyTrendChart } from '@/components/ledger/party-trend-chart'
@@ -19,19 +25,86 @@ import { BILL_JPEG_OUTPUT_WIDTH_PX } from '@/lib/image-export-config'
 import { formatInQty, formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/ledger')({
-  validateSearch: (search: Record<string, unknown>) => ({
-    customerId: typeof search.customerId === 'string' ? search.customerId : '',
-    focus: search.focus === 'overdue' ? 'overdue' : '',
+  validateSearch: z.object({
+    tab: z.enum(['customers', 'suppliers']).optional(),
+    supplierId: z.string().optional(),
+    supplierSection: z.enum(['ledger', 'bills', 'payments']).optional(),
+    highlightBill: z.string().optional(),
+    customerId: z.string().optional(),
+    focus: z.string().optional(),
   }),
+  beforeLoad: async ({ search }) => {
+    if (search.tab !== 'suppliers') return
+    try {
+      const settings = await loadModuleSettingsForGuard()
+      if (!settings.purchaseEnabled) { toast.info('Purchase is turned off in Settings'); throw redirect({ to: '/' }) }
+    } catch (error) { if (isRedirect(error)) throw error }
+  },
   component: LedgerPage,
 })
 
 const actionButtonClass =
   'inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50'
 const dateInputClass =
-  'h-9 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100'
+  'h-9 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
 
 function LedgerPage() {
+  const search = Route.useSearch()
+  const navigate = useNavigate()
+  const { purchaseEnabled } = useModuleSettings()
+  const [manageParties, setManageParties] = useState(false)
+  const tab = search.tab === 'suppliers' && purchaseEnabled ? 'suppliers' : 'customers'
+  return (
+    <div>
+      {/* One card toolbar, operational redesign Phase 3: the Sales/Purchase
+          switch and the shared party-manager control live in the same card.
+          URL params stay `tab=customers|suppliers`; only visible labels are
+          renamed to the module names. Sales and Purchase party balances are
+          strictly separate (customers receivable / suppliers payable). */}
+      <div className="mx-3 mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm sm:mx-4 lg:mx-6">
+        <div className="flex w-fit gap-1 rounded-lg bg-slate-50 p-1" role="tablist" aria-label="Party ledger tab">
+          <button
+            type="button"
+            aria-selected={tab === 'customers'}
+            className={`rounded-md px-4 py-1.5 text-xs font-semibold ${tab === 'customers' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+            onClick={() => void navigate({ to: '/ledger', search: { tab: 'customers' } })}
+          >
+            Sales
+          </button>
+          {purchaseEnabled && (
+            <button
+              type="button"
+              aria-selected={tab === 'suppliers'}
+              className={`rounded-md px-4 py-1.5 text-xs font-semibold ${tab === 'suppliers' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+              onClick={() => void navigate({ to: '/ledger', search: { tab: 'suppliers' } })}
+            >
+              Purchase
+            </button>
+          )}
+        </div>
+        <p className="hidden text-xs text-slate-400 sm:block">
+          Customers and suppliers stay separate books — balances are never combined.
+        </p>
+        <button
+          type="button"
+          aria-expanded={manageParties}
+          onClick={() => setManageParties((value) => !value)}
+          className="ml-auto rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 transition hover:bg-slate-50"
+        >
+          {manageParties ? 'Done managing' : 'Manage parties'}
+        </button>
+      </div>
+      {tab === 'suppliers' ? (
+        <SuppliersPage
+          search={{ supplierId: search.supplierId, supplierSection: search.supplierSection, highlightBill: search.highlightBill, focus: search.focus }}
+          manageOpen={manageParties}
+        />
+      ) : manageParties ? <CustomersPage /> : <CustomerLedgerView />}
+    </div>
+  )
+}
+
+function CustomerLedgerView() {
   const search = Route.useSearch()
   const today = useMemo(() => getLocalIsoDate(), [])
   const [toDate, setToDate] = useState(today)

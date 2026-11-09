@@ -72,7 +72,7 @@ export function PaymentAmountInput({
       {showInterpretation && (
         <span
           id={interpretationId}
-          className="pointer-events-none absolute right-1 top-full z-10 mt-0.5 whitespace-nowrap text-[10px] leading-3 text-slate-400"
+          className="pointer-events-none absolute right-1 top-full z-10 mt-0.5 whitespace-nowrap text-[11px] leading-3 text-slate-400"
           aria-live="polite"
         >
           = {formatInrInteger(interpreted)}

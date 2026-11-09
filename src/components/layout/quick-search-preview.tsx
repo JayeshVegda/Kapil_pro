@@ -72,7 +72,7 @@ function BillPreview({ result, onAction }: { result: QuickSearchResult; onAction
       </div>
       <div className="grid grid-cols-2 gap-3">
         <Metric label="Total amount" value={formatInrInteger(bill.total)} strong />
-        <div className={`rounded-lg border px-3 py-2 ${paid ? 'border-green-200 bg-green-50 text-green-800' : 'border-red-200 bg-red-50 text-red-800'}`}>
+        <div className={`rounded-lg border px-3 py-2 ${paid ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-rose-200 bg-rose-50 text-rose-800'}`}>
           <p className="text-xs font-semibold uppercase tracking-[0.08em]">{paid ? 'Paid' : 'Pending'}</p>
           <p className="mt-1 text-lg font-bold">{paid ? formatInrInteger(bill.paidAmount) : formatInrInteger(bill.pendingAmount)}</p>
         </div>
@@ -93,7 +93,7 @@ function BillPreview({ result, onAction }: { result: QuickSearchResult; onAction
 function CustomerPreview({ result, onAction }: { result: QuickSearchResult; onAction: QuickSearchPreviewProps['onAction'] }) {
   const customer = result.details?.customer
   if (!customer) return null
-  const balanceTone = customer.balanceLabel === 'Due' ? 'text-red-700' : customer.balanceLabel === 'Advance' ? 'text-green-700' : 'text-slate-700'
+  const balanceTone = customer.balanceLabel === 'Due' ? 'text-rose-700' : customer.balanceLabel === 'Advance' ? 'text-emerald-700' : 'text-slate-700'
   return (
     <div className="space-y-4">
       <div>
@@ -134,7 +134,7 @@ function RatePreview({ result, onAction }: { result: QuickSearchResult; onAction
       <div>
         <p className="text-2xl font-bold text-slate-950">{formatFullDate(rate.date)}</p>
         {typeof rate.change === 'number' ? (
-          <p className={`mt-1 text-sm font-semibold ${rate.change >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+          <p className={`mt-1 text-sm font-semibold ${rate.change >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
             {rate.change >= 0 ? '↑' : '↓'} {formatInrInteger(Math.abs(rate.change))} vs yesterday
           </p>
         ) : null}

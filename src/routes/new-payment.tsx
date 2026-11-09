@@ -1,3 +1,4 @@
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDownRight, CheckCircle2, IndianRupee, Landmark, ReceiptText } from 'lucide-react'
@@ -478,7 +479,7 @@ function NewPaymentPage() {
           </div>
 
           {ledgerQuery.isLoading && <p className="text-sm text-slate-500">Loading customer ledger...</p>}
-          {ledgerQuery.isError && <p className="text-sm text-red-600">Unable to load customer ledger.</p>}
+          {ledgerQuery.isError && <p className="text-sm text-rose-600">Unable to load customer ledger.</p>}
           {!ledgerQuery.isLoading && !ledgerQuery.isError && !paymentPreview && (
             <p className="text-sm text-slate-500">Select a customer and payment date to view balances.</p>
           )}
@@ -721,5 +722,4 @@ function ConfirmRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-const inputClass =
-  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+const inputClass = `${baseInputClass} h-10`

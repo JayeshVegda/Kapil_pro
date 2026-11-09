@@ -1,3 +1,4 @@
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2 } from 'lucide-react'
@@ -116,7 +117,9 @@ function CastingNewSessionPage() {
     if (!defaultsQuery.isSuccess || defaultsAppliedRef.current) return
     defaultsAppliedRef.current = true
     const defaults = defaultsQuery.data
+    if (defaults.coalKg > 0) setCoalKg(defaults.coalKg)
     if (defaults.coalRate > 0) setCoalRate(defaults.coalRate)
+    if (defaults.workerSalary > 0) setWorkerSalary(defaults.workerSalary)
     setRows((prev) =>
       prev.map((row) => {
         const rate = defaults.materialRates[row.name.trim().toLowerCase()]
@@ -278,7 +281,7 @@ function CastingNewSessionPage() {
                 {Array.from({ length: batchCount }, (_, idx) => (
                   <th key={idx} className="w-16 px-0.5 py-2.5 text-center font-bold text-slate-600">
                     <span className="inline-flex items-center justify-center gap-1">
-                      <span className="text-[10px] tracking-tight bg-slate-100 px-1 py-0.5 rounded text-slate-500 uppercase font-semibold">B{idx + 1}</span>
+                      <span className="text-[11px] tracking-tight bg-slate-100 px-1 py-0.5 rounded text-slate-500 uppercase font-semibold">B{idx + 1}</span>
                       <button type="button" className="rounded text-rose-500 hover:bg-rose-50 hover:text-rose-700 disabled:opacity-30 transition" onClick={() => removeBatch(idx)} disabled={batchCount <= 1} aria-label={`Remove batch ${idx + 1}`}>
                         <Trash2 size={11} />
                       </button>
@@ -363,15 +366,15 @@ function CastingNewSessionPage() {
               </div>
               <div className="grid grid-cols-3 gap-2 pt-2 text-xs">
                 <div className="rounded-lg bg-slate-50 border border-slate-150 p-2">
-                  <span className="block text-[10px] uppercase font-bold text-slate-400">Metal / kg</span>
+                  <span className="block text-[11px] uppercase font-bold text-slate-400">Metal / kg</span>
                   <span className="font-mono font-bold text-slate-800">{cost.metalCostPerKg > 0 ? `₹${cost.metalCostPerKg.toFixed(1)}` : '—'}</span>
                 </div>
                 <div className="rounded-lg bg-slate-50 border border-slate-150 p-2">
-                  <span className="block text-[10px] uppercase font-bold text-slate-400">Coal / kg</span>
+                  <span className="block text-[11px] uppercase font-bold text-slate-400">Coal / kg</span>
                   <span className="font-mono font-bold text-slate-800">{cost.coalCostPerKg > 0 ? `₹${cost.coalCostPerKg.toFixed(1)}` : '—'}</span>
                 </div>
                 <div className="rounded-lg bg-slate-50 border border-slate-150 p-2">
-                  <span className="block text-[10px] uppercase font-bold text-slate-400">Worker / kg</span>
+                  <span className="block text-[11px] uppercase font-bold text-slate-400">Worker / kg</span>
                   <span className="font-mono font-bold text-slate-800">{cost.workerCostPerKg > 0 ? `₹${cost.workerCostPerKg.toFixed(1)}` : '—'}</span>
                 </div>
               </div>
@@ -379,7 +382,7 @@ function CastingNewSessionPage() {
           </div>
           <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
             <div>
-              <span className="block text-[10px] uppercase font-bold text-slate-400">Final Casting Rod Cost</span>
+              <span className="block text-[11px] uppercase font-bold text-slate-400">Final Casting Rod Cost</span>
               <span className="text-xs text-slate-500">Loaded cost per kg of wire</span>
             </div>
             <span className="font-mono text-xl font-extrabold text-amber-800">{cost.finalCastingCostPerKg > 0 ? `₹${cost.finalCastingCostPerKg.toFixed(2)}/kg` : '—'}</span>
@@ -407,7 +410,7 @@ function CastingNewSessionPage() {
           </div>
           <div className="mt-4 pt-3.5 border-t-2 border-double border-slate-200 flex items-center justify-between">
             <div>
-              <span className="block text-[10px] uppercase font-bold text-slate-400">Final Ready Cost</span>
+              <span className="block text-[11px] uppercase font-bold text-slate-400">Final Ready Cost</span>
               <span className="text-xs text-slate-500">Raw metal + 2kg overheads</span>
             </div>
             <span className="font-mono text-2xl font-black text-blue-700">{cost.finalProductCostPerKg > 0 ? `₹${cost.finalProductCostPerKg.toFixed(2)}/kg` : '—'}</span>
@@ -419,14 +422,14 @@ function CastingNewSessionPage() {
       <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex items-center gap-6">
           <div className="text-xs">
-            <span className="block font-bold text-slate-400 uppercase tracking-wider text-[10px]">Vilaity Market Rate</span>
+            <span className="block font-bold text-slate-400 uppercase tracking-wider text-[11px]">Vilaity Market Rate</span>
             <span className="font-mono text-sm font-semibold text-slate-900 mt-0.5 block">
               {marketRateQuery.data?.rate ? `₹${marketRateQuery.data.rate.toFixed(2)}` : '—'}
               {marketRateQuery.data?.rateDate && <span className="text-slate-400 font-normal"> ({formatFullDate(marketRateQuery.data.rateDate)})</span>}
             </span>
           </div>
           <div className="text-xs">
-            <span className="block font-bold text-slate-400 uppercase tracking-wider text-[10px]">Casting cost vs Market</span>
+            <span className="block font-bold text-slate-400 uppercase tracking-wider text-[11px]">Casting cost vs Market</span>
             <span className="font-mono text-sm font-semibold text-slate-900 mt-0.5 block">
               {marketRateQuery.data?.rate && cost.finalCastingCostPerKg > 0 ? (
                 <span className={cost.finalCastingCostPerKg >= marketRateQuery.data.rate ? 'text-rose-600' : 'text-emerald-600'}>
@@ -463,5 +466,4 @@ function formatKg(value: number) {
   return `${(Number.isFinite(value) ? value : 0).toFixed(3)} kg`
 }
 
-const inputClass =
-  'h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+const inputClass = `${baseInputClass} h-10`

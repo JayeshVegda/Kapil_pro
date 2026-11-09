@@ -8,7 +8,7 @@ type Props = {
   disabled?: boolean
 }
 
-export function DateInput({ value, onChange, className, disabled = false }: Props) {
+export function DateInput({ value, onChange, className, disabled = false, id }: Props & { id?: string }) {
   const [display, setDisplay] = useState(() => formatFullDate(value))
 
   useEffect(() => {
@@ -33,6 +33,7 @@ export function DateInput({ value, onChange, className, disabled = false }: Prop
 
   return (
     <input
+      id={id}
       className={className}
       value={display}
       onChange={(event) => setDisplay(event.target.value)}

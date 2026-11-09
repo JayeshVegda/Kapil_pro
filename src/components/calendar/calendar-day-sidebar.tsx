@@ -39,7 +39,7 @@ export function CalendarDaySidebar({ data }: { data: CalendarDaySidebarData }) {
     <div className="space-y-3">
       <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
         <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-100 pb-2">
-          <p className="inline-flex min-w-0 items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+          <p className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
             <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-700">
               <CalendarDays size={12} />
             </span>
@@ -131,7 +131,7 @@ function formatNumber(value: number) {
 function DayMetric({ label, value, tone, surface }: { label: string; value: string; tone: string; surface: string }) {
   return (
     <div className={`min-w-0 rounded-md border px-2 py-1.5 ${surface}`}>
-      <p className="truncate text-[9px] font-semibold uppercase tracking-[0.07em] text-slate-500">{label}</p>
+      <p className="truncate text-[11px] font-semibold uppercase tracking-[0.07em] text-slate-500">{label}</p>
       <p className={`mt-0.5 truncate font-mono text-[13px] font-bold leading-tight tabular-nums ${tone}`}>{value}</p>
     </div>
   )

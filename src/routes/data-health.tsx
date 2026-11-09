@@ -61,7 +61,7 @@ function DataHealthPage() {
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         {healthQuery.isLoading && <p className="text-sm text-slate-500">Checking data...</p>}
-        {healthQuery.isError && <p className="text-sm text-red-600">Unable to load data health checks.</p>}
+        {healthQuery.isError && <p className="text-sm text-rose-600">Unable to load data health checks.</p>}
         {!healthQuery.isLoading && !healthQuery.isError && issues.length === 0 && (
           <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
             <CheckCircle2 size={16} />
@@ -141,17 +141,17 @@ function DataHealthPage() {
 }
 
 function Metric({ label, value, tone }: { label: string; value: number; tone: 'red' | 'amber' | 'slate' }) {
-  const toneClass = tone === 'red' ? 'text-red-700 bg-red-50 border-red-200' : tone === 'amber' ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-slate-700 bg-slate-50 border-slate-200'
+  const toneClass = tone === 'red' ? 'text-rose-700 bg-rose-50 border-rose-200' : tone === 'amber' ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-slate-700 bg-slate-50 border-slate-200'
   return (
     <div className={`min-w-20 rounded-lg border px-3 py-2 ${toneClass}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.08em]">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.08em]">{label}</p>
       <p className="font-mono text-lg font-bold">{value}</p>
     </div>
   )
 }
 
 function SeverityBadge({ severity }: { severity: DataHealthIssue['severity'] }) {
-  const styles = severity === 'High' ? 'bg-red-100 text-red-700' : severity === 'Medium' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700'
+  const styles = severity === 'High' ? 'bg-rose-100 text-rose-700' : severity === 'Medium' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700'
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${styles}`}>
       <AlertTriangle size={12} />

@@ -114,7 +114,7 @@ function BackupPage() {
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="mb-3 text-sm font-semibold text-slate-900">Snapshot Summary</h3>
         {backupQuery.isLoading && <p className="text-sm text-slate-500">Loading backup snapshot...</p>}
-        {backupQuery.isError && <p className="text-sm text-red-600">Unable to prepare backup snapshot.</p>}
+        {backupQuery.isError && <p className="text-sm text-rose-600">Unable to prepare backup snapshot.</p>}
         {backupQuery.data && (
           <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
             <Metric label="Customers" value={String(backupQuery.data.counts.customers)} />

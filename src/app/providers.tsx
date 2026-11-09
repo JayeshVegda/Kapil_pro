@@ -10,11 +10,12 @@ import { Toaster } from '@/components/ui/sonner'
 import { DASHBOARD_QUERY_KEY, fetchDashboardData } from '@/domain/dashboard'
 import { loadCustomerOptions } from '@/data/customers'
 import { loadItemOptions } from '@/data/items'
+import { getLocalIsoDate } from '@/lib/date'
 
 /**
  * Bump when persisted query shapes change so old caches are dropped.
  */
-const QUERY_CACHE_BUSTER = 'v2'
+const QUERY_CACHE_BUSTER = 'v3'
 
 /**
  * Queries worth keeping across browser restarts. Everything else refetches
@@ -75,8 +76,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
     // compete with the route's own render queries.
     const warm = () => {
       void queryClient.prefetchQuery({
-        queryKey: DASHBOARD_QUERY_KEY,
-        queryFn: fetchDashboardData,
+        queryKey: [...DASHBOARD_QUERY_KEY, getLocalIsoDate()],
+        queryFn: () => fetchDashboardData(getLocalIsoDate()),
       })
     }
     const idle = (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback

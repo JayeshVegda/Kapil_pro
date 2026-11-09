@@ -33,7 +33,7 @@ export type TrendChartProps = {
 }
 
 /**
- * Standard Recharts wrapper with unified slate/emerald palette and zero blue series.
+ * Standard Recharts wrapper with unified executive blue/emerald palette and semantic benchmarking.
  * Capped at 24 points to keep rendering performant.
  */
 export function TrendChart({

@@ -37,11 +37,11 @@ export function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             placeholder="Password"
-            className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
             autoFocus
             autoComplete="current-password"
           />
-          {errorText && <p className="text-sm text-red-600">{errorText}</p>}
+          {errorText && <p className="text-sm text-rose-600">{errorText}</p>}
           <button
             type="submit"
             disabled={submitting}

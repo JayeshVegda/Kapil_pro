@@ -1,4 +1,4 @@
-import { computeBillNet, type PurchaseTaxMode } from './supplier-purchases'
+import { computeBillNet } from './supplier-purchases'
 import { roundPaise, toDayKey } from './financial-math'
 
 /**
@@ -85,8 +85,7 @@ export function buildSupplierLedger(input: SupplierLedgerInput): SupplierLedgerR
   const events: Event[] = []
   const push = (event: SupplierLedgerEntry, inWindow: boolean) => events.push({ ...event, inWindow })
 
-  const poolByBill = new Map<string, SupplierPool>()
-  for (const bill of input.bills) poolByBill.set(bill.id, bill.pool)
+  const billById = new Map(input.bills.map((bill) => [bill.id, bill]))
 
   // ---- bills (cancelled -> excluded; zero effect) ----
   const linesByBill = new Map<string, LedgerLineInput[]>()
@@ -101,7 +100,11 @@ export function buildSupplierLedger(input: SupplierLedgerInput): SupplierLedgerR
     list.push({ billId: adjustment.billId, type: adjustment.type, amountPaise: adjustment.amountPaise })
     adjustmentsByBill.set(adjustment.billId, list)
   }
-  const bardanEntries = input.bardan ?? []
+  const bardanEntries = [...(input.bardan ?? [])].sort((a, b) => {
+    const keyA = `${toDayKey(a.date)}|${a.created}|${a.id}`
+    const keyB = `${toDayKey(b.date)}|${b.created}|${b.id}`
+    return keyA < keyB ? -1 : keyA > keyB ? 1 : 0
+  })
 
   for (const bill of input.bills) {
     if (bill.cancelled) continue
@@ -109,7 +112,7 @@ export function buildSupplierLedger(input: SupplierLedgerInput): SupplierLedgerR
       linesByBill.get(bill.id) ?? [],
       adjustmentsByBill.get(bill.id) ?? [],
       [], // bardan deduct is its own ledger row; including it here would double-count
-      bill.taxMode as PurchaseTaxMode,
+      bill.taxMode,
       bill.gstRateBp,
     ).netPaise
     push(
@@ -127,18 +130,29 @@ export function buildSupplierLedger(input: SupplierLedgerInput): SupplierLedgerR
     )
   }
 
-  // ---- bardan rows (pooled via their bill) ----
+  // Deduction events carry the change in the rounded, tax-aware bill net.
+  const deductionsByBill = new Map<string, LedgerBardanInput[]>()
   for (const entry of bardanEntries) {
-    if (entry.cancelled) continue
-    const zeroEffect = entry.method === 'in_kind' || entry.method === 'cash_back'
+    const bill = billById.get(entry.billId)
+    if (entry.cancelled || !bill || bill.cancelled) continue
+    let amountPaise = 0
+    if (entry.method === 'deduct') {
+      const deductions = deductionsByBill.get(bill.id) ?? []
+      const lines = linesByBill.get(bill.id) ?? []
+      const adjustments = adjustmentsByBill.get(bill.id) ?? []
+      const beforeNet = computeBillNet(lines, adjustments, deductions, bill.taxMode, bill.gstRateBp).netPaise
+      deductions.push(entry)
+      deductionsByBill.set(bill.id, deductions)
+      amountPaise = computeBillNet(lines, adjustments, deductions, bill.taxMode, bill.gstRateBp).netPaise - beforeNet
+    }
     push(
       {
         id: entry.id,
         date: entry.date,
         created: entry.created,
-        pool: poolByBill.get(entry.billId) ?? 'kacha',
+        pool: bill.pool,
         kind: entry.method === 'deduct' ? 'bardan_deduct' : entry.method === 'advance' ? 'bardan_advance' : entry.method,
-        amountPaise: zeroEffect ? 0 : -Math.abs(entry.creditPaise),
+        amountPaise,
         balancePaise: 0,
         label: entry.note ?? '',
       },
@@ -191,6 +205,14 @@ export function buildSupplierLedger(input: SupplierLedgerInput): SupplierLedgerR
 
   for (const event of events) {
     if (outOfPoolScope(event.pool, poolFilter)) continue
+    const eventDay = toDayKey(event.date)
+    if (to && eventDay > to) continue
+    if (from && eventDay < from) {
+      balances[event.pool] += event.amountPaise
+      openingPaise = visibleBalance(poolFilter, balances)
+      closingPaise = openingPaise
+      continue
+    }
     if (event.inWindow && !sawInWindow) {
       openingPaise = visibleBalance(poolFilter, balances)
       sawInWindow = true

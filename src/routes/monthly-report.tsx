@@ -2,1610 +2,1507 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle,
-  AlertTriangle,
-  ArrowDownRight,
   ArrowRight,
-  ArrowUpRight,
-  Calendar,
-  CheckCircle2,
-  CircleDollarSign,
+  Building2,
   Download,
-  Landmark,
-  ReceiptText,
-  TrendingUp,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { loadDashboardCollections } from '@/data/dashboard'
 import { purchaseReadModelQueryOptions } from '@/data/purchase-queries'
 import { loadCastingSessions } from '@/data/casting'
 import { useModuleSettings } from '@/lib/use-module-settings'
-import { computeBillNet } from '@/domain/supplier-purchases'
 import { computeSupplierPositions } from '@/domain/supplier-settlement'
 import { computeSafeRecoveryAndWastage } from '@/domain/casting-dashboard-calculations'
 import { fiscalYearStart } from '@/domain/dashboard'
-import { formatCompactInr, formatCompactKg, formatInrInteger, formatPaiseInr } from '@/lib/inr-format'
-import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
-import { buildGasSalesReport, type GasSalesGroup } from '@/domain/gas-sales-reporting'
-import { computeCustomerOutstanding, type CanonicalBillRecord, type CanonicalPaymentRecord } from '@/domain/records'
-import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
+import {
+  formatCompactInr,
+  formatCompactKg,
+  formatInrInteger,
+} from '@/lib/inr-format'
+import {
+  formatFullDate,
+  formatMonthYear,
+  getLocalIsoDate,
+} from '@/lib/date'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { exportNodeAsJpg } from '@/lib/image-export'
 import { Panel } from '@/components/ui/panel'
-import { SectionCard } from '@/components/ui/business-kit'
+import { SectionCard, KpiCard } from '@/components/ui/business-kit'
 import { Sparkline } from '@/components/charts/sparkline'
-import {
-  CollectionEfficiencyGauge,
-  GasSellingRateTrendChart,
-  ReceivableAgingBars,
-  SalesCollectionTrendChart,
-  WeeklySalesChart,
-  type AgingBucketKey,
-} from '@/components/reports/company-charts'
+import { RankedBars } from '@/components/charts/ranked-bars'
+import { StackedBar } from '@/components/charts/stacked-bar'
+import { TrendChart } from '@/components/charts/trend-chart'
+import { CHART_THEME } from '@/components/charts/chart-theme'
+import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/monthly-report')({
-  component: ReportPage,
+  component: CompanyReportPage,
 })
 
-function ReportPage() {
+export type ReportPeriodMode = 'month' | 'last_month' | 'fy' | 'prev_fy'
+export type AgingBucketKey = 'current' | 'days31to60' | 'days61to90' | 'above90'
+
+type ReportRange = {
+  from: string
+  to: string
+  label: string
+  comparisonNote: string
+}
+
+function shiftMonth(monthStr: string, delta: number): string {
+  const [y, m] = monthStr.split('-').map(Number)
+  const d = new Date(y, m - 1 + delta, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+function lastDayOfMonth(yearMonth: string): string {
+  const [y, m] = yearMonth.split('-').map(Number)
+  const d = new Date(y, m, 0)
+  return `${yearMonth}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function calculateBillTotal(base: number, transport: number, gstRate: number, gstAmount: number): number {
+  const effectiveGst = gstAmount > 0 ? gstAmount : (base * gstRate) / 100
+  return Math.round(base + transport + effectiveGst)
+}
+
+function dateDiffDays(fromIso: string, toIso: string): number {
+  if (!fromIso || !toIso) return 0
+  const f = new Date(`${fromIso.slice(0, 10)}T00:00:00`).getTime()
+  const t = new Date(`${toIso.slice(0, 10)}T00:00:00`).getTime()
+  if (isNaN(f) || isNaN(t)) return 0
+  return Math.max(0, Math.floor((t - f) / (24 * 60 * 60 * 1000)))
+}
+
+export function CompanyReportPage() {
   const reportRef = useRef<HTMLDivElement>(null)
   const [exportError, setExportError] = useState('')
-  const { purchaseEnabled, castingEnabled } = useModuleSettings()
-  const actualToday = useMemo(() => getLocalIsoDate(), [])
-  const currentFiscalYear = Number(fiscalYearStart(actualToday.slice(0, 7)).slice(0, 4))
-  const [selectedFiscalYear, setSelectedFiscalYear] = useState(currentFiscalYear)
-  const today = selectedFiscalYear === currentFiscalYear ? actualToday : `${selectedFiscalYear + 1}-03-31`
-  const periodFrom = `${selectedFiscalYear}-04-01`
+  const [exporting, setExporting] = useState(false)
+
+  const today = useMemo(() => getLocalIsoDate(), [])
+  const currentMonthKey = useMemo(() => today.slice(0, 7), [today])
+  const currentFyStartYear = useMemo(() => Number(fiscalYearStart(currentMonthKey).slice(0, 4)), [currentMonthKey])
+
+  const [mode, setMode] = useState<ReportPeriodMode>('month')
+  const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthKey)
   const [selectedAgingBucket, setSelectedAgingBucket] = useState<AgingBucketKey>('above90')
-  const [selectedGasMonth, setSelectedGasMonth] = useState(() => today.slice(0, 7))
 
-  useEffect(() => setSelectedGasMonth(today.slice(0, 7)), [today])
+  const { purchaseEnabled, castingEnabled } = useModuleSettings()
 
-  // Queries
-  const reportQuery = useQuery({
-    queryKey: ['company-report', today],
+  // 1. Calculate Active Period & Fair Comparison Range
+  const range: ReportRange = useMemo(() => {
+    if (mode === 'month') {
+      const from = `${selectedMonth}-01`
+      const isCurrentMonth = selectedMonth === currentMonthKey
+      const to = isCurrentMonth ? today : lastDayOfMonth(selectedMonth)
+      const daysElapsed = isCurrentMonth ? Number(today.slice(8, 10)) : 30
+      return {
+        from,
+        to,
+        label: formatMonthYear(selectedMonth),
+        comparisonNote: isCurrentMonth
+          ? `vs same ${daysElapsed} days of last month`
+          : 'vs preceding month',
+      }
+    }
+    if (mode === 'last_month') {
+      const lmKey = shiftMonth(currentMonthKey, -1)
+      return {
+        from: `${lmKey}-01`,
+        to: lastDayOfMonth(lmKey),
+        label: formatMonthYear(lmKey),
+        comparisonNote: 'vs preceding month',
+      }
+    }
+    if (mode === 'prev_fy') {
+      const prevFy = currentFyStartYear - 1
+      return {
+        from: `${prevFy}-04-01`,
+        to: `${prevFy + 1}-03-31`,
+        label: `FY ${prevFy}–${String(prevFy + 1).slice(2)}`,
+        comparisonNote: `vs FY ${prevFy - 1}–${String(prevFy).slice(2)}`,
+      }
+    }
+    // FY to date
+    return {
+      from: `${currentFyStartYear}-04-01`,
+      to: today,
+      label: `FY ${currentFyStartYear}–${String(currentFyStartYear + 1).slice(2)} to date`,
+      comparisonNote: 'vs same period last FY',
+    }
+  }, [mode, selectedMonth, currentMonthKey, today, currentFyStartYear])
+
+  // Rolling 12-Month array ending at range.to
+  const past12Months = useMemo(() => {
+    const months: string[] = []
+    const [y, m] = range.to.slice(0, 7).split('-').map(Number)
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(y, m - 1 - i, 1)
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+    }
+    return months
+  }, [range.to])
+
+  // 2. Data Queries
+  const salesQuery = useQuery({
+    queryKey: ['company-report-sales-data', today],
     queryFn: loadDashboardCollections,
+    staleTime: 60_000,
   })
 
   const purchaseQuery = useQuery({
     ...purchaseReadModelQueryOptions(),
     enabled: purchaseEnabled,
+    staleTime: 60_000,
   })
 
   const castingQuery = useQuery({
-    queryKey: ['company-report-casting', periodFrom, today],
-    queryFn: () => loadCastingSessions({ from: periodFrom, to: today }),
+    queryKey: ['company-report-casting-data', today],
+    queryFn: () => loadCastingSessions(),
     enabled: castingEnabled,
+    staleTime: 60_000,
   })
 
-  // Module summaries
-  const purchaseSummary = useMemo(() => {
-    const data = purchaseQuery.data
-    if (!data) return null
-    const positions = computeSupplierPositions(data.summaries)
-    let rcm = 0
-    for (const bill of data.bills) {
-      if (!bill.cancelled && bill.date >= periodFrom && bill.date <= today && bill.taxMode === 'rcm') {
-        rcm += computeBillNet(bill.lines, bill.adjustments, bill.bardan, bill.taxMode, bill.gstRateBp).rcmLiabilityPaise
-      }
-    }
-    return {
-      kacha: positions.kachaPayablePaise,
-      gst: positions.gstPayablePaise,
-      totalOwed: positions.kachaPayablePaise + positions.gstPayablePaise,
-      rcm,
-      bills: data.bills.filter((bill) => !bill.cancelled && bill.date >= periodFrom && bill.date <= today).length,
-    }
-  }, [purchaseQuery.data, periodFrom, today])
+  const isLoading = salesQuery.isLoading || (purchaseEnabled && purchaseQuery.isLoading) || (castingEnabled && castingQuery.isLoading)
+  const isError = salesQuery.isError
 
-  const castingSummary = useMemo(() => {
-    const rows = castingQuery.data ?? []
-    const input = rows.reduce((sum, row) => sum + row.totalInputKg, 0)
-    const output = rows.reduce((sum, row) => sum + row.totalWireOut, 0)
-    const cost = rows.reduce((sum, row) => sum + row.totalInputCost, 0)
-    const mel = rows.reduce((sum, row) => sum + (row.totalMel || row.wastage || 0), 0)
-    const chol = rows.reduce((sum, row) => sum + row.cholIn, 0)
-    const costPerKg = output > 0 ? cost / output : 0
-    return {
-      sessions: rows.length,
-      input,
-      output,
-      wastageKg: mel,
-      chol,
-      costPerKg,
-    }
-  }, [castingQuery.data])
+  // ---------------- Computations ----------------
 
-  const safeCastingYield = useMemo(
-    () =>
-      computeSafeRecoveryAndWastage(
-        castingSummary.output,
-        castingSummary.wastageKg,
-        castingSummary.input,
-      ),
-    [castingSummary.output, castingSummary.wastageKg, castingSummary.input],
-  )
+  // A. Sales Engine
+  const salesData = useMemo(() => {
+    const raw = salesQuery.data
+    if (!raw) return null
 
-  // Report calculations
-  const report = useMemo(() => {
-    const data = reportQuery.data
-    if (!data) {
-      return {
-        overall: {
-          totalSales: 0,
-          totalCollections: 0,
-          receivable: 0,
-          advanceFromCustomers: 0,
-          activeCustomers: 0,
-          customerCount: 0,
-          billCount: 0,
-          averageBillValue: 0,
-          averageCollectionDays: 0,
-          collectionEfficiencyPct: 0,
-          collectionEfficiencyDeltaPct: 0,
-          gstCollectedEstimate: 0,
-        },
-        thisMonth: { sales: 0, collections: 0, gstEstimate: 0, bills: 0 },
-        lastMonth: { sales: 0, collections: 0 },
-        thisFinancialYear: { sales: 0, collections: 0 },
-        monthlyTrend: [] as Array<{ month: string; sales: number; collections: number }>,
-        financialYearSummary: [] as Array<{ label: string; sales: number; collections: number; gap: number }>,
-        dailySalesHeatmap: [] as Array<{ date: string; sales: number; bags: number }>,
-        receivableAging: { current: 0, days31to60: 0, days61to90: 0, above90: 0 },
-        receivableAgingCustomers: {
-          current: [] as Array<{ customerId: string; name: string; amount: number; dueDays: number }>,
-          days31to60: [] as Array<{ customerId: string; name: string; amount: number; dueDays: number }>,
-          days61to90: [] as Array<{ customerId: string; name: string; amount: number; dueDays: number }>,
-          above90: [] as Array<{ customerId: string; name: string; amount: number; dueDays: number }>,
-        },
-        topCustomersBySales: [] as Array<{ customerId: string; name: string; value: number }>,
-        topCustomersByOutstanding: [] as Array<{ customerId: string; name: string; value: number }>,
-      }
-    }
+    const billsRaw = raw.billsRaw ?? []
+    const billItemsRaw = raw.billItemsRaw ?? []
+    const paymentsRaw = raw.paymentsRaw ?? []
+    const customersRaw = raw.customersRaw ?? []
 
-    const nowDate = new Date(`${today}T00:00:00`)
-    const monthKey = today.slice(0, 7)
-    const lastMonthKey = shiftMonth(monthKey, -1)
-
-    const bills = data.billsRaw
-    const billItems = data.billItemsRaw
-    const payments = data.paymentsRaw
-    const customers = data.customersRaw
-    const canonicalBills: CanonicalBillRecord[] = bills.map((bill) => ({
-      id: bill.id,
-      businessDate: str(bill.date).slice(0, 10),
-      createdAt: str(bill.created),
-      customerId: str(bill.customer),
-      customerName: str(bill.customer_name),
-      bookNo: num(bill.book_no),
-      billNo: num(bill.bill_no),
-      total: 0,
-      mktRate: num(bill.mkt),
-      transport: num(bill.transport),
-      gstRate: num(bill.gst_rate),
-      gstAmount: num(bill.gst_amount),
-      lrNo: str(bill.lr_no),
-    }))
-    const canonicalPayments: CanonicalPaymentRecord[] = payments.map((payment) => ({
-      id: payment.id,
-      businessDate: str(payment.date).slice(0, 10),
-      createdAt: str(payment.created),
-      customerId: str(payment.customer),
-      customerName: str(payment.customer_name),
-      amount: num(payment.amount),
-      mode: str(payment.mode),
-      note: str(payment.note),
-    }))
-
+    // Map item amounts & bags to bills
     const itemSumByBill = new Map<string, number>()
     const itemBagsByBill = new Map<string, number>()
-    for (const item of billItems) {
-      const billId = str(item.bill)
-      itemSumByBill.set(billId, (itemSumByBill.get(billId) ?? 0) + num(item.amount))
-      itemBagsByBill.set(billId, (itemBagsByBill.get(billId) ?? 0) + num(item.bags))
+    const gasLinesByBill = new Map<string, Array<{ qty: number; amount: number; rate: number }>>()
+
+    for (const line of billItemsRaw) {
+      const billId = String(line.bill ?? '')
+      const amt = Number(line.amount ?? 0)
+      const bags = Number(line.bags ?? 0)
+      const qty = Number(line.qty ?? 0)
+      const rate = Number(line.rate ?? 0)
+      const itemName = String(line.item_name ?? '').toLowerCase()
+
+      itemSumByBill.set(billId, (itemSumByBill.get(billId) ?? 0) + amt)
+      itemBagsByBill.set(billId, (itemBagsByBill.get(billId) ?? 0) + bags)
+
+      if (itemName.includes('gas') || itemName.includes('oxygen') || itemName.includes('argon')) {
+        const list = gasLinesByBill.get(billId) ?? []
+        list.push({ qty, amount: amt, rate })
+        gasLinesByBill.set(billId, list)
+      }
     }
 
-    const customerNameById = new Map<string, string>()
-    const openingByCustomer = new Map<string, number>()
-    const openingDateByCustomer = new Map<string, string>()
-    let activeCustomers = 0
-    for (const customer of customers) {
-      const id = customer.id
-      customerNameById.set(id, formatCustomerDisplayName(customer.company_name, customer.name))
-      openingByCustomer.set(id, num(customer.opening_balance))
-      openingDateByCustomer.set(id, str(customer.opening_balance_date).slice(0, 10))
-      if (customer.active) activeCustomers += 1
+    // Customers directory & initial opening balances
+    const customerDirectory = new Map<string, { name: string; opening: number; openingDate: string }>()
+    for (const c of customersRaw) {
+      const id = String(c.id ?? '')
+      const name = formatCustomerDisplayName(c.company_name, c.name)
+      const opening = Number(c.opening_balance ?? 0)
+      const openingDate = String(c.opening_balance_date ?? '').slice(0, 10)
+      customerDirectory.set(id, { name, opening, openingDate })
     }
 
-    let totalSales = 0
-    let totalCollections = 0
-    let totalGst = 0
-    let billCount = 0
-    const monthlyMap = new Map<string, { sales: number; collections: number }>()
-    const dailySalesMap = new Map<string, number>()
-    const dailyBagsMap = new Map<string, number>()
-    const customerSalesMap = new Map<string, number>()
-    const customerOutstandingMap = new Map<string, number>()
-    const customerLatestBillDate = new Map<string, string>()
+    // Canonical Bills with totals
+    const canonicalBills = billsRaw.map((b) => {
+      const id = String(b.id ?? '')
+      const date = String(b.date ?? '').slice(0, 10)
+      const customerId = String(b.customer ?? '')
+      const custInfo = customerDirectory.get(customerId)
+      const base = itemSumByBill.get(id) ?? 0
+      const transport = Number(b.transport ?? 0)
+      const gstRate = Number(b.gst_rate ?? 0)
+      const gstAmount = Number(b.gst_amount ?? 0)
+      const total = calculateBillTotal(base, transport, gstRate, gstAmount)
+      const mktRate = Number(b.mkt ?? 0)
+      const bags = itemBagsByBill.get(id) ?? 0
+      const gasLines = gasLinesByBill.get(id) ?? []
 
-    for (const [customerId, opening] of openingByCustomer.entries()) {
-      customerOutstandingMap.set(customerId, opening)
-      customerLatestBillDate.set(customerId, openingDateByCustomer.get(customerId) ?? '')
-    }
-
-    for (const bill of bills) {
-      const billDate = str(bill.date).slice(0, 10)
-      if (!billDate || billDate > today) continue
-      const base = itemSumByBill.get(bill.id) ?? 0
-      const transport = num(bill.transport)
-      const gstRate = num(bill.gst_rate)
-      const gstAmount = num(bill.gst_amount) > 0 ? num(bill.gst_amount) : (base * gstRate) / 100
-      const billTotal = calculateBillTotalFromBase(base, transport, gstRate, gstAmount)
-      const customerId = str(bill.customer)
-      const billMonth = billDate.slice(0, 7)
-
-      totalSales += billTotal
-      totalGst += gstAmount
-      billCount += 1
-      dailySalesMap.set(billDate, (dailySalesMap.get(billDate) ?? 0) + billTotal)
-      dailyBagsMap.set(billDate, (dailyBagsMap.get(billDate) ?? 0) + (itemBagsByBill.get(bill.id) ?? 0))
-      customerSalesMap.set(customerId, (customerSalesMap.get(customerId) ?? 0) + billTotal)
-      const monthly = monthlyMap.get(billMonth) ?? { sales: 0, collections: 0 }
-      monthly.sales += billTotal
-      monthlyMap.set(billMonth, monthly)
-      const latest = customerLatestBillDate.get(customerId) ?? ''
-      if (!latest || billDate > latest) customerLatestBillDate.set(customerId, billDate)
-    }
-
-    for (const payment of payments) {
-      const paymentDate = str(payment.date).slice(0, 10)
-      if (!paymentDate || paymentDate > today) continue
-      const amount = num(payment.amount)
-      const paymentMonth = paymentDate.slice(0, 7)
-      totalCollections += amount
-      const monthly = monthlyMap.get(paymentMonth) ?? { sales: 0, collections: 0 }
-      monthly.collections += amount
-      monthlyMap.set(paymentMonth, monthly)
-    }
-
-    for (const [customerId, openingBalance] of openingByCustomer.entries()) {
-      const rollup = computeCustomerOutstanding({
-        openingBalance,
-        bills: canonicalBills
-          .filter((bill) => bill.customerId === customerId)
-          .map((bill) => ({
-            ...bill,
-            total: calculateBillTotalFromBase(
-              itemSumByBill.get(bill.id) ?? 0,
-              bill.transport ?? 0,
-              bill.gstRate ?? 0,
-              bill.gstAmount,
-            ),
-          })),
-        payments: canonicalPayments.filter((payment) => payment.customerId === customerId),
-        asOfDate: today,
-      })
-      customerOutstandingMap.set(customerId, rollup.netBalance)
-    }
-
-    const monthlyTrend = [...monthlyMap.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-12)
-      .map(([month, values]) => ({
-        month,
-        sales: values.sales,
-        collections: values.collections,
-      }))
-
-    const thisMonth = monthlyMap.get(monthKey) ?? { sales: 0, collections: 0 }
-    const lastMonth = monthlyMap.get(lastMonthKey) ?? { sales: 0, collections: 0 }
-    const thisMonthEfficiency = thisMonth.sales > 0 ? (thisMonth.collections / thisMonth.sales) * 100 : 0
-    const lastMonthEfficiency = lastMonth.sales > 0 ? (lastMonth.collections / lastMonth.sales) * 100 : 0
-    const currentFyStartYear = getFinancialYearStartYear(monthKey)
-    const thisFinancialYear = monthlyTrend.reduce(
-      (acc, row) => {
-        if (getFinancialYearStartYear(row.month) === currentFyStartYear) {
-          acc.sales += row.sales
-          acc.collections += row.collections
-        }
-        return acc
-      },
-      { sales: 0, collections: 0 },
-    )
-
-    const fyStartYears = [currentFyStartYear, currentFyStartYear - 1, currentFyStartYear - 2]
-    const financialYearSummary = fyStartYears.map((startYear) => {
-      const months = getFinancialYearMonths(startYear)
-      const totals = months.reduce(
-        (acc, m) => {
-          const values = monthlyMap.get(m) ?? { sales: 0, collections: 0 }
-          acc.sales += values.sales
-          acc.collections += values.collections
-          return acc
-        },
-        { sales: 0, collections: 0 },
-      )
       return {
-        label: `FY ${String(startYear).slice(-2)}-${String(startYear + 1).slice(-2)}`,
-        sales: totals.sales,
-        collections: totals.collections,
-        gap: Math.max(0, totals.sales - totals.collections),
+        id,
+        date,
+        billNo: Number(b.bill_no ?? 0),
+        customerId,
+        customerName: custInfo?.name || String(b.customer_name ?? 'Unknown'),
+        total,
+        transport,
+        gstAmount,
+        mktRate,
+        bags,
+        gasLines,
       }
     })
 
-    const heatmapStart = new Date(`${today}T00:00:00`)
-    heatmapStart.setDate(heatmapStart.getDate() - 364)
-    const dailySalesHeatmap: Array<{ date: string; sales: number; bags: number }> = []
-    for (const date of eachDayInclusive(heatmapStart, new Date(`${today}T00:00:00`))) {
-      const key = toIsoDate(date)
-      dailySalesHeatmap.push({ date: key, sales: dailySalesMap.get(key) ?? 0, bags: dailyBagsMap.get(key) ?? 0 })
+    // Canonical Payments
+    const canonicalPayments = paymentsRaw.map((p) => ({
+      id: String(p.id ?? ''),
+      date: String(p.date ?? '').slice(0, 10),
+      customerId: String(p.customer ?? ''),
+      customerName: customerDirectory.get(String(p.customer ?? ''))?.name || String(p.customer_name ?? 'Unknown'),
+      amount: Number(p.amount ?? 0),
+      mode: String(p.mode ?? 'cash'),
+    }))
+
+    // Period filtered
+    const periodBills = canonicalBills.filter((b) => b.date >= range.from && b.date <= range.to)
+    const periodPayments = canonicalPayments.filter((p) => p.date >= range.from && p.date <= range.to)
+
+    const billedSales = periodBills.reduce((sum, b) => sum + b.total, 0)
+    const collectionsRealized = periodPayments.reduce((sum, p) => sum + p.amount, 0)
+    const realizationRate = billedSales > 0 ? (collectionsRealized / billedSales) * 100 : 0
+    const activeCustomers = new Set(periodBills.map((b) => b.customerId)).size
+
+    // Customer running ledger balances as of range.to
+    const customerBalances = new Map<string, number>()
+    const customerLastBillDate = new Map<string, string>()
+
+    for (const [cid, cdata] of customerDirectory.entries()) {
+      customerBalances.set(cid, cdata.opening)
+      if (cdata.openingDate) customerLastBillDate.set(cid, cdata.openingDate)
     }
 
-    const receivable = Math.max(
-      0,
-      [...customerOutstandingMap.values()].reduce((sum, value) => sum + (value > 0 ? value : 0), 0),
-    )
-    const advanceFromCustomers = Math.abs(
-      [...customerOutstandingMap.values()].reduce((sum, value) => sum + (value < 0 ? value : 0), 0),
-    )
-    const averageBillValue = billCount > 0 ? totalSales / billCount : 0
-    const recent30dSales = bills
-      .filter((bill) => {
-        const date = str(bill.date).slice(0, 10)
-        const billDate = new Date(`${date}T00:00:00`)
-        return (
-          date <= today &&
-          Number.isFinite(billDate.getTime()) &&
-          (nowDate.getTime() - billDate.getTime()) / (24 * 60 * 60 * 1000) <= 30
-        )
-      })
-      .reduce((sum, bill) => {
-        const base = itemSumByBill.get(bill.id) ?? 0
-        return sum + calculateBillTotalFromBase(base, num(bill.transport), num(bill.gst_rate), num(bill.gst_amount))
-      }, 0)
-    const avgDailyRecentSales = recent30dSales / 30
-    const averageCollectionDays = avgDailyRecentSales > 0 ? receivable / avgDailyRecentSales : 0
-    const collectionEfficiencyPct = totalSales > 0 ? (totalCollections / totalSales) * 100 : 0
-    const collectionEfficiencyDeltaPct = thisMonthEfficiency - lastMonthEfficiency
-
-    const receivableAging = { current: 0, days31to60: 0, days61to90: 0, above90: 0 }
-    const receivableAgingCustomers = {
-      current: [] as Array<{ customerId: string; name: string; amount: number; dueDays: number }>,
-      days31to60: [] as Array<{ customerId: string; name: string; amount: number; dueDays: number }>,
-      days61to90: [] as Array<{ customerId: string; name: string; amount: number; dueDays: number }>,
-      above90: [] as Array<{ customerId: string; name: string; amount: number; dueDays: number }>,
-    }
-    for (const [customerId, outstanding] of customerOutstandingMap.entries()) {
-      if (outstanding <= 0) continue
-      const dueDays = dateDiffDays(customerLatestBillDate.get(customerId) ?? today, today)
-      const row = { customerId, name: customerNameById.get(customerId) ?? 'Unknown', amount: outstanding, dueDays }
-      if (dueDays <= 30) {
-        receivableAging.current += outstanding
-        receivableAgingCustomers.current.push(row)
-      } else if (dueDays <= 60) {
-        receivableAging.days31to60 += outstanding
-        receivableAgingCustomers.days31to60.push(row)
-      } else if (dueDays <= 90) {
-        receivableAging.days61to90 += outstanding
-        receivableAgingCustomers.days61to90.push(row)
-      } else {
-        receivableAging.above90 += outstanding
-        receivableAgingCustomers.above90.push(row)
+    for (const b of canonicalBills) {
+      if (b.date <= range.to) {
+        customerBalances.set(b.customerId, (customerBalances.get(b.customerId) ?? 0) + b.total)
+        customerLastBillDate.set(b.customerId, b.date)
       }
     }
-    receivableAgingCustomers.current.sort((a, b) => b.amount - a.amount)
-    receivableAgingCustomers.days31to60.sort((a, b) => b.amount - a.amount)
-    receivableAgingCustomers.days61to90.sort((a, b) => b.amount - a.amount)
-    receivableAgingCustomers.above90.sort((a, b) => b.amount - a.amount)
 
-    const topCustomersBySales = [...customerSalesMap.entries()]
-      .map(([id, value]) => ({ customerId: id, name: customerNameById.get(id) ?? 'Unknown', value }))
+    for (const p of canonicalPayments) {
+      if (p.date <= range.to) {
+        customerBalances.set(p.customerId, (customerBalances.get(p.customerId) ?? 0) - p.amount)
+      }
+    }
+
+    let totalReceivable = 0
+    let totalCustomerAdvance = 0
+    const debtorList: Array<{ id: string; name: string; amount: number; lastDate: string; days: number }> = []
+
+    for (const [cid, bal] of customerBalances.entries()) {
+      const cname = customerDirectory.get(cid)?.name || 'Unknown'
+      if (bal > 0) {
+        totalReceivable += bal
+        const lastDate = customerLastBillDate.get(cid) || range.to
+        const days = dateDiffDays(lastDate, range.to)
+        debtorList.push({ id: cid, name: cname, amount: bal, lastDate, days })
+      } else if (bal < 0) {
+        totalCustomerAdvance += Math.abs(bal)
+      }
+    }
+
+    debtorList.sort((a, b) => b.amount - a.amount)
+
+    // Ageing classification
+    const ageingBuckets = { current: 0, days31to60: 0, days61to90: 0, above90: 0 }
+    const ageingDebtors = {
+      current: [] as typeof debtorList,
+      days31to60: [] as typeof debtorList,
+      days61to90: [] as typeof debtorList,
+      above90: [] as typeof debtorList,
+    }
+
+    for (const d of debtorList) {
+      if (d.days <= 30) {
+        ageingBuckets.current += d.amount
+        ageingDebtors.current.push(d)
+      } else if (d.days <= 60) {
+        ageingBuckets.days31to60 += d.amount
+        ageingDebtors.days31to60.push(d)
+      } else if (d.days <= 90) {
+        ageingBuckets.days61to90 += d.amount
+        ageingDebtors.days61to90.push(d)
+      } else {
+        ageingBuckets.above90 += d.amount
+        ageingDebtors.above90.push(d)
+      }
+    }
+
+    // Top 5 Customers by Billed in Period
+    const customerSpendMap = new Map<string, { name: string; amount: number; bags: number }>()
+    for (const b of periodBills) {
+      const curr = customerSpendMap.get(b.customerId) ?? { name: b.customerName, amount: 0, bags: 0 }
+      curr.amount += b.total
+      curr.bags += b.bags
+      customerSpendMap.set(b.customerId, curr)
+    }
+
+    const topCustomersBySales = [...customerSpendMap.entries()]
+      .map(([id, data]) => ({ id, name: data.name, value: data.amount, bags: data.bags }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 5)
-    const topCustomersByOutstanding = [...customerOutstandingMap.entries()]
-      .filter(([, value]) => value > 0)
-      .map(([id, value]) => ({ customerId: id, name: customerNameById.get(id) ?? 'Unknown', value }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 5)
 
-    return {
-      overall: {
-        totalSales,
-        totalCollections,
-        receivable,
-        advanceFromCustomers,
-        activeCustomers,
-        customerCount: customers.length,
-        billCount,
-        averageBillValue,
-        averageCollectionDays,
-        collectionEfficiencyPct,
-        collectionEfficiencyDeltaPct,
-        gstCollectedEstimate: totalGst,
-      },
-      thisMonth: {
-        sales: thisMonth.sales,
-        collections: thisMonth.collections,
-        gstEstimate: thisMonth.sales > 0 && totalSales > 0 ? (thisMonth.sales / totalSales) * totalGst : 0,
-        bills: bills.filter((bill) => str(bill.date).slice(0, 7) === monthKey).length,
-      },
-      lastMonth,
-      thisFinancialYear,
-      monthlyTrend,
-      financialYearSummary,
-      dailySalesHeatmap,
-      receivableAging,
-      receivableAgingCustomers,
-      topCustomersBySales,
-      topCustomersByOutstanding,
-    }
-  }, [reportQuery.data, today])
+    // Gas Selling Margin Analysis in Period
+    let gasTotalKg = 0
+    let gasTotalAmount = 0
+    let gasMarketWeightedSum = 0
+    let gasKgWithMarket = 0
 
-  const gasSales = useMemo(() => {
-    const data = reportQuery.data
-    if (!data) {
-      const empty = buildGasSalesReport({ bills: [], lines: [] })
-      return { all: empty, selected: empty, previous: empty }
-    }
-    const customerNameById = new Map(
-      data.customersRaw.map((row) => [row.id, formatCustomerDisplayName(row.company_name, row.name)]),
-    )
-    const itemById = new Map(data.itemsRaw.map((row) => [row.id, row]))
-    const itemByName = new Map(data.itemsRaw.map((row) => [str(row.name).trim().toLowerCase(), row]))
-    const bills = data.billsRaw
-      .filter((bill) => str(bill.date).slice(0, 10) <= today)
-      .map((bill) => ({
-        id: bill.id,
-        date: str(bill.date).slice(0, 10),
-        customerId: str(bill.customer),
-        customerName: customerNameById.get(str(bill.customer)) ?? str(bill.customer_name) ?? 'Unknown customer',
-        marketRate: num(bill.mkt),
-        gstRate: num(bill.gst_rate),
-        gstAmount: num(bill.gst_amount),
-      }))
-    const validBillIds = new Set(bills.map((bill) => bill.id))
-    const lines = data.billItemsRaw
-      .filter((line) => validBillIds.has(str(line.bill)))
-      .map((line) => {
-        const item = itemById.get(str(line.item)) ?? itemByName.get(str(line.item_name).trim().toLowerCase())
-        return {
-          billId: str(line.bill),
-          itemId: str(line.item) || str(line.item_name).trim().toLowerCase(),
-          itemName: str(line.item_name) || str(item?.name) || 'Unknown item',
-          itemType: str(item?.type) || 'gas',
-          qty: num(line.qty),
-          bags: num(line.bags),
-          amount: num(line.amount),
+    for (const b of periodBills) {
+      for (const line of b.gasLines) {
+        gasTotalKg += line.qty
+        gasTotalAmount += line.amount
+        if (b.mktRate > 0 && line.qty > 0) {
+          gasMarketWeightedSum += line.qty * b.mktRate
+          gasKgWithMarket += line.qty
         }
-      })
-    const previousMonth = shiftMonth(selectedGasMonth, -1)
+      }
+    }
+
+    const gasAvgSellingRate = gasTotalKg > 0 ? gasTotalAmount / gasTotalKg : 0
+    const gasAvgMarketRate = gasKgWithMarket > 0 ? gasMarketWeightedSum / gasKgWithMarket : 0
+    const gasNetMarginPerKg = gasAvgSellingRate > 0 && gasAvgMarketRate > 0 ? gasAvgSellingRate - gasAvgMarketRate : 0
+
     return {
-      all: buildGasSalesReport({ bills, lines }),
-      selected: buildGasSalesReport({
-        bills: bills.filter((bill) => bill.date.startsWith(selectedGasMonth)),
-        lines,
-      }),
-      previous: buildGasSalesReport({
-        bills: bills.filter((bill) => bill.date.startsWith(previousMonth)),
-        lines,
-      }),
+      allBills: canonicalBills,
+      allPayments: canonicalPayments,
+      periodBills,
+      periodPayments,
+      billedSales,
+      collectionsRealized,
+      realizationRate,
+      activeCustomers,
+      totalReceivable,
+      totalCustomerAdvance,
+      ageingBuckets,
+      ageingDebtors,
+      debtorList,
+      topCustomersBySales,
+      topDebtors: debtorList.slice(0, 5),
+      gasMetrics: {
+        totalKg: gasTotalKg,
+        totalAmount: gasTotalAmount,
+        avgSellingRate: gasAvgSellingRate,
+        avgMarketRate: gasAvgMarketRate,
+        marginPerKg: gasNetMarginPerKg,
+      },
     }
-  }, [reportQuery.data, selectedGasMonth, today])
+  }, [salesQuery.data, range.from, range.to])
 
-  const heatmapSummary = useMemo(() => buildHeatmapSummary(report.dailySalesHeatmap), [report.dailySalesHeatmap])
-  const highestOutstandingCustomer = report.topCustomersByOutstanding[0] ?? null
-  const overdueCustomersCount = report.receivableAgingCustomers.above90.length
-  const monthlyCashGap = report.thisMonth.sales - report.thisMonth.collections
-  const salesDelta = report.thisMonth.sales - report.lastMonth.sales
-  const collectionEfficiencyStatus = getEfficiencyStatus(report.overall.collectionEfficiencyPct)
+  // B. Purchase Engine
+  const purchaseData = useMemo(() => {
+    if (!purchaseEnabled || !purchaseQuery.data) return null
+    const model = purchaseQuery.data
+    const allBills = model.bills.filter((b) => !b.cancelled)
+    const allPayments = model.payments
 
-  function downloadSummaryCsv() {
-    const rows: Array<[string, string]> = [
-      ['Metric', 'Value'],
-      ['Financial Year', `${selectedFiscalYear}-${selectedFiscalYear + 1}`],
-      ['Sales to date', String(report.overall.totalSales)],
-      ['Collections to date', String(report.overall.totalCollections)],
-      ['Receivable as of date', String(report.overall.receivable)],
-      ['FY Sales', String(report.thisFinancialYear.sales)],
-      ['FY Collections', String(report.thisFinancialYear.collections)],
-    ]
-    if (purchaseEnabled && purchaseSummary) {
-      rows.push(
-        ['Current Kacha payable paise', String(purchaseSummary.kacha)],
-        ['Current GST payable paise', String(purchaseSummary.gst)],
-        ['FY RCM liability paise', String(purchaseSummary.rcm)],
-        ['FY Purchase bills', String(purchaseSummary.bills)],
-      )
+    const periodBills = allBills.filter((b) => b.date >= range.from && b.date <= range.to)
+    const periodPayments = allPayments.filter((p) => p.date >= range.from && p.date <= range.to)
+
+    const totalBoughtPaise = periodBills.reduce((sum, b) => sum + (b.netPaise || 0), 0)
+    const totalBoughtKg = periodBills.reduce((sum, b) => sum + (b.totalKg || 0), 0)
+    const totalPaidPaise = periodPayments.reduce((sum, p) => sum + p.amountPaise, 0)
+    const avgProcuredRateKg = totalBoughtKg > 0 ? (totalBoughtPaise / 100) / totalBoughtKg : 0
+
+    const positions = computeSupplierPositions(model.summaries)
+    const totalWeOwePaise = positions.kachaPayablePaise + positions.gstPayablePaise
+
+    // Bardan pending audit
+    const billsWithPendingBardan = allBills.filter((b) => b.bardanPending)
+    let oldestBardanDays = 0
+    let totalPendingBags = 0
+    for (const b of billsWithPendingBardan) {
+      const age = dateDiffDays(b.date, range.to)
+      if (age > oldestBardanDays) oldestBardanDays = age
+      totalPendingBags += (b.bagsAtReceiptKg ? Math.round(b.bagsAtReceiptKg) : 1)
     }
-    if (castingEnabled) {
-      rows.push(
-        ['FY Casting sessions', String(castingSummary.sessions)],
-        ['FY Wire out kg', String(castingSummary.output)],
-        ['FY Wastage percent', String(safeCastingYield.wastagePct ?? 0)],
-        ['FY Chol in kg', String(castingSummary.chol)],
-        ['FY Casting cost per kg', String(castingSummary.costPerKg)],
-      )
-    }
-    const content = rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(',')).join('\r\n')
-    const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `company-report-fy-${selectedFiscalYear}.csv`
-    link.click()
-    URL.revokeObjectURL(url)
-  }
 
-  async function downloadReportJpg() {
+    // Top Suppliers by Spend in Period
+    const supplierSpendMap = new Map<string, { name: string; amount: number; kg: number }>()
+    for (const b of periodBills) {
+      const sid = b.supplierId
+      const sname = b.supplierName || 'Unknown'
+      const cur = supplierSpendMap.get(sid) ?? { name: sname, amount: 0, kg: 0 }
+      cur.amount += (b.netPaise || 0) / 100
+      cur.kg += (b.totalKg || 0)
+      supplierSpendMap.set(sid, cur)
+    }
+
+    const topSuppliersBySpend = [...supplierSpendMap.entries()]
+      .map(([id, d]) => ({ id, name: d.name, value: d.amount, kg: d.kg }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 5)
+
+    // Pay Next (Top Suppliers Owed)
+    const topSuppliersOwed = model.summaries
+      .filter((s) => s.outstandingPaise > 0)
+      .map((s) => ({
+        id: s.supplier.id,
+        name: s.supplier.companyName,
+        amount: s.outstandingPaise / 100,
+        kacha: s.kachaDuePaise / 100,
+        gst: s.gstDuePaise / 100,
+      }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5)
+
+    return {
+      allBills,
+      allPayments,
+      periodBills,
+      periodPayments,
+      totalBoughtPaise,
+      totalBoughtKg,
+      totalPaidPaise,
+      avgProcuredRateKg,
+      positions,
+      totalWeOwePaise,
+      bardanSummary: {
+        pendingLots: billsWithPendingBardan.length,
+        totalBags: totalPendingBags,
+        oldestDays: oldestBardanDays,
+        bills: billsWithPendingBardan.slice(0, 5),
+      },
+      topSuppliersBySpend,
+      topSuppliersOwed,
+    }
+  }, [purchaseEnabled, purchaseQuery.data, range.from, range.to])
+
+  // C. Casting Engine
+  const castingData = useMemo(() => {
+    if (!castingEnabled || !castingQuery.data) return null
+    const allSessions = castingQuery.data
+
+    const periodSessions = allSessions.filter((s) => s.date >= range.from && s.date <= range.to)
+
+    const metalChargedKg = periodSessions.reduce((sum, s) => sum + (s.totalInputKg || 0), 0)
+    const wireOutKg = periodSessions.reduce((sum, s) => sum + (s.totalWireOut || s.wireOut || 0), 0)
+    const totalMelWastageKg = periodSessions.reduce((sum, s) => sum + (s.totalMel || s.wastage || 0), 0)
+    const totalCholInKg = periodSessions.reduce((sum, s) => sum + (s.cholIn || 0), 0)
+
+    const totalInputCost = periodSessions.reduce((sum, s) => sum + (s.totalInputCost || 0), 0)
+    const totalCoalCost = periodSessions.reduce((sum, s) => sum + ((s.coalKg || 0) * (s.coalRate || 0)), 0)
+    const totalLaborCost = periodSessions.reduce((sum, s) => sum + (s.workerSalary || 0), 0)
+    const totalLoadedCost = totalInputCost + totalCoalCost + totalLaborCost
+    const loadedCostPerKg = wireOutKg > 0 ? totalLoadedCost / wireOutKg : 0
+
+    const safeYield = computeSafeRecoveryAndWastage(wireOutKg, totalMelWastageKg, metalChargedKg)
+
+    const totalBatches = periodSessions.reduce((sum, s) => sum + (s.unit || s.batches?.length || 1), 0)
+    const foundryActiveDays = new Set(periodSessions.map((s) => s.date)).size
+
+    // Best & Worst session by costPerKg
+    const validSessions = periodSessions.filter((s) => s.costPerKg > 0)
+    const bestSession = validSessions.length > 0
+      ? validSessions.reduce((min, s) => (s.costPerKg < min.costPerKg ? s : min), validSessions[0])
+      : null
+    const worstSession = validSessions.length > 0
+      ? validSessions.reduce((max, s) => (s.costPerKg > max.costPerKg ? s : max), validSessions[0])
+      : null
+
+    return {
+      allSessions,
+      periodSessions,
+      metalChargedKg,
+      wireOutKg,
+      totalMelWastageKg,
+      totalCholInKg,
+      totalLoadedCost,
+      loadedCostPerKg,
+      safeYield,
+      totalBatches,
+      foundryActiveDays,
+      bestSession,
+      worstSession,
+    }
+  }, [castingEnabled, castingQuery.data, range.from, range.to])
+
+  // D. Working Capital & Cash Realization
+  const cashFlow = useMemo(() => {
+    const cashIn = salesData?.collectionsRealized ?? 0
+    const cashOut = (purchaseData?.totalPaidPaise ?? 0) / 100
+    const netCash = cashIn - cashOut
+    const openReceivables = salesData?.totalReceivable ?? 0
+    const openPayables = (purchaseData?.totalWeOwePaise ?? 0) / 100
+
+    return {
+      cashIn,
+      cashOut,
+      netCash,
+      openReceivables,
+      openPayables,
+    }
+  }, [salesData, purchaseData])
+
+  // E. 12-Month Multi-Stream Company Trend Timeline
+  const company12MTrend = useMemo(() => {
+    const allBills = salesData?.allBills ?? []
+    const allPayments = salesData?.allPayments ?? []
+    const allPurchaseBills = purchaseData?.allBills ?? []
+    const allPurchasePayments = purchaseData?.allPayments ?? []
+    const allCasting = castingData?.allSessions ?? []
+
+    return past12Months.map((m) => {
+      const sales = allBills
+        .filter((b) => b.date.slice(0, 7) === m)
+        .reduce((sum, b) => sum + b.total, 0)
+      const collections = allPayments
+        .filter((p) => p.date.slice(0, 7) === m)
+        .reduce((sum, p) => sum + p.amount, 0)
+      const purchases = allPurchaseBills
+        .filter((b) => b.date.slice(0, 7) === m)
+        .reduce((sum, b) => sum + (b.netPaise || 0), 0) / 100
+      const paidOut = allPurchasePayments
+        .filter((p) => p.date.slice(0, 7) === m)
+        .reduce((sum, p) => sum + p.amountPaise, 0) / 100
+      const wireOut = allCasting
+        .filter((s) => s.date.slice(0, 7) === m)
+        .reduce((sum, s) => sum + (s.totalWireOut || s.wireOut || 0), 0)
+
+      return {
+        month: m,
+        sales,
+        collections,
+        purchases,
+        paidOut,
+        wireOut,
+        netCash: collections - paidOut,
+      }
+    })
+  }, [past12Months, salesData, purchaseData, castingData])
+
+  // 6-Month rolling sparklines for the top 4 scorecards
+  const sparklines6M = useMemo(() => {
+    const last6 = past12Months.slice(-6)
+    return {
+      sales: last6.map((m) => company12MTrend.find((t) => t.month === m)?.sales ?? 0),
+      purchases: last6.map((m) => company12MTrend.find((t) => t.month === m)?.purchases ?? 0),
+      casting: last6.map((m) => company12MTrend.find((t) => t.month === m)?.wireOut ?? 0),
+      netCash: last6.map((m) => company12MTrend.find((t) => t.month === m)?.netCash ?? 0),
+    }
+  }, [past12Months, company12MTrend])
+
+  // F. 3-Year Financial Year Performance Comparison
+  const fy3YearBenchmark = useMemo(() => {
+    const allBills = salesData?.allBills ?? []
+    const allPayments = salesData?.allPayments ?? []
+    const allPurchaseBills = purchaseData?.allBills ?? []
+    const allPurchasePayments = purchaseData?.allPayments ?? []
+    const allCasting = castingData?.allSessions ?? []
+
+    const fyYears = [currentFyStartYear, currentFyStartYear - 1, currentFyStartYear - 2]
+
+    return fyYears.map((fyYear) => {
+      const from = `${fyYear}-04-01`
+      const to = fyYear === currentFyStartYear ? today : `${fyYear + 1}-03-31`
+      const label = `FY ${fyYear}–${String(fyYear + 1).slice(2)}`
+
+      const sales = allBills
+        .filter((b) => b.date >= from && b.date <= to)
+        .reduce((sum, b) => sum + b.total, 0)
+      const collections = allPayments
+        .filter((p) => p.date >= from && p.date <= to)
+        .reduce((sum, p) => sum + p.amount, 0)
+      const purchases = allPurchaseBills
+        .filter((b) => b.date >= from && b.date <= to)
+        .reduce((sum, b) => sum + (b.netPaise || 0), 0) / 100
+      const paidOut = allPurchasePayments
+        .filter((p) => p.date >= from && p.date <= to)
+        .reduce((sum, p) => sum + p.amountPaise, 0) / 100
+      const wireOut = allCasting
+        .filter((s) => s.date >= from && s.date <= to)
+        .reduce((sum, s) => sum + (s.totalWireOut || s.wireOut || 0), 0)
+
+      const efficiency = sales > 0 ? (collections / sales) * 100 : 0
+      const netCash = collections - paidOut
+
+      return {
+        label,
+        isCurrent: fyYear === currentFyStartYear,
+        sales,
+        collections,
+        efficiency,
+        purchases,
+        paidOut,
+        netCash,
+        wireOut,
+      }
+    })
+  }, [currentFyStartYear, today, salesData, purchaseData, castingData])
+
+  // Handlers for Exports
+  const handleExportJpg = async () => {
     if (!reportRef.current) return
+    setExporting(true)
     setExportError('')
     try {
       await exportNodeAsJpg(reportRef.current, {
-        filename: `company-report-fy-${selectedFiscalYear}.jpg`,
-        backgroundColor: '#f1f5f9',
-        preferredWidthPx: 1600,
+        filename: `Company-Report-${range.label.replace(/\s+/g, '_')}.jpg`,
       })
-    } catch (error) {
-      setExportError(error instanceof Error ? error.message : 'Could not export the report image.')
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Failed to export image')
+    } finally {
+      setExporting(false)
     }
   }
 
-  const selectedBucketLabel =
-    selectedAgingBucket === 'above90'
-      ? '90+ Days (High Risk)'
-      : selectedAgingBucket === 'days61to90'
-        ? '61–90 Days'
-        : selectedAgingBucket === 'days31to60'
-          ? '31–60 Days'
-          : '0–30 Days (Current)'
+  const handleExportCsv = () => {
+    const rows = [
+      ['Metric', 'Value', 'Unit', 'Notes'],
+      ['Report Period', range.label, '', range.comparisonNote],
+      ['Billed Sales', salesData?.billedSales ?? 0, 'INR', `${salesData?.periodBills.length ?? 0} bills`],
+      ['Collections Realized', salesData?.collectionsRealized ?? 0, 'INR', `${salesData?.periodPayments.length ?? 0} payments`],
+      ['Collection Efficiency', `${(salesData?.realizationRate ?? 0).toFixed(1)}%`, '%', 'Collections / Sales'],
+      ['Ending Receivables', salesData?.totalReceivable ?? 0, 'INR', 'Open customer dues'],
+      ['Scrap Purchases', (purchaseData?.totalBoughtPaise ?? 0) / 100, 'INR', `${purchaseData?.totalBoughtKg ?? 0} kg`],
+      ['Supplier Payouts', (purchaseData?.totalPaidPaise ?? 0) / 100, 'INR', `${purchaseData?.periodPayments.length ?? 0} payments`],
+      ['Ending Payables (We Owe)', (purchaseData?.totalWeOwePaise ?? 0) / 100, 'INR', 'Open supplier dues'],
+      ['Finished Wire Output', castingData?.wireOutKg ?? 0, 'kg', 'Manufacturing output'],
+      ['Foundry Metal Recovery', castingData?.safeYield.recoveryPct != null ? `${castingData.safeYield.recoveryPct}%` : '—', '%', 'Mass conservation recovery'],
+      ['Foundry Loaded Cost', (castingData?.loadedCostPerKg ?? 0).toFixed(2), 'INR/kg', 'Metal + Coal + Labour'],
+      ['Net Operating Cash Flow', cashFlow.netCash, 'INR', 'Collections In - Payouts Out'],
+    ]
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + rows.map((e) => e.map((c) => `"${c}"`).join(',')).join('\n')
+    const encodedUri = encodeURI(csvContent)
+    const link = document.createElement('a')
+    link.setAttribute('href', encodedUri)
+    link.setAttribute('download', `Company_Report_${range.label.replace(/\s+/g, '_')}.csv`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+        <Panel className="rounded-xl border border-blue-100 bg-white p-12 text-center shadow-sm">
+          <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+          <p className="mt-3 text-xs font-semibold text-slate-700">Loading consolidated Company Report...</p>
+        </Panel>
+      </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+        <Panel className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-center shadow-sm">
+          <AlertCircle className="mx-auto mb-2 text-rose-600" size={24} />
+          <h2 className="text-sm font-semibold text-rose-800">Unable to load Company Report</h2>
+          <p className="mt-1 text-xs text-rose-600">Failed to fetch required database collections.</p>
+        </Panel>
+      </div>
+    )
+  }
 
   return (
-    <div ref={reportRef} className="w-full space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
-      {/* 1. Executive Top Bar Card */}
-      <Panel className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-white p-4 shadow-sm">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
-              <Landmark size={15} />
+    <div ref={reportRef} className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+      {/* 1. Executive Toolbar & Period Controller (Cards Rule compliant) */}
+      <Panel className="rounded-xl border border-blue-100/80 bg-gradient-to-r from-blue-50/40 via-white to-slate-50/40 p-3.5 shadow-sm">
+        <div className="flex flex-col gap-3.5 lg:flex-row lg:items-center lg:justify-between">
+          {/* Left: Brand Executive Badge & Title */}
+          <div className="flex items-center gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
+              <Building2 size={16} />
             </span>
-            <h1 className="text-base font-bold text-slate-950">Company Executive Report</h1>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm font-bold tracking-tight text-slate-900 sm:text-base">
+                  Company Performance Report
+                </h1>
+                <span className="rounded-md border border-blue-200 bg-blue-50/80 px-2 py-0.5 font-mono text-[10px] font-semibold text-blue-700">
+                  {range.label}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Consolidated Operating & Financial Review · {range.comparisonNote}
+              </p>
+            </div>
           </div>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Consolidated performance, cross-module financial standing, and executive health intelligence.
-          </p>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-600">
-            <Calendar size={13} className="text-blue-600" />
-            As of {formatFullDate(today)}
-          </span>
-
-          <div className="flex items-center gap-1.5">
-            <label htmlFor="company-report-fy" className="text-xs font-semibold text-slate-700">
-              FY:
-            </label>
-            <select
-              id="company-report-fy"
-              value={selectedFiscalYear}
-              onChange={(event) => setSelectedFiscalYear(Number(event.target.value))}
-              aria-label="Financial Year"
-              className="h-8.5 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-400/30"
+          {/* Right: Period Controller Tabs + Exports */}
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            <div
+              role="tablist"
+              aria-label="Report period"
+              className="inline-flex rounded-lg border border-blue-200/60 bg-blue-50/40 p-0.5 text-xs font-semibold"
             >
-              {Array.from({ length: 5 }, (_, index) => currentFiscalYear - index).map((year) => (
-                <option key={year} value={year}>
-                  FY {year}–{String(year + 1).slice(-2)}
-                  {year === currentFiscalYear ? ' to date' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'month'}
+                onClick={() => setMode('month')}
+                className={cn(
+                  'rounded-md px-2.5 py-1.5 transition-all text-xs font-medium',
+                  mode === 'month'
+                    ? 'bg-blue-600 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:text-blue-900 hover:bg-white/80',
+                )}
+              >
+                This Month
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'last_month'}
+                onClick={() => setMode('last_month')}
+                className={cn(
+                  'rounded-md px-2.5 py-1.5 transition-all text-xs font-medium',
+                  mode === 'last_month'
+                    ? 'bg-blue-600 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:text-blue-900 hover:bg-white/80',
+                )}
+              >
+                Last Month
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'fy'}
+                onClick={() => setMode('fy')}
+                className={cn(
+                  'rounded-md px-2.5 py-1.5 transition-all text-xs font-medium',
+                  mode === 'fy'
+                    ? 'bg-blue-600 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:text-blue-900 hover:bg-white/80',
+                )}
+              >
+                FY to Date
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'prev_fy'}
+                onClick={() => setMode('prev_fy')}
+                className={cn(
+                  'rounded-md px-2.5 py-1.5 transition-all text-xs font-medium',
+                  mode === 'prev_fy'
+                    ? 'bg-blue-600 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:text-blue-900 hover:bg-white/80',
+                )}
+              >
+                Last FY
+              </button>
+            </div>
 
-          <div className="flex items-center gap-2">
+            {mode === 'month' && (
+              <input
+                type="month"
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                aria-label="Select report month"
+                className="h-8 rounded-md border border-blue-200 bg-white px-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400/40"
+              />
+            )}
+
             <button
               type="button"
-              onClick={downloadSummaryCsv}
-              className="inline-flex h-8.5 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+              onClick={handleExportCsv}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-700"
             >
               <Download size={13} /> Summary CSV
             </button>
+
             <button
               type="button"
-              onClick={() => void downloadReportJpg()}
-              className="inline-flex h-8.5 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
+              onClick={handleExportJpg}
+              disabled={exporting}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50"
             >
-              <Download size={13} /> Export JPG
+              <Download size={13} /> {exporting ? 'Generating...' : 'Export JPG'}
             </button>
           </div>
         </div>
       </Panel>
 
       {exportError && (
-        <Panel role="alert" className="rounded-xl border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
+        <Panel className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
           {exportError}
         </Panel>
       )}
 
-      {/* 2. Three Modules Snapshot (Sales, Purchase, Casting side by side) */}
+      {/* 2. Executive Scorecard: The 4 Core Enterprise Pillars */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Pillar 1: Commercial Turnover */}
+        <KpiCard
+          label="Commercial Turnover"
+          hint="Sales Engine"
+          value={salesData ? formatCompactInr(salesData.billedSales) : '—'}
+          sparkline={
+            <Sparkline
+              values={sparklines6M.sales}
+              width={85}
+              height={32}
+              showArea
+              id="report-kpi-sales"
+            />
+          }
+          subtext={
+            salesData
+              ? `${salesData.periodBills.length} bills · ${salesData.activeCustomers} unique buyers`
+              : 'Loading billings...'
+          }
+          href="/sales-dashboard"
+        />
+
+        {/* Pillar 2: Procurement Spend */}
+        <KpiCard
+          label="Procurement Spend"
+          hint="Supply Chain"
+          value={purchaseData ? formatCompactInr(purchaseData.totalBoughtPaise / 100) : '—'}
+          sparkline={
+            <Sparkline
+              values={sparklines6M.purchases}
+              width={85}
+              height={32}
+              showArea
+              id="report-kpi-purchases"
+            />
+          }
+          subtext={
+            purchaseData
+              ? `${formatCompactKg(purchaseData.totalBoughtKg)} scrap inward · Avg ₹${Math.round(purchaseData.avgProcuredRateKg)}/kg`
+              : 'Module not active'
+          }
+          href="/purchase-dashboard"
+        />
+
+        {/* Pillar 3: Foundry Production */}
+        <KpiCard
+          label="Foundry Production"
+          hint="Manufacturing"
+          value={castingData ? formatCompactKg(castingData.wireOutKg) : '—'}
+          sparkline={
+            <Sparkline
+              values={sparklines6M.casting}
+              width={85}
+              height={32}
+              showArea
+              id="report-kpi-casting"
+            />
+          }
+          subtext={
+            castingData
+              ? `${castingData.safeYield.recoveryPct != null ? `${castingData.safeYield.recoveryPct}%` : '—'} recovery · Loaded ₹${Math.round(castingData.loadedCostPerKg)}/kg`
+              : 'Module not active'
+          }
+          href="/casting"
+        />
+
+        {/* Pillar 4: Working Capital Liquidity */}
+        <KpiCard
+          label="Net Operating Cash"
+          hint="Cash Realization"
+          value={formatCompactInr(cashFlow.netCash)}
+          tone={cashFlow.netCash >= 0 ? 'positive' : 'warning'}
+          sparkline={
+            <Sparkline
+              values={sparklines6M.netCash}
+              width={85}
+              height={32}
+              showArea
+              id="report-kpi-cashflow"
+            />
+          }
+          subtext={`In: ₹${formatCompactInr(cashFlow.cashIn)} · Out: ₹${formatCompactInr(cashFlow.cashOut)}`}
+          href="/ledger"
+        />
+      </div>
+
+      {/* 3. Three Operating Engines Side by Side */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Sales Module Overview */}
+        {/* Engine 1: Sales Position */}
         <SectionCard
           title="Sales Position"
-          subtitle="Customer billing & receivables"
           actions={
             <Link
               to="/sales-dashboard"
-              className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-800"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               Sales Dashboard <ArrowRight size={12} />
             </Link>
           }
         >
-          <div className="space-y-3">
-            <div>
-              <span className="text-xs font-medium text-slate-500">FY Billed Turnover</span>
-              <p className="mt-1 font-mono text-2xl font-bold tracking-tight text-slate-900 tabular-nums">
-                {formatInrInteger(report.thisFinancialYear.sales)}
-              </p>
+          <div className="space-y-3.5">
+            <div className="flex items-baseline justify-between border-b border-slate-100 pb-2.5">
+              <div>
+                <p className="text-[11px] text-slate-500">Billed in Period</p>
+                <p className="font-mono text-lg font-bold text-slate-900 tabular-nums">
+                  {salesData ? formatCompactInr(salesData.billedSales) : '—'}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-[11px] text-slate-500">Collected</p>
+                <p className="font-mono text-lg font-bold text-emerald-700 tabular-nums">
+                  {salesData ? formatCompactInr(salesData.collectionsRealized) : '—'}
+                </p>
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 text-xs">
+
+            <div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium text-slate-600">Collection Realization</span>
+                <span className="font-mono font-bold text-blue-700 tabular-nums">
+                  {salesData ? `${salesData.realizationRate.toFixed(1)}%` : '0%'}
+                </span>
+              </div>
+              <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-blue-600 transition-all duration-500"
+                  style={{ width: `${Math.min(100, salesData?.realizationRate ?? 0)}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 rounded-lg border border-blue-50/70 bg-blue-50/20 p-2.5 text-xs">
               <div>
-                <span className="text-[11px] text-slate-500">Collections</span>
-                <p className="font-mono font-semibold text-emerald-700">
-                  {formatInrInteger(report.thisFinancialYear.collections)}
+                <p className="text-[11px] text-slate-500">Open Receivables</p>
+                <p className="font-mono font-bold text-slate-900 tabular-nums">
+                  {salesData ? formatCompactInr(salesData.totalReceivable) : '—'}
                 </p>
+                <p className="text-[10px] text-slate-400">{salesData?.debtorList.length ?? 0} debtors</p>
               </div>
               <div>
-                <span className="text-[11px] text-slate-500">Open Receivable</span>
-                <p className="font-mono font-semibold text-slate-900">
-                  {formatInrInteger(report.overall.receivable)}
+                <p className="text-[11px] text-slate-500">Risk Overdue (&gt;60d)</p>
+                <p className="font-mono font-bold text-rose-600 tabular-nums">
+                  {salesData ? formatCompactInr(salesData.ageingBuckets.days61to90 + salesData.ageingBuckets.above90) : '—'}
                 </p>
-              </div>
-              <div>
-                <span className="text-[11px] text-slate-500">Efficiency</span>
-                <p className="font-mono font-semibold text-blue-700">
-                  {Math.round(report.overall.collectionEfficiencyPct)}%
-                </p>
-              </div>
-              <div>
-                <span className="text-[11px] text-slate-500">Active Customers</span>
-                <p className="font-mono font-semibold text-slate-700">
-                  {report.overall.activeCustomers} / {report.overall.customerCount}
-                </p>
+                <p className="text-[10px] text-slate-400">High priority collection</p>
               </div>
             </div>
           </div>
         </SectionCard>
 
-        {/* Purchase Module Overview */}
-        {purchaseEnabled && (
-          <SectionCard
-            title="Purchase Position"
-            subtitle="Procurement & supplier dues"
-            actions={
+        {/* Engine 2: Purchase Position */}
+        <SectionCard
+          title="Purchase Position"
+          actions={
+            purchaseEnabled ? (
               <Link
                 to="/purchase-dashboard"
-                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-800"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 transition hover:text-blue-800"
               >
                 Purchase Dashboard <ArrowRight size={12} />
               </Link>
-            }
-          >
-            {purchaseQuery.isError ? (
-              <p className="text-xs text-rose-600">Failed to load purchase figures.</p>
-            ) : purchaseSummary ? (
-              <div className="space-y-3">
+            ) : null
+          }
+        >
+          {purchaseEnabled && purchaseData ? (
+            <div className="space-y-3.5">
+              <div className="flex items-baseline justify-between border-b border-slate-100 pb-2.5">
                 <div>
-                  <span className="text-xs font-medium text-slate-500">Total Supplier Dues</span>
-                  <p className="mt-1 font-mono text-2xl font-bold tracking-tight text-slate-900 tabular-nums">
-                    {formatPaiseInr(purchaseSummary.totalOwed)}
+                  <p className="text-[11px] text-slate-500">Scrap Procured</p>
+                  <p className="font-mono text-lg font-bold text-slate-900 tabular-nums">
+                    {formatCompactInr(purchaseData.totalBoughtPaise / 100)}
                   </p>
+                  <p className="text-[10px] font-mono text-slate-400">{formatCompactKg(purchaseData.totalBoughtKg)} scrap</p>
                 </div>
-                <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 text-xs">
-                  <div>
-                    <span className="text-[11px] text-slate-500">Kacha Pool</span>
-                    <p className="font-mono font-semibold text-slate-800">
-                      {formatPaiseInr(purchaseSummary.kacha)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">GST Pool</span>
-                    <p className="font-mono font-semibold text-slate-800">
-                      {formatPaiseInr(purchaseSummary.gst)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">FY RCM Liability</span>
-                    <p className="font-mono font-semibold text-amber-700">
-                      {formatPaiseInr(purchaseSummary.rcm)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">FY Purchases</span>
-                    <p className="font-mono font-semibold text-slate-700">
-                      {purchaseSummary.bills} bills
-                    </p>
-                  </div>
+                <div className="text-right">
+                  <p className="text-[11px] text-slate-500">Paid Out</p>
+                  <p className="font-mono text-lg font-bold text-emerald-700 tabular-nums">
+                    {formatCompactInr(purchaseData.totalPaidPaise / 100)}
+                  </p>
+                  <p className="text-[10px] text-slate-400">{purchaseData.periodPayments.length} disbursements</p>
                 </div>
               </div>
-            ) : (
-              <div className="h-28 animate-pulse rounded-lg bg-slate-100" />
-            )}
-          </SectionCard>
-        )}
 
-        {/* Casting Module Overview */}
-        {castingEnabled && (
-          <SectionCard
-            title="Casting Position"
-            subtitle="Foundry heats & loaded cost"
-            actions={
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <p className="text-[11px] text-slate-500">We Owe Suppliers</p>
+                  <p className="font-mono font-bold text-blue-700 tabular-nums">
+                    {formatCompactInr(purchaseData.totalWeOwePaise / 100)}
+                  </p>
+                  <p className="text-[10px] text-slate-400">
+                    K: {formatCompactInr(purchaseData.positions.kachaPayablePaise / 100)} · G: {formatCompactInr(purchaseData.positions.gstPayablePaise / 100)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-slate-500">Advance Held</p>
+                  <p className="font-mono font-bold text-slate-900 tabular-nums">
+                    {formatCompactInr(purchaseData.positions.totalAdvancePaise / 100)}
+                  </p>
+                  <p className="text-[10px] text-slate-400">With suppliers</p>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-blue-50/70 bg-blue-50/20 p-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-slate-600 font-medium">Bardan Accountability</span>
+                  <span className={cn(
+                    'font-mono text-[11px] font-bold',
+                    purchaseData.bardanSummary.oldestDays > 10 ? 'text-amber-700' : 'text-slate-600'
+                  )}>
+                    {purchaseData.bardanSummary.pendingLots} lots ({purchaseData.bardanSummary.totalBags} bags)
+                  </span>
+                </div>
+                <p className="mt-0.5 text-[10px] text-slate-400">
+                  {purchaseData.bardanSummary.oldestDays > 0 ? `Oldest unreturned lot: ${purchaseData.bardanSummary.oldestDays} days old` : 'All bardan reconciled'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="py-8 text-center text-xs text-slate-400">
+              Purchase module is disabled in settings.
+            </div>
+          )}
+        </SectionCard>
+
+        {/* Engine 3: Casting Position */}
+        <SectionCard
+          title="Casting Position"
+          actions={
+            castingEnabled ? (
               <Link
                 to="/casting"
-                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-800"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 transition hover:text-blue-800"
               >
                 Casting Dashboard <ArrowRight size={12} />
               </Link>
-            }
-          >
-            {castingQuery.isError ? (
-              <p className="text-xs text-rose-600">Failed to load casting figures.</p>
-            ) : (
-              <div className="space-y-3">
+            ) : null
+          }
+        >
+          {castingEnabled && castingData ? (
+            <div className="space-y-3.5">
+              <div className="flex items-baseline justify-between border-b border-slate-100 pb-2.5">
                 <div>
-                  <span className="text-xs font-medium text-slate-500">Wire Output (FY)</span>
-                  <p className="mt-1 font-mono text-2xl font-bold tracking-tight text-slate-900 tabular-nums">
-                    {formatCompactKg(castingSummary.output)}
+                  <p className="text-[11px] text-slate-500">Metal Charged</p>
+                  <p className="font-mono text-lg font-bold text-slate-900 tabular-nums">
+                    {formatCompactKg(castingData.metalChargedKg)}
                   </p>
+                  <p className="text-[10px] text-slate-400">{castingData.totalBatches} heats in period</p>
                 </div>
-                <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 text-xs">
-                  <div>
-                    <span className="text-[11px] text-slate-500">Foundry Runs</span>
-                    <p className="font-mono font-semibold text-slate-800">
-                      {castingSummary.sessions} sessions
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">Metal Charged</span>
-                    <p className="font-mono font-semibold text-slate-800">
-                      {formatCompactKg(castingSummary.input)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">Loaded Cost</span>
-                    <p className="font-mono font-semibold text-blue-700">
-                      {castingSummary.costPerKg > 0 ? `₹${castingSummary.costPerKg.toFixed(2)}/kg` : '—'}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">Wastage %</span>
-                    <p className="font-mono font-semibold text-amber-700">
-                      {safeCastingYield.wastagePct != null ? `${safeCastingYield.wastagePct}%` : '—'}
-                    </p>
-                  </div>
+                <div className="text-right">
+                  <p className="text-[11px] text-slate-500">Finished Wire Out</p>
+                  <p className="font-mono text-lg font-bold text-blue-700 tabular-nums">
+                    {formatCompactKg(castingData.wireOutKg)}
+                  </p>
+                  <p className="text-[10px] text-slate-400">{castingData.foundryActiveDays} operating days</p>
                 </div>
               </div>
-            )}
-          </SectionCard>
-        )}
+
+              <div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-medium text-slate-600">Safe Metal Recovery</span>
+                  <span className="font-mono font-bold text-emerald-700 tabular-nums">
+                    {castingData.safeYield.recoveryPct != null ? `${castingData.safeYield.recoveryPct}%` : '—'}
+                  </span>
+                </div>
+                <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-emerald-600 transition-all duration-500"
+                    style={{ width: `${Math.min(100, castingData.safeYield.recoveryPct ?? 0)}%` }}
+                  />
+                </div>
+                <p className="mt-1 text-[10px] text-slate-400">
+                  Melting loss: {castingData.safeYield.wastagePct != null ? `${castingData.safeYield.wastagePct}%` : '—'} ({formatCompactKg(castingData.totalMelWastageKg)})
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 rounded-lg border border-blue-50/70 bg-blue-50/20 p-2.5 text-xs">
+                <div>
+                  <p className="text-[11px] text-slate-500">Loaded Cost / kg</p>
+                  <p className="font-mono font-bold text-slate-900 tabular-nums">
+                    {castingData.loadedCostPerKg > 0 ? `₹${castingData.loadedCostPerKg.toFixed(2)}` : '—'}
+                  </p>
+                  <p className="text-[10px] text-slate-400">Metal + Coal + Labour</p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-slate-500">Lowest Heat Run</p>
+                  <p className="font-mono font-bold text-emerald-700 tabular-nums">
+                    {castingData.bestSession ? `₹${castingData.bestSession.costPerKg.toFixed(2)}/kg` : '—'}
+                  </p>
+                  <p className="text-[10px] text-slate-400">Peak heat efficiency</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="py-8 text-center text-xs text-slate-400">
+              Casting module is disabled in settings.
+            </div>
+          )}
+        </SectionCard>
       </div>
 
-      {reportQuery.isLoading && (
-        <Panel className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
-          Loading executive report metrics...
-        </Panel>
-      )}
+      {/* 4. 12-Month Multi-Stream Company Rhythm */}
+      <SectionCard
+        title="12-Month Multi-Stream Company Rhythm"
+        subtitle="Consolidated trajectory across commercial sales, procurement spend, and cash realization"
+        actions={
+          <span className="text-[11px] font-mono text-slate-400">
+            {past12Months[0]} → {past12Months[past12Months.length - 1]}
+          </span>
+        }
+      >
+        <div className="space-y-4 pt-1">
+          <TrendChart
+            data={company12MTrend}
+            xKey="month"
+            series={[
+              { dataKey: 'sales', name: 'Sales Billed (₹)', color: '#2563eb', type: 'bar' },
+              { dataKey: 'purchases', name: 'Scrap Bought (₹)', color: '#f59e0b', type: 'bar' },
+              { dataKey: 'collections', name: 'Collections In (₹)', color: '#059669', type: 'line' },
+              { dataKey: 'paidOut', name: 'Disbursed Out (₹)', color: '#e11d48', type: 'line' },
+            ]}
+            height={260}
+            formatY={(v) => formatCompactInr(v)}
+            formatTooltip={(v) => formatInrInteger(v)}
+            ariaLabel="12-Month Multi-Stream Company Trajectory"
+          />
 
-      {reportQuery.isError && (
-        <Panel role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-center text-sm text-rose-700">
-          <AlertCircle className="mx-auto mb-2 text-rose-600" size={24} />
-          Unable to load company report. Please check server connectivity.
-        </Panel>
-      )}
-
-      {!reportQuery.isLoading && !reportQuery.isError && (
-        <>
-          {/* 3. Executive KPI Health Tiles Row (5 Cards) */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            <ExecutiveKpiTile
-              title="Total Sales"
-              value={formatInrInteger(report.overall.totalSales)}
-              trend={report.thisMonth.sales - report.lastMonth.sales}
-              trendLabel="vs last month"
-              status={salesDelta >= 0 ? 'Healthy' : 'Warning'}
-              icon={<TrendingUp size={18} />}
-              sparkline={report.monthlyTrend.map((row) => row.sales)}
-            />
-            <ExecutiveKpiTile
-              title="Total Collections"
-              value={formatInrInteger(report.overall.totalCollections)}
-              trend={report.thisMonth.collections - report.lastMonth.collections}
-              trendLabel="vs last month"
-              status={report.thisMonth.collections >= report.lastMonth.collections ? 'Healthy' : 'Warning'}
-              icon={<Landmark size={18} />}
-              sparkline={report.monthlyTrend.map((row) => row.collections)}
-            />
-            <ExecutiveKpiTile
-              title="Receivable"
-              value={formatInrInteger(report.overall.receivable)}
-              trend={report.overall.receivable}
-              trendLabel="open balance"
-              status={report.receivableAging.above90 > 0 ? 'Risk' : report.overall.receivable > 0 ? 'Warning' : 'Healthy'}
-              icon={<AlertTriangle size={18} />}
-              progress={boundedPct(report.overall.receivable, Math.max(report.overall.totalSales, report.overall.receivable))}
-            />
-            <ExecutiveKpiTile
-              title="Collection Efficiency"
-              value={`${Math.round(report.overall.collectionEfficiencyPct)}%`}
-              trend={report.overall.collectionEfficiencyDeltaPct}
-              trendLabel="pp vs last month"
-              status={collectionEfficiencyStatus}
-              icon={<CheckCircle2 size={18} />}
-              progress={Math.min(100, report.overall.collectionEfficiencyPct)}
-            />
-            <ExecutiveKpiTile
-              title="Monthly Cash Gap"
-              value={formatDelta(monthlyCashGap)}
-              trend={-monthlyCashGap}
-              trendLabel="collections - sales"
-              status={monthlyCashGap > 0 ? 'Warning' : 'Healthy'}
-              icon={<CircleDollarSign size={18} />}
-              sparkline={report.monthlyTrend.map((row) => row.collections - row.sales)}
-            />
+          {/* Monthly Breakdown Table */}
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  <th className="px-3 py-2">Month</th>
+                  <th className="px-3 py-2 text-right">Sales Billed</th>
+                  <th className="px-3 py-2 text-right">Collections</th>
+                  <th className="px-3 py-2 text-right">Scrap Purchases</th>
+                  <th className="px-3 py-2 text-right">Payouts</th>
+                  <th className="px-3 py-2 text-right">Wire Output</th>
+                  <th className="px-3 py-2 text-right">Net Cash Flow</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                {company12MTrend.map((row) => (
+                  <tr key={row.month} className="hover:bg-blue-50/40 transition-colors">
+                    <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-900 font-semibold">
+                      {formatMonthYear(row.month)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-blue-700">
+                      {formatInrInteger(row.sales)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-700">
+                      {formatInrInteger(row.collections)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-amber-700">
+                      {formatInrInteger(row.purchases)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-700">
+                      {formatInrInteger(row.paidOut)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-600">
+                      {formatCompactKg(row.wireOut)}
+                    </td>
+                    <td className={cn(
+                      'px-3 py-2 text-right font-mono tabular-nums font-bold',
+                      row.netCash >= 0 ? 'text-emerald-700' : 'text-rose-600'
+                    )}>
+                      {row.netCash >= 0 ? `+${formatInrInteger(row.netCash)}` : `-${formatInrInteger(Math.abs(row.netCash))}`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
+        </div>
+      </SectionCard>
 
-          {/* 4. Priority Action Center */}
-          <SectionCard
-            title="Priority Signals"
-            subtitle="Executive action triggers and overdue exposure"
-            actions={
+      {/* 5. Commercial Intelligence & Supply Chain Deep-Dive */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {/* Commercial & Customer Insights */}
+        <SectionCard
+          title="Top Commercial Customers & Debtors"
+          subtitle="Top revenue contributors and largest active receivables requiring collection"
+          actions={
+            <Link
+              to="/ledger"
+              search={{ tab: 'customers' }}
+              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
+            >
+              Customer ledger →
+            </Link>
+          }
+        >
+          <div className="space-y-4 pt-1">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-2">
+                Top Customers by Sales Volume ({range.label})
+              </p>
+              <RankedBars
+                rows={salesData?.topCustomersBySales.map((c) => ({
+                  id: c.id,
+                  label: c.name,
+                  value: c.value,
+                  subLabel: `${c.bags} bags billed`,
+                  href: `/ledger?customerId=${c.id}&tab=customers`,
+                })) ?? []}
+                tone="blue"
+                emptyText="No customer sales recorded for this period."
+              />
+            </div>
+
+            <div className="border-t border-slate-100 pt-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-2">
+                Largest Outstanding Balances
+              </p>
+              <RankedBars
+                rows={salesData?.topDebtors.map((d) => ({
+                  id: d.id,
+                  label: d.name,
+                  value: d.amount,
+                  ageDays: d.days,
+                  ageLevel: d.days > 60 ? 'overdue' : d.days > 30 ? 'due' : 'watch',
+                  href: `/ledger?customerId=${d.id}&tab=customers`,
+                })) ?? []}
+                tone="blue"
+                emptyText="All customer balances are clear."
+              />
+            </div>
+
+            {salesData && salesData.gasMetrics.totalKg > 0 && (
+              <div className="rounded-lg border border-blue-100 bg-blue-50/30 p-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-900">Gas Selling Margin vs Vilaity</span>
+                  <span className={cn(
+                    'font-mono font-bold',
+                    salesData.gasMetrics.marginPerKg >= 0 ? 'text-emerald-700' : 'text-rose-600'
+                  )}>
+                    {salesData.gasMetrics.marginPerKg >= 0 ? `+₹${salesData.gasMetrics.marginPerKg.toFixed(2)}/kg premium` : `-₹${Math.abs(salesData.gasMetrics.marginPerKg).toFixed(2)}/kg discount`}
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {formatCompactKg(salesData.gasMetrics.totalKg)} sold at avg ₹{salesData.gasMetrics.avgSellingRate.toFixed(2)}/kg (Vilaity benchmark: ₹{salesData.gasMetrics.avgMarketRate.toFixed(2)}/kg)
+                </p>
+              </div>
+            )}
+          </div>
+        </SectionCard>
+
+        {/* Supply Chain & Supplier Intelligence */}
+        <SectionCard
+          title="Procurement & Supplier Settlements"
+          subtitle="Top inward scrap vendors and outstanding payout priorities"
+          actions={
+            purchaseEnabled ? (
               <Link
                 to="/ledger"
-                search={{
-                  customerId: highestOutstandingCustomer?.customerId ?? '',
-                  focus: 'overdue',
-                }}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+                search={{ tab: 'suppliers' }}
+                className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
               >
-                Collect from Overdue Parties <ArrowRight size={13} />
+                Supplier ledger →
               </Link>
-            }
-          >
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-              <PrioritySignalTile
-                icon={<AlertTriangle size={16} />}
-                status={overdueCustomersCount > 0 ? 'Risk' : 'Healthy'}
-                label="Overdue Customers"
-                value={`${overdueCustomersCount}`}
-                detail={overdueCustomersCount > 0 ? '90+ day follow-up required' : 'No high-risk overdue bucket'}
-              />
-              <PrioritySignalTile
-                icon={<CircleDollarSign size={16} />}
-                status="Warning"
-                label="Highest Outstanding"
-                value={highestOutstandingCustomer ? formatInrInteger(highestOutstandingCustomer.value) : '—'}
-                detail={highestOutstandingCustomer?.name ?? 'No debtor recorded'}
-              />
-              <PrioritySignalTile
-                icon={<TrendingUp size={16} />}
-                status={salesDelta >= 0 ? 'Healthy' : 'Warning'}
-                label="Sales Movement"
-                value={salesDelta >= 0 ? 'Rising' : 'Dropping'}
-                detail={`${formatDelta(salesDelta)} vs previous month`}
-              />
-              <PrioritySignalTile
-                icon={<CheckCircle2 size={16} />}
-                status={collectionEfficiencyStatus}
-                label="Collection Pace"
-                value={`${Math.round(report.overall.collectionEfficiencyPct)}%`}
-                detail={`${collectionEfficiencyStatus} collection efficiency`}
-              />
-              <PrioritySignalTile
-                icon={<ReceiptText size={16} />}
-                status="Neutral"
-                label="GST Collected (Est.)"
-                value={formatInrInteger(report.thisMonth.gstEstimate)}
-                detail="Estimated for this month"
-              />
-            </div>
-          </SectionCard>
-
-          {/* 5. Main Analytics: Sales vs Collections Trend & Receivables Ageing */}
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-            {/* Sales vs Collections Trend (8 cols, spans 2 rows) */}
-            <SectionCard
-              title="Sales vs Collections Trend"
-              subtitle="Monthly comparison of billed turnover, cash realization, and cash gap"
-              className="xl:col-span-8 xl:row-span-2"
-            >
-              <SalesCollectionTrendChart data={report.monthlyTrend} />
-            </SectionCard>
-
-            {/* Collection Efficiency (4 cols) */}
-            <SectionCard
-              title="Collection Progress"
-              subtitle="Collected against billed turnover"
-              className="xl:col-span-4"
-            >
-              <CollectionEfficiencyGauge
-                value={report.overall.collectionEfficiencyPct}
-                tone={
-                  collectionEfficiencyStatus === 'Healthy'
-                    ? 'green'
-                    : collectionEfficiencyStatus === 'Warning'
-                      ? 'amber'
-                      : 'red'
-                }
-              />
-            </SectionCard>
-
-            {/* Ageing Distribution (4 cols) */}
-            <SectionCard
-              title="Receivable Ageing Distribution"
-              subtitle="Click a bucket to filter customer drill-down below"
-              className="xl:col-span-4"
-            >
-              <ReceivableAgingBars
-                aging={report.receivableAging}
-                selected={selectedAgingBucket}
-                onSelect={setSelectedAgingBucket}
-              />
-            </SectionCard>
-          </div>
-
-          {/* 6. Customer Intelligence */}
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {/* Top Customers by Sales */}
-            <SectionCard
-              title="Top Customers by Sales Volume"
-              subtitle="Highest turnover accounts this financial year"
-            >
-              <div className="space-y-2.5">
-                {report.topCustomersBySales.map((row, index) => (
-                  <div
-                    key={row.customerId}
-                    className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 transition hover:bg-blue-50/40"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 font-mono text-xs font-bold text-blue-700">
-                        {index + 1}
-                      </span>
-                      <Link
-                        to="/ledger"
-                        search={{ customerId: row.customerId, focus: '' }}
-                        className="truncate text-xs font-semibold text-slate-800 hover:text-blue-700"
-                      >
-                        {row.name}
-                      </Link>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <span className="font-mono text-xs font-bold tabular-nums text-slate-900">
-                        {formatInrInteger(row.value)}
-                      </span>
-                      <p className="text-[11px] text-blue-600">Billed</p>
-                    </div>
-                  </div>
-                ))}
-                {report.topCustomersBySales.length === 0 && (
-                  <p className="py-4 text-center text-xs text-slate-400">No customer sales recorded.</p>
-                )}
-              </div>
-            </SectionCard>
-
-            {/* Top Debtors by Outstanding */}
-            <SectionCard
-              title="Top Debtors by Outstanding"
-              subtitle="Largest open balances requiring collection"
-            >
-              <div className="space-y-2.5">
-                {report.topCustomersByOutstanding.map((row, index) => (
-                  <div
-                    key={row.customerId}
-                    className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 transition hover:bg-rose-50/30"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-200 font-mono text-xs font-bold text-slate-700">
-                        {index + 1}
-                      </span>
-                      <Link
-                        to="/ledger"
-                        search={{ customerId: row.customerId, focus: '' }}
-                        className="truncate text-xs font-semibold text-slate-800 hover:text-blue-700"
-                      >
-                        {row.name}
-                      </Link>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <span className="font-mono text-xs font-bold tabular-nums text-slate-900">
-                        {formatInrInteger(row.value)}
-                      </span>
-                      <div className="mt-0.5">
-                        <StatusChip
-                          label={index === 0 ? 'High Risk' : 'Due'}
-                          status={index === 0 ? 'Risk' : 'Warning'}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {report.topCustomersByOutstanding.length === 0 && (
-                  <p className="py-4 text-center text-xs text-slate-400">No outstanding customer balances.</p>
-                )}
-              </div>
-            </SectionCard>
-          </div>
-
-          {/* 7. Receivable Ageing Customers Drill-Down */}
-          <SectionCard
-            title={`Receivable Ageing Customers (${selectedBucketLabel})`}
-            subtitle="Customer list filtered by selected ageing bracket"
-            actions={
-              <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
-                {(['above90', 'days61to90', 'days31to60', 'current'] as const).map((key) => {
-                  const label = key === 'above90' ? '90d+' : key === 'days61to90' ? '61–90d' : key === 'days31to60' ? '31–60d' : '0–30d'
-                  const isActive = selectedAgingBucket === key
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setSelectedAgingBucket(key)}
-                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                        isActive ? 'bg-white text-blue-700 shadow-sm font-semibold' : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
-            }
-          >
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-100 bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                    <th className="px-3 py-2">Customer</th>
-                    <th className="px-3 py-2 text-right">Outstanding</th>
-                    <th className="px-3 py-2 text-right">Age</th>
-                    <th className="px-3 py-2 text-right">Status</th>
-                    <th className="px-3 py-2 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {report.receivableAgingCustomers[selectedAgingBucket].slice(0, 10).map((row) => (
-                    <tr key={`${selectedAgingBucket}-${row.customerId}`} className="hover:bg-slate-50/60">
-                      <td className="px-3 py-2.5 font-medium text-slate-900">{row.name}</td>
-                      <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-slate-900">
-                        {formatInrInteger(row.amount)}
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-600">
-                        {row.dueDays} days
-                      </td>
-                      <td className="px-3 py-2.5 text-right">
-                        <StatusChip
-                          label={row.dueDays > 90 ? '90d+ Risk' : row.dueDays > 60 ? '61–90d' : 'Active'}
-                          status={row.dueDays > 90 ? 'Risk' : row.dueDays > 60 ? 'Warning' : 'Healthy'}
-                        />
-                      </td>
-                      <td className="px-3 py-2.5 text-right">
-                        <Link
-                          to="/ledger"
-                          search={{ customerId: row.customerId, focus: '' }}
-                          className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
-                        >
-                          Ledger
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
-                  {report.receivableAgingCustomers[selectedAgingBucket].length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="px-3 py-8 text-center text-xs text-slate-400">
-                        No customer accounts in the {selectedBucketLabel} bracket.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </SectionCard>
-
-          {/* 8. Weekly Sales Rhythm & 3-Year Comparison */}
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-            {/* Weekly Sales Rhythm (7 cols) */}
-            <SectionCard
-              title="Weekly Sales Rhythm"
-              subtitle="Last 12 weeks of commercial selling activity"
-              className="xl:col-span-7"
-            >
-              <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <MiniMetricTile
-                  label="Best Sales Day"
-                  value={
-                    heatmapSummary.bestDay
-                      ? `${formatFullDate(heatmapSummary.bestDay.date)} · ${formatInrInteger(heatmapSummary.bestDay.sales)}`
-                      : '—'
-                  }
-                />
-                <MiniMetricTile
-                  label="Active Days"
-                  value={`${heatmapSummary.activeDays} / ${report.dailySalesHeatmap.length}`}
-                />
-                <MiniMetricTile label="Highest Streak" value={`${heatmapSummary.highestStreak} days`} />
-                <MiniMetricTile
-                  label="Selling Rhythm"
-                  value={heatmapSummary.activeDays < 20 ? 'Slow' : 'Regular'}
-                  highlight={heatmapSummary.activeDays >= 20}
-                />
-              </div>
-              <WeeklySalesChart daily={report.dailySalesHeatmap} />
-            </SectionCard>
-
-            {/* Financial Year Comparison (5 cols) */}
-            <SectionCard
-              title="3-Year Financial Comparison"
-              subtitle="Cross-year billing, collections, and net gap"
-              className="xl:col-span-5"
-            >
-              <div className="space-y-3">
-                {report.financialYearSummary.map((fy) => {
-                  const efficiency = fy.sales > 0 ? (fy.collections / fy.sales) * 100 : 0
-                  return (
-                    <div
-                      key={fy.label}
-                      className="rounded-lg border border-slate-100 bg-slate-50/70 p-3"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-slate-900 text-xs">{fy.label}</span>
-                        <StatusChip
-                          label={`${Math.round(efficiency)}% collected`}
-                          status={efficiency >= 85 ? 'Healthy' : efficiency >= 60 ? 'Warning' : 'Risk'}
-                        />
-                      </div>
-                      <div className="mt-2.5 grid grid-cols-3 gap-2 text-xs">
-                        <div>
-                          <p className="text-[11px] text-slate-500">Sales</p>
-                          <p className="font-mono font-semibold text-blue-700">
-                            {formatCompactInr(fy.sales)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] text-slate-500">Collections</p>
-                          <p className="font-mono font-semibold text-emerald-700">
-                            {formatCompactInr(fy.collections)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] text-slate-500">Gap</p>
-                          <p className="font-mono font-semibold text-slate-800">
-                            {formatCompactInr(fy.gap)}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
-                        <div
-                          className="h-full rounded-full bg-blue-600 transition-all duration-500"
-                          style={{ width: `${Math.min(100, Math.max(0, efficiency))}%` }}
-                        />
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </SectionCard>
-          </div>
-
-          {/* 9. Gas Sales Performance */}
-          <SectionCard
-            title="Gas Sales Performance"
-            subtitle="Quantity-weighted gas selling rates vs saved bill market rate"
-            actions={
-              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                Month:
-                <input
-                  type="month"
-                  value={selectedGasMonth}
-                  onChange={(event) => setSelectedGasMonth(event.target.value || selectedGasMonth)}
-                  className="h-8 rounded-lg border border-slate-300 bg-white px-2.5 font-mono text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-400/30"
-                />
-              </label>
-            }
-          >
-            {gasSales.selected.overall.kg <= 0 ? (
-              <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
-                <p className="text-xs font-semibold text-slate-700">
-                  No gas shipments recorded in {formatMonthYear(selectedGasMonth)}.
-                </p>
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Company-level sales, collection, purchase, and casting figures remain available above.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6 rounded-lg border border-slate-100 bg-slate-50/70 p-3 text-xs">
-                  <div>
-                    <span className="text-[11px] text-slate-500">Gas Sales</span>
-                    <p className="font-mono font-semibold text-slate-900">
-                      {formatInrInteger(gasSales.selected.overall.sales)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">Gas Volume</span>
-                    <p className="font-mono font-semibold text-slate-900">
-                      {formatCompactKg(gasSales.selected.overall.kg)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">Avg Selling Rate</span>
-                    <p className="font-mono font-semibold text-blue-700">
-                      {formatRate(gasSales.selected.overall.weightedSellingRate)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">Avg Bill Market</span>
-                    <p className="font-mono font-semibold text-slate-700">
-                      {formatRate(gasSales.selected.overall.weightedMarketRate)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">Premium / Discount</span>
-                    <p
-                      className={`font-mono font-semibold ${
-                        gasSales.selected.overall.premiumPerKg == null
-                          ? 'text-slate-500'
-                          : gasSales.selected.overall.premiumPerKg >= 0
-                            ? 'text-emerald-700'
-                            : 'text-rose-700'
-                      }`}
-                    >
-                      {formatSignedRate(gasSales.selected.overall.premiumPerKg)}
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-slate-500">Gas Bills</span>
-                    <p className="font-mono font-semibold text-slate-900">
-                      {gasSales.selected.overall.billCount} bills
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  <div>
-                    <h3 className="mb-2 text-xs font-semibold text-slate-900">Selling Rate vs Bill Market</h3>
-                    <GasSellingRateTrendChart
-                      data={gasSales.all.byMonth.slice(-12).map((row) => ({
-                        month: row.key,
-                        sellingRate: row.weightedSellingRate,
-                        marketRate: row.weightedMarketRate,
-                        kg: row.kg,
-                      }))}
-                    />
-                  </div>
-                  <GasBreakdownTable title="Gas Items" rows={gasSales.selected.byItem} mode="item" />
-                </div>
-              </div>
-            )}
-          </SectionCard>
-        </>
-      )}
-    </div>
-  )
-}
-
-// -----------------------------------------------------------------------------
-// Component Helpers (Cards Rule & Blue Theme compliant)
-// -----------------------------------------------------------------------------
-
-type HealthStatus = 'Healthy' | 'Warning' | 'Risk' | 'Neutral'
-
-function StatusChip({ label, status }: { label: string; status: HealthStatus }) {
-  const styles =
-    status === 'Healthy'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-      : status === 'Warning'
-        ? 'border-amber-200 bg-amber-50 text-amber-700'
-        : status === 'Risk'
-          ? 'border-rose-200 bg-rose-50 text-rose-700'
-          : 'border-blue-100 bg-blue-50 text-blue-700'
-
-  return (
-    <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold leading-normal ${styles}`}>
-      {label}
-    </span>
-  )
-}
-
-function ExecutiveKpiTile({
-  title,
-  value,
-  trend,
-  trendLabel,
-  status,
-  icon,
-  sparkline,
-  progress,
-}: {
-  title: string
-  value: string
-  trend: number
-  trendLabel: string
-  status: HealthStatus
-  icon: ReactNode
-  sparkline?: number[]
-  progress?: number
-}) {
-  const trendPositive = trend >= 0
-  const TrendIcon = trendPositive ? ArrowUpRight : ArrowDownRight
-
-  return (
-    <article
-      data-card="true"
-      className="group rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-blue-300 hover:shadow-md"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="rounded-lg bg-blue-50 p-2 text-blue-700">{icon}</div>
-        <StatusChip label={status} status={status} />
-      </div>
-
-      <p className="mt-3 text-xs font-medium text-slate-500">{title}</p>
-      <p className="mt-1 font-mono text-2xl font-bold tracking-tight text-slate-900 tabular-nums">{value}</p>
-
-      <div className="mt-2.5 flex items-center justify-between text-xs">
-        <span
-          className={`inline-flex items-center gap-0.5 font-semibold font-mono ${
-            trendPositive ? 'text-emerald-700' : 'text-rose-700'
-          }`}
+            ) : null
+          }
         >
-          <TrendIcon size={13} />
-          {typeof trend === 'number' && Math.abs(trend) < 100
-            ? `${trendPositive ? '+' : ''}${trend.toFixed(1)}`
-            : formatDelta(trend)}
-        </span>
-        <span className="text-[11px] text-slate-400">{trendLabel}</span>
-      </div>
+          {purchaseEnabled && purchaseData ? (
+            <div className="space-y-4 pt-1">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-2">
+                  Top Scrap Vendors by Procurement Volume ({range.label})
+                </p>
+                <RankedBars
+                  rows={purchaseData.topSuppliersBySpend.map((s) => ({
+                    id: s.id,
+                    label: s.name,
+                    value: s.value,
+                    subLabel: `${formatCompactKg(s.kg)} scrap inward`,
+                    href: `/supplier-ledger/${s.id}`,
+                  }))}
+                  tone="blue"
+                  emptyText="No scrap procurement recorded this period."
+                />
+              </div>
 
-      <div className="mt-3 h-8">
-        {sparkline && sparkline.length >= 2 ? (
-          <Sparkline
-            values={sparkline}
-            width={120}
-            height={32}
-            trend={trendPositive ? 'up' : 'down'}
-            showArea
-            id={`report-kpi-${title.toLowerCase().replace(/\s+/g, '-')}`}
-          />
-        ) : progress != null ? (
-          <div className="flex h-full items-end pb-1">
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-              <div
-                className="h-full rounded-full bg-blue-600 transition-all duration-700"
-                style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-              />
+              <div className="border-t border-slate-100 pt-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-2">
+                  Pay Next: Largest Supplier Dues
+                </p>
+                <RankedBars
+                  rows={purchaseData.topSuppliersOwed.map((s) => ({
+                    id: s.id,
+                    label: s.name,
+                    value: s.amount,
+                    subLabel: `Kacha ₹${formatCompactInr(s.kacha)} · GST ₹${formatCompactInr(s.gst)}`,
+                    href: `/supplier-ledger/${s.id}`,
+                  }))}
+                  tone="blue"
+                  emptyText="No supplier dues pending."
+                />
+              </div>
+
+              {purchaseData.bardanSummary.pendingLots > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-amber-900">Bardan (Gunny Bags) Action Required</span>
+                    <span className="font-mono font-bold text-amber-800">
+                      {purchaseData.bardanSummary.totalBags} bags pending return
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-amber-700">
+                    Across {purchaseData.bardanSummary.pendingLots} inward lots · Oldest lot is {purchaseData.bardanSummary.oldestDays} days old
+                  </p>
+                </div>
+              )}
             </div>
-          </div>
-        ) : null}
+          ) : (
+            <div className="py-12 text-center text-xs text-slate-400">
+              Purchase module is disabled in settings.
+            </div>
+          )}
+        </SectionCard>
       </div>
-    </article>
-  )
-}
 
-function PrioritySignalTile({
-  icon,
-  status,
-  label,
-  value,
-  detail,
-}: {
-  icon: ReactNode
-  status: HealthStatus
-  label: string
-  value: string
-  detail: string
-}) {
-  const borderBg =
-    status === 'Risk'
-      ? 'border-rose-200 bg-rose-50/40 text-rose-800'
-      : status === 'Warning'
-        ? 'border-amber-200 bg-amber-50/40 text-amber-800'
-        : status === 'Healthy'
-          ? 'border-emerald-200 bg-emerald-50/40 text-emerald-800'
-          : 'border-blue-100 bg-blue-50/40 text-blue-800'
+      {/* 6. Working Capital Ageing Audit & Debtor Drilldown */}
+      <SectionCard
+        title="Receivable Ageing & Debtor Audit"
+        subtitle="Distribution of outstanding customer balances by invoice maturity date"
+        actions={
+          <span className="text-xs font-semibold text-blue-700 font-mono">
+            Total Outstanding: ₹{formatInrInteger(salesData?.totalReceivable ?? 0)}
+          </span>
+        }
+      >
+        <div className="space-y-4 pt-1">
+          {/* Stacked Proportional Ageing Bar */}
+          <StackedBar
+            segments={[
+              { key: '0-30', label: '0–30d (Current)', value: salesData?.ageingBuckets.current ?? 0, color: CHART_THEME.ageing.b0to30 },
+              { key: '31-60', label: '31–60d (Due)', value: salesData?.ageingBuckets.days31to60 ?? 0, color: CHART_THEME.ageing.b31to60 },
+              { key: '61-90', label: '61–90d (Watch)', value: salesData?.ageingBuckets.days61to90 ?? 0, color: '#ea580c' },
+              { key: '90+', label: '90d+ (Overdue Risk)', value: salesData?.ageingBuckets.above90 ?? 0, color: CHART_THEME.ageing.b60plus },
+            ]}
+            formatValue={(v) => formatCompactInr(v)}
+            emptyText="No customer receivables pending."
+          />
 
-  return (
-    <div className={`rounded-lg border p-3 ${borderBg}`}>
-      <div className="flex items-center gap-1.5">
-        <span className="shrink-0">{icon}</span>
-        <p className="text-xs font-medium text-slate-700">{label}</p>
-      </div>
-      <p className="mt-2 font-mono text-lg font-bold tabular-nums text-slate-950">{value}</p>
-      <p className="mt-1 line-clamp-1 text-[11px] text-slate-500">{detail}</p>
-    </div>
-  )
-}
-
-function MiniMetricTile({
-  label,
-  value,
-  highlight = false,
-}: {
-  label: string
-  value: string
-  highlight?: boolean
-}) {
-  return (
-    <div className="rounded-lg border border-slate-100 bg-slate-50/70 p-2.5">
-      <p className="text-[11px] font-medium text-slate-500">{label}</p>
-      <p className={`mt-1 truncate font-mono text-xs font-semibold tabular-nums ${highlight ? 'text-blue-700' : 'text-slate-900'}`}>
-        {value}
-      </p>
-    </div>
-  )
-}
-
-function GasBreakdownTable({
-  title,
-  rows,
-  mode,
-}: {
-  title: string
-  rows: GasSalesGroup[]
-  mode: 'item' | 'customer'
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="mb-2 flex items-baseline justify-between gap-3">
-        <h4 className="text-xs font-semibold text-slate-900">{title}</h4>
-        <span className="text-[11px] text-slate-500">
-          {rows.length} {mode === 'customer' ? 'customers' : 'items'}
-        </span>
-      </div>
-      <div className="overflow-x-auto rounded-lg border border-slate-200">
-        <table className="w-full min-w-[500px] border-collapse text-xs">
-          <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500">
-            <tr>
-              <th className="px-3 py-2 text-left font-semibold">{mode === 'customer' ? 'Customer' : 'Item'}</th>
-              <th className="px-3 py-2 text-right font-semibold">Sales</th>
-              <th className="px-3 py-2 text-right font-semibold">Kg</th>
-              <th className="px-3 py-2 text-right font-semibold">Avg Rate</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.map((row) => (
-              <tr key={row.key} className="bg-white hover:bg-blue-50/40">
-                <td className="max-w-[180px] truncate px-3 py-2 font-medium text-slate-800">
-                  {mode === 'customer' ? (
-                    <Link to="/ledger" search={{ customerId: row.key, focus: '' }} className="hover:text-blue-700">
-                      {row.label}
-                    </Link>
-                  ) : (
-                    row.label
-                  )}
-                </td>
-                <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-slate-900">
-                  {formatInrInteger(row.sales)}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-600">
-                  {formatCompactKg(row.kg)}
-                </td>
-                <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-blue-700">
-                  {formatRate(row.weightedSellingRate)}
-                </td>
-              </tr>
+          {/* Bucket Switcher */}
+          <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+            <span className="text-xs font-semibold text-slate-500 mr-1">Filter Bucket:</span>
+            {[
+              { key: 'above90', label: '90d+ (Risk)', count: salesData?.ageingDebtors.above90.length ?? 0, color: 'text-rose-700 border-rose-200 bg-rose-50' },
+              { key: 'days61to90', label: '61–90d', count: salesData?.ageingDebtors.days61to90.length ?? 0, color: 'text-orange-700 border-orange-200 bg-orange-50' },
+              { key: 'days31to60', label: '31–60d', count: salesData?.ageingDebtors.days31to60.length ?? 0, color: 'text-amber-700 border-amber-200 bg-amber-50' },
+              { key: 'current', label: '0–30d', count: salesData?.ageingDebtors.current.length ?? 0, color: 'text-blue-700 border-blue-200 bg-blue-50' },
+            ].map((b) => (
+              <button
+                key={b.key}
+                type="button"
+                onClick={() => setSelectedAgingBucket(b.key as AgingBucketKey)}
+                className={cn(
+                  'rounded-lg border px-2.5 py-1 text-xs font-medium transition-all',
+                  selectedAgingBucket === b.key
+                    ? `${b.color} font-bold shadow-sm ring-1 ring-blue-300`
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+                )}
+              >
+                {b.label} <span className="font-mono text-[11px] opacity-75">({b.count})</span>
+              </button>
             ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={4} className="px-3 py-6 text-center text-xs text-slate-400">
-                  No records.
-                </td>
+          </div>
+
+          {/* Filtered Debtor Table */}
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  <th className="px-3 py-2">Customer Name</th>
+                  <th className="px-3 py-2 text-right">Age (Days)</th>
+                  <th className="px-3 py-2 text-right">Last Bill Date</th>
+                  <th className="px-3 py-2 text-right">Outstanding Amount</th>
+                  <th className="px-3 py-2 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                {(salesData?.ageingDebtors[selectedAgingBucket] ?? []).slice(0, 10).map((row) => (
+                  <tr key={row.id} className="hover:bg-blue-50/40 transition-colors">
+                    <td className="px-3 py-2 text-slate-900 font-semibold">{row.name}</td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums">
+                      <span className={cn(
+                        'rounded px-1.5 py-0.5 text-[10px] font-bold',
+                        row.days > 90 ? 'bg-rose-50 text-rose-700 border border-rose-200' :
+                        row.days > 60 ? 'bg-orange-50 text-orange-700 border border-orange-200' :
+                        row.days > 30 ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-600'
+                      )}>
+                        {row.days}d
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-500 text-[11px]">
+                      {formatFullDate(row.lastDate)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono font-bold tabular-nums text-blue-700">
+                      {formatInrInteger(row.amount)}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <Link
+                        to="/ledger"
+                        search={{ tab: 'customers' }}
+                        className="rounded border border-blue-200 bg-white px-2 py-0.5 text-[11px] font-medium text-blue-700 transition hover:bg-blue-50"
+                      >
+                        Ledger
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+                {(salesData?.ageingDebtors[selectedAgingBucket]?.length ?? 0) === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-xs text-slate-400">
+                      No customer balances in this ageing tier.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </SectionCard>
+
+      {/* 7. Three-Year Financial Year Performance Comparison */}
+      <SectionCard
+        title="3-Year Financial Year Benchmark (Indian Fiscal Year)"
+        subtitle="Annual multi-stream growth comparison across commercial turnover, procurement, and foundry operations"
+        actions={
+          <span className="text-[11px] font-mono text-slate-400">April 01 → March 31 Boundaries</span>
+        }
+      >
+        <div className="overflow-x-auto rounded-lg border border-slate-200 pt-1">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                <th className="px-3 py-2.5">Financial Year</th>
+                <th className="px-3 py-2.5 text-right">Sales Billed</th>
+                <th className="px-3 py-2.5 text-right">Collections</th>
+                <th className="px-3 py-2.5 text-right">Realization</th>
+                <th className="px-3 py-2.5 text-right">Scrap Purchases</th>
+                <th className="px-3 py-2.5 text-right">Supplier Payouts</th>
+                <th className="px-3 py-2.5 text-right">Net Operating Cash</th>
+                <th className="px-3 py-2.5 text-right">Finished Wire</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+              {fy3YearBenchmark.map((fy) => (
+                <tr key={fy.label} className={cn('transition-colors', fy.isCurrent ? 'bg-blue-50/20 hover:bg-blue-50/50' : 'hover:bg-slate-50/60')}>
+                  <td className="whitespace-nowrap px-3 py-3 font-mono font-bold text-slate-900">
+                    {fy.label} {fy.isCurrent && <span className="ml-1 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">Current</span>}
+                  </td>
+                  <td className="px-3 py-3 text-right font-mono font-semibold tabular-nums text-blue-700">
+                    {formatInrInteger(fy.sales)}
+                  </td>
+                  <td className="px-3 py-3 text-right font-mono font-semibold tabular-nums text-emerald-700">
+                    {formatInrInteger(fy.collections)}
+                  </td>
+                  <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-700">
+                    {fy.efficiency.toFixed(1)}%
+                  </td>
+                  <td className="px-3 py-3 text-right font-mono tabular-nums text-amber-700">
+                    {formatInrInteger(fy.purchases)}
+                  </td>
+                  <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-700">
+                    {formatInrInteger(fy.paidOut)}
+                  </td>
+                  <td className={cn(
+                    'px-3 py-3 text-right font-mono font-bold tabular-nums',
+                    fy.netCash >= 0 ? 'text-emerald-700' : 'text-rose-600'
+                  )}>
+                    {fy.netCash >= 0 ? `+${formatInrInteger(fy.netCash)}` : `-${formatInrInteger(Math.abs(fy.netCash))}`}
+                  </td>
+                  <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">
+                    {formatCompactKg(fy.wireOut)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
     </div>
   )
-}
-
-function formatRate(value: number | null) {
-  return value == null ? '—' : `₹${formatInrInteger(value)}/kg`
-}
-
-function formatSignedRate(value: number | null) {
-  if (value == null) return '—'
-  return `${value >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(value))}/kg`
-}
-
-function buildHeatmapSummary(daily: Array<{ date: string; sales: number; bags: number }>) {
-  let activeDays = 0
-  let currentStreak = 0
-  let highestStreak = 0
-  let bestDay: { date: string; sales: number } | null = null
-  for (const row of daily) {
-    if (row.sales > 0) {
-      activeDays += 1
-      currentStreak += 1
-      highestStreak = Math.max(highestStreak, currentStreak)
-      if (!bestDay || row.sales > bestDay.sales) bestDay = { date: row.date, sales: row.sales }
-    } else {
-      currentStreak = 0
-    }
-  }
-  return { activeDays, highestStreak, bestDay }
-}
-
-function getEfficiencyStatus(value: number): HealthStatus {
-  if (value >= 85) return 'Healthy'
-  if (value >= 65) return 'Warning'
-  return 'Risk'
-}
-
-function boundedPct(value: number, maxValue: number) {
-  if (maxValue <= 0) return 0
-  return Math.min(100, Math.max(0, (value / maxValue) * 100))
-}
-
-function num(value: unknown) {
-  const parsed = Number(value ?? 0)
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
-function str(value: unknown) {
-  return String(value ?? '')
-}
-
-function shiftMonth(monthKey: string, delta: number) {
-  const [yearRaw, monthRaw] = monthKey.split('-')
-  const year = Number(yearRaw)
-  const month = Number(monthRaw)
-  if (!Number.isFinite(year) || !Number.isFinite(month)) return monthKey
-  const d = new Date(year, month - 1 + delta, 1)
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  return `${y}-${m}`
-}
-
-function dateDiffDays(fromDate: string, toDate: string) {
-  const from = new Date(`${fromDate}T00:00:00`)
-  const to = new Date(`${toDate}T00:00:00`)
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 0
-  return Math.max(0, Math.floor((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000)))
-}
-
-function formatDelta(amount: number) {
-  if (amount >= 0) return `+${formatInrInteger(amount)}`
-  return `-${formatInrInteger(Math.abs(amount))}`
-}
-
-function eachDayInclusive(startDate: Date, endDate: Date) {
-  const days: Date[] = []
-  const cursor = new Date(startDate)
-  while (cursor <= endDate) {
-    days.push(new Date(cursor))
-    cursor.setDate(cursor.getDate() + 1)
-  }
-  return days
-}
-
-function toIsoDate(date: Date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function getFinancialYearStartYear(monthKey: string) {
-  const [yearRaw, monthRaw] = monthKey.split('-')
-  const year = Number(yearRaw)
-  const month = Number(monthRaw)
-  if (!Number.isFinite(year) || !Number.isFinite(month)) return new Date().getFullYear()
-  return month >= 4 ? year : year - 1
-}
-
-function getFinancialYearMonths(startYear: number) {
-  const months: string[] = []
-  for (let month = 4; month <= 12; month += 1) {
-    months.push(`${startYear}-${String(month).padStart(2, '0')}`)
-  }
-  for (let month = 1; month <= 3; month += 1) {
-    months.push(`${startYear + 1}-${String(month).padStart(2, '0')}`)
-  }
-  return months
 }

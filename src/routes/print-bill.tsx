@@ -386,7 +386,7 @@ function PrintBillPage() {
             </label>
           </div>
           {printQuery.isLoading && <p className="text-sm text-slate-500">Loading bills...</p>}
-          {printQuery.isError && <p className="text-sm text-red-600">Unable to load bill data.</p>}
+          {printQuery.isError && <p className="text-sm text-rose-600">Unable to load bill data.</p>}
           {!printQuery.isLoading && !printQuery.isError && (
             <div className="max-h-[72vh] overflow-auto rounded-md border border-slate-100 no-scrollbar">
               <table className="w-full min-w-[420px]">

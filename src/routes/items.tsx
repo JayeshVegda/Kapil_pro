@@ -1,38 +1,256 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Edit3, Plus, Trash2 } from 'lucide-react'
-import { useState, useRef } from 'react'
+import { createFileRoute, isRedirect, redirect, useNavigate } from '@tanstack/react-router'
+import { toast } from 'sonner'
+import { loadModuleSettingsForGuard } from '@/data/module-settings'
+import {
+  Boxes,
+  Check,
+  Download,
+  Edit3,
+  Flame,
+  Package,
+  Plus,
+  Search,
+  ShoppingBag,
+  Tag,
+  ToggleLeft,
+  ToggleRight,
+  Trash2,
+  X,
+  Zap,
+} from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
-import { createItem, deleteItem, loadItemsWithUsage, suggestItemGroup, updateItem } from '@/data/items'
-import { formatFullDate } from '@/lib/date'
-import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
+import { invalidateAfterSupplierPurchaseWrite } from '@/app/query-invalidation'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { CastingItemsView } from '@/components/items/casting-items-view'
+import { useModuleSettings } from '@/lib/use-module-settings'
+import {
+  createItem,
+  deleteItem,
+  loadItemsWithUsage,
+  setItemActive,
+  suggestItemGroup,
+  updateItem,
+} from '@/data/items'
+import {
+  createPurchaseItem,
+  deletePurchaseItem,
+  listPurchaseItems,
+  renamePurchaseItem,
+  setPurchaseItemActive,
+  type PurchaseItemView,
+} from '@/data/suppliers'
+import { purchaseBillsQueryOptions } from '@/data/purchase-queries'
+import { itemNameKey } from '@/domain/purchase-item-name'
+import { milliToRateText } from '@/domain/supplier-units'
+import { formatFullDate, getLocalIsoDate } from '@/lib/date'
+import { formatInrInteger, formatPaiseInr, parseNonNegativeNumber } from '@/lib/inr-format'
+
+const searchSchema = z.object({
+  tab: z.enum(['selling', 'purchase', 'casting']).optional(),
+  q: z.string().optional(),
+  type: z.enum(['all', 'electronic', 'gas']).optional(),
+  purchaseFilter: z.enum(['all', 'active', 'inactive']).optional(),
+})
 
 export const Route = createFileRoute('/items')({
-  component: ItemsPage,
+  validateSearch: searchSchema,
+  beforeLoad: async ({ search }) => {
+    if (search.tab !== 'purchase' && search.tab !== 'casting') return
+    try {
+      const settings = await loadModuleSettingsForGuard()
+      if ((search.tab === 'purchase' && !settings.purchaseEnabled) || (search.tab === 'casting' && !settings.castingEnabled)) {
+        toast.info(`${search.tab === 'purchase' ? 'Purchase' : 'Casting'} is turned off in Settings`)
+        throw redirect({ to: '/' })
+      }
+    } catch (error) { if (isRedirect(error)) throw error }
+  },
+  component: UnifiedItemsPage,
 })
 
 const ITEMS_QUERY_KEY = ['items-master'] as const
 
-const itemSchema = z.object({
-  name: z.string().trim().min(1, 'Item name is required'),
-  defaultRate: z.number().nonnegative('Rate cannot be negative'),
-  type: z.enum(['electronic', 'gas'], { message: 'Item type is required' }),
-  unit: z.enum(['', 'piece', 'kg']),
-  bagWeight: z.number().nonnegative('Bag weight cannot be negative'),
-  group: z.string().trim(),
-}).refine((value) => !value.type || value.unit, {
-  message: 'Unit is required',
-  path: ['unit'],
-}).refine((value) => value.type !== 'gas' || value.bagWeight > 0, {
-  message: 'Bag weight is required for gas items',
-  path: ['bagWeight'],
-})
+const sellingItemSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Item name is required'),
+    defaultRate: z.number().nonnegative('Rate cannot be negative'),
+    type: z.enum(['electronic', 'gas'], { message: 'Item type is required' }),
+    unit: z.enum(['', 'piece', 'kg']),
+    bagWeight: z.number().nonnegative('Bag weight cannot be negative'),
+    group: z.string().trim(),
+  })
+  .refine((value) => !value.type || value.unit, {
+    message: 'Unit is required',
+    path: ['unit'],
+  })
+  .refine((value) => value.type !== 'gas' || value.bagWeight > 0, {
+    message: 'Bag weight is required for gas items',
+    path: ['bagWeight'],
+  })
 
-function ItemsPage() {
+function downloadCsv(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function toCsv(rows: Array<Array<unknown>>): string {
+  return rows
+    .map((row) =>
+      row
+        .map((cell) => {
+          const value = String(cell ?? '')
+          return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+        })
+        .join(','),
+    )
+    .join('\n')
+}
+
+function fmtKg(kg: number): string {
+  if (kg <= 0) return '—'
+  return `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 1 }).format(kg)} kg`
+}
+
+function fmtRate(rate: number): string {
+  if (rate <= 0) return '—'
+  return `₹${rate.toFixed(2)}/kg`
+}
+
+function formatItemType(type: string) {
+  if (type === 'electronic') return 'Electronic Part'
+  if (type === 'gas') return 'Gas Part'
+  return 'General'
+}
+
+const inputClass = `${baseInputClass} text-xs`
+
+function UnifiedItemsPage() {
+  const navigate = useNavigate()
+  const { purchaseEnabled, castingEnabled } = useModuleSettings()
+  const searchParams = Route.useSearch()
+
+  const activeTab = searchParams.tab === 'purchase' && purchaseEnabled ? 'purchase' : searchParams.tab === 'casting' && castingEnabled ? 'casting' : 'selling'
+
+  const updateSearch = (patch: Partial<z.infer<typeof searchSchema>>) => {
+    const nextTab = 'tab' in patch ? patch.tab : activeTab
+    const nextQ = 'q' in patch ? patch.q : searchParams.q
+    const nextType = 'type' in patch ? patch.type : searchParams.type
+    const nextPurchaseFilter = 'purchaseFilter' in patch ? patch.purchaseFilter : searchParams.purchaseFilter
+
+    void navigate({
+      to: '/items',
+      search: {
+        tab: nextTab && nextTab !== 'selling' ? nextTab : undefined,
+        q: nextQ ? nextQ : undefined,
+        type: nextType && nextType !== 'all' ? nextType : undefined,
+        purchaseFilter: nextPurchaseFilter && nextPurchaseFilter !== 'all' ? nextPurchaseFilter : undefined,
+      },
+      replace: true,
+    })
+  }
+
+  // Pre-fetch counts for badge displays on the switcher tabs
+  const sellingItemsQuery = useQuery({ queryKey: ITEMS_QUERY_KEY, queryFn: loadItemsWithUsage })
+  const purchaseItemsQuery = useQuery({ queryKey: ['purchase-items'], queryFn: listPurchaseItems, enabled: purchaseEnabled })
+
+  const sellingCount = (sellingItemsQuery.data ?? []).length
+  const purchaseCount = (purchaseItemsQuery.data ?? []).length
+
+  return (
+    <div className="w-full space-y-4 p-3 sm:p-5 max-w-[1600px] mx-auto">
+      {/* 1. TOP UNIFIED MODULE SWITCHER (Strictly Enclosed Inside Card) */}
+      <section className="rounded-xl border border-border bg-card p-3 sm:p-4 shadow-xs">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-950 flex items-center gap-2">
+              <Boxes size={20} className="text-primary" />
+              Unified Items Master
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Sale products, purchase scrap and casting materials in separate catalogs.
+            </p>
+          </div>
+
+          {/* Segmented Switcher Pill */}
+          <div className="inline-flex rounded-lg border border-border bg-secondary/50 p-1 text-xs">
+            <button
+              type="button"
+              onClick={() => updateSearch({ tab: 'selling', q: undefined })}
+              className={`inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-xs font-semibold transition ${
+                activeTab === 'selling'
+                  ? 'bg-card text-foreground shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <ShoppingBag size={14} className={activeTab === 'selling' ? 'text-primary' : 'text-muted-foreground'} />
+              <span>Sale Items</span>
+              <span
+                className={`rounded-full px-2 py-0.2 text-[11px] font-bold ${
+                  activeTab === 'selling' ? 'bg-primary/10 text-primary' : 'bg-secondary text-muted-foreground'
+                }`}
+              >
+                {sellingCount}
+              </span>
+            </button>
+
+            {purchaseEnabled && <button
+              type="button"
+              onClick={() => updateSearch({ tab: 'purchase', q: undefined })}
+              className={`inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-xs font-semibold transition ${
+                activeTab === 'purchase'
+                  ? 'bg-card text-foreground shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Package size={14} className={activeTab === 'purchase' ? 'text-blue-600' : 'text-muted-foreground'} />
+              <span>Purchase Items</span>
+              <span
+                className={`rounded-full px-2 py-0.2 text-[11px] font-bold ${
+                  activeTab === 'purchase' ? 'bg-blue-100 text-blue-800' : 'bg-secondary text-muted-foreground'
+                }`}
+              >
+                {purchaseCount}
+              </span>
+            </button>}
+            {castingEnabled && <button type="button" onClick={() => updateSearch({ tab: 'casting', q: undefined })} className={`inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-xs font-semibold ${activeTab === 'casting' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}><Flame size={14} /><span>Casting Items</span></button>}
+          </div>
+        </div>
+      </section>
+
+      {/* 2. ACTIVE VIEW CONTAINER */}
+      {activeTab === 'selling' ? (
+        <SellingItemsView />
+      ) : activeTab === 'purchase' ? (
+        <PurchaseItemsView />
+      ) : (
+        <CastingItemsView />
+      )}
+    </div>
+  )
+}
+
+/* ==========================================================================
+   VIEW 1: SELLING ITEMS (Products Master: Electronic, Gas, Parts)
+   ========================================================================== */
+
+function SellingItemsView() {
   const queryClient = useQueryClient()
+  const searchParams = Route.useSearch()
+
+  const [search, setSearch] = useState(searchParams.q ?? '')
+  const [typeFilter, setTypeFilter] = useState<'all' | 'electronic' | 'gas'>('all')
+  const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'inactive'>('all')
+
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; usageCount: number } | null>(null)
   const [name, setName] = useState('')
   const [defaultRateInput, setDefaultRateInput] = useState('0')
   const [type, setType] = useState('')
@@ -47,9 +265,44 @@ function ItemsPage() {
     queryFn: loadItemsWithUsage,
   })
 
+  const allItems = itemsQuery.data ?? []
+
+  const kpis = useMemo(() => {
+    let electronicCount = 0
+    let gasCount = 0
+    let totalUsage = 0
+
+    for (const it of allItems) {
+      if (it.type === 'electronic') electronicCount++
+      if (it.type === 'gas') gasCount++
+      totalUsage += it.usageCount
+    }
+
+    return {
+      total: allItems.length,
+      electronicCount,
+      gasCount,
+      totalUsage,
+    }
+  }, [allItems])
+
+  const filteredItems = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    return allItems
+      .filter((it) => {
+        if (activeFilter === 'active' && !it.active) return false
+        if (activeFilter === 'inactive' && it.active) return false
+        if (typeFilter !== 'all' && it.type !== typeFilter) return false
+        if (!needle) return true
+        const hay = `${it.name} ${it.group} ${it.type} ${it.unit}`.toLowerCase()
+        return hay.includes(needle)
+      })
+      .sort((a, b) => b.usageCount - a.usageCount || a.name.localeCompare(b.name))
+  }, [allItems, search, typeFilter, activeFilter])
+
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const parsed = itemSchema.safeParse({
+      const parsed = sellingItemSchema.safeParse({
         name,
         defaultRate: parseNonNegativeNumber(defaultRateInput),
         type: type as 'electronic' | 'gas' | '',
@@ -65,7 +318,7 @@ function ItemsPage() {
       }
     },
     onSuccess: async () => {
-      setStatusText(editingId ? 'Item updated.' : 'Item created.')
+      setStatusText(editingId ? 'Product item updated.' : 'Product item created.')
       resetForm()
       await queryClient.invalidateQueries({ queryKey: ITEMS_QUERY_KEY })
       await queryClient.invalidateQueries({ queryKey: ['items-options'] })
@@ -76,17 +329,29 @@ function ItemsPage() {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: async (itemId: string) => {
-      await deleteItem(itemId)
+    mutationFn: async (item: { id: string; usageCount: number }) => {
+      if (item.usageCount > 0) await setItemActive(item.id, false)
+      else await deleteItem(item.id)
     },
     onSuccess: async () => {
-      setStatusText('Item deleted.')
+      setItemToDelete(null)
+      setStatusText('Product item updated.')
       await queryClient.invalidateQueries({ queryKey: ITEMS_QUERY_KEY })
       await queryClient.invalidateQueries({ queryKey: ['items-options'] })
     },
     onError: (error) => {
+      setItemToDelete(null)
       setStatusText(toUserMessage(error))
     },
+  })
+
+  const toggleSaleActive = useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) => setItemActive(id, active),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ITEMS_QUERY_KEY })
+      await queryClient.invalidateQueries({ queryKey: ['items-options'] })
+    },
+    onError: (error) => setStatusText(toUserMessage(error)),
   })
 
   function resetForm() {
@@ -109,6 +374,8 @@ function ItemsPage() {
     groupManuallyEditedRef.current = true
     setUnit(item.unit)
     setBagWeightInput(String(item.bagWeight || 50))
+    // Scroll form into view
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   function updateType(nextType: string) {
@@ -117,153 +384,1079 @@ function ItemsPage() {
     if (nextType === 'gas' && !bagWeightInput) setBagWeightInput('50')
   }
 
-  return (
-    <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
-      {statusText && (
-        <p className="text-xs text-slate-500" role="status" aria-live="polite">
-          {statusText}
-        </p>
-      )}
+  const handleExportCsv = () => {
+    const headers = ['Item Name', 'Group', 'Default Rate', 'Type', 'Unit', 'Bag Weight', 'Usage Count', 'Last Used Date']
+    const body = filteredItems.map((it) => [
+      it.name,
+      it.group || '',
+      it.defaultRate,
+      it.type,
+      it.unit,
+      it.bagWeight || 0,
+      it.usageCount,
+      it.lastUsedDate || '',
+    ])
+    downloadCsv(`selling-items-${getLocalIsoDate()}.csv`, toCsv([headers, ...body]))
+  }
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-slate-900">{editingId ? 'Edit Item' : 'Add Item'}</h3>
+  return (
+    <div className="space-y-4">
+      {/* 1. SELLING ITEMS KPI STRIP */}
+      <section className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
+        <button
+          type="button"
+          onClick={() => setTypeFilter('all')}
+          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
+            typeFilter === 'all'
+              ? 'border-primary bg-primary/5 ring-1 ring-primary'
+              : 'border-border bg-card'
+          }`}
+        >
+          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
+            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
+              <ShoppingBag size={14} className="text-primary" /> Total Products
+            </span>
+            <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] font-bold text-muted-foreground">
+              Master
+            </span>
+          </div>
+          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
+            {kpis.total} <span className="text-xs font-semibold text-muted-foreground font-sans">items</span>
+          </p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTypeFilter('electronic')}
+          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
+            typeFilter === 'electronic'
+              ? 'border-blue-500 bg-blue-50/50 ring-1 ring-blue-500'
+              : 'border-border bg-card'
+          }`}
+        >
+          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
+            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
+              <Zap size={14} className="text-blue-600" /> Electronic Parts
+            </span>
+            <span className="rounded bg-blue-50 border border-blue-200 px-1.5 py-0.5 text-[11px] font-bold text-blue-700 font-mono">
+              Piece
+            </span>
+          </div>
+          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-blue-700">
+            {kpis.electronicCount} <span className="text-xs font-semibold text-muted-foreground font-sans">items</span>
+          </p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTypeFilter('gas')}
+          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
+            typeFilter === 'gas'
+              ? 'border-amber-500 bg-amber-50/50 ring-1 ring-amber-500'
+              : 'border-border bg-card'
+          }`}
+        >
+          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
+            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
+              <Flame size={14} className="text-amber-600" /> Gas Parts
+            </span>
+            <span className="rounded bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[11px] font-bold text-amber-800 font-mono">
+              Kg
+            </span>
+          </div>
+          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-amber-700">
+            {kpis.gasCount} <span className="text-xs font-semibold text-muted-foreground font-sans">items</span>
+          </p>
+        </button>
+
+        <div className="rounded-xl border border-border bg-card p-3 sm:p-4 shadow-xs flex flex-col justify-between">
+          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
+            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
+              <Boxes size={14} className="text-emerald-600" /> Sales Bills Usage
+            </span>
+            <span className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[11px] font-bold text-emerald-700 font-mono">
+              Total
+            </span>
+          </div>
+          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
+            {kpis.totalUsage} <span className="text-xs font-semibold text-muted-foreground font-sans">bill lines</span>
+          </p>
+        </div>
+      </section>
+
+      {/* 2. ADD / EDIT SELLING ITEM FORM CARD */}
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5 shadow-xs space-y-3">
+        <div className="flex items-center justify-between border-b border-border/70 pb-2.5">
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+            {editingId ? <Edit3 size={15} className="text-primary" /> : <Plus size={15} className="text-primary" />}
+            {editingId ? 'Edit Product Item' : 'Add New Selling Product'}
+          </h2>
           {editingId && (
-            <button type="button" className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50" onClick={resetForm}>
-              Switch to New
+            <button
+              type="button"
+              className="rounded-md border border-border bg-background px-2.5 py-1 text-xs font-semibold text-muted-foreground hover:bg-secondary hover:text-foreground transition"
+              onClick={resetForm}
+            >
+              Cancel Edit
             </button>
           )}
         </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_160px_170px_150px_130px_160px_auto]">
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-600">Item Name *</span>
-            <input className={inputClass} value={name} onChange={(event) => { setName(event.target.value); if (!groupManuallyEditedRef.current) setGroupInput(suggestItemGroup(event.target.value)) }} />
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_150px_160px_150px_120px_130px_auto]">
+          {/* Item Name */}
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-semibold text-muted-foreground">Item Name *</span>
+            <input
+              className={inputClass}
+              value={name}
+              placeholder="e.g. Spindle 7.5GM"
+              onChange={(event) => {
+                setName(event.target.value)
+                if (!groupManuallyEditedRef.current) setGroupInput(suggestItemGroup(event.target.value))
+              }}
+            />
           </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-600">Default Rate</span>
-            <input className={inputClass} type="number" value={defaultRateInput} onChange={(event) => setDefaultRateInput(event.target.value)} />
+
+          {/* Default Rate */}
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-semibold text-muted-foreground">Default Rate (₹)</span>
+            <input
+              className={inputClass}
+              type="number"
+              value={defaultRateInput}
+              onChange={(event) => setDefaultRateInput(event.target.value)}
+            />
           </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-600">Type *</span>
+
+          {/* Type */}
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-semibold text-muted-foreground">Part Type *</span>
             <select className={inputClass} value={type} onChange={(event) => updateType(event.target.value)}>
               <option value="">Select type</option>
               <option value="electronic">Electronic Part</option>
               <option value="gas">Gas Part</option>
             </select>
           </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-600" title="Variants with the same group are totalled together in reports (e.g. Spindle 7.5GM + 8.5GM)">Report Group</span>
-            <input className={inputClass} value={groupInput} onChange={(event) => { groupManuallyEditedRef.current = true; setGroupInput(event.target.value) }} placeholder="Spindle" />
+
+          {/* Report Group */}
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-semibold text-muted-foreground">Report Group</span>
+            <input
+              className={inputClass}
+              value={groupInput}
+              onChange={(event) => {
+                groupManuallyEditedRef.current = true
+                setGroupInput(event.target.value)
+              }}
+              placeholder="e.g. Spindle"
+            />
           </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-600">Unit</span>
-            <input className={`${inputClass} bg-slate-50`} value={unit || '-'} readOnly />
+
+          {/* Unit */}
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-semibold text-muted-foreground">Unit</span>
+            <input className={`${inputClass} bg-secondary/50`} value={unit || '—'} readOnly />
           </label>
-          {type === 'gas' && (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-slate-600">Bag Weight</span>
-              <input className={inputClass} type="number" value={bagWeightInput} onChange={(event) => setBagWeightInput(event.target.value)} />
+
+          {/* Bag Weight */}
+          {type === 'gas' ? (
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold text-muted-foreground">Bag Wt (kg)</span>
+              <input
+                className={inputClass}
+                type="number"
+                value={bagWeightInput}
+                onChange={(event) => setBagWeightInput(event.target.value)}
+              />
             </label>
+          ) : (
+            <div className="hidden xl:block" />
           )}
-          <div className="flex items-end gap-2">
-            <button type="button" className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50" onClick={resetForm}>
+
+          {/* Form Actions */}
+          <div className="flex items-end gap-1.5 pt-1">
+            <button
+              type="button"
+              className="h-9 rounded-md border border-border bg-card px-3 text-xs font-semibold text-muted-foreground hover:bg-secondary hover:text-foreground transition"
+              onClick={resetForm}
+            >
               Clear
             </button>
             <button
               type="button"
-              className="inline-flex h-10 items-center gap-1 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-xs hover:bg-primary/90 transition disabled:opacity-50"
               onClick={() => void saveMutation.mutateAsync()}
               disabled={!name.trim() || saveMutation.isPending}
             >
               <Plus size={14} />
-              {saveMutation.isPending ? 'Saving...' : editingId ? 'Update' : 'Save'}
+              {saveMutation.isPending ? 'Saving…' : editingId ? 'Update' : 'Save'}
             </button>
           </div>
         </div>
+
+        {statusText && (
+          <p className="text-xs text-muted-foreground italic px-0.5" role="status">
+            {statusText}
+          </p>
+        )}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-3 text-sm font-semibold text-slate-900">Items Master</h3>
-        {itemsQuery.isLoading && <p className="text-sm text-slate-500">Loading items...</p>}
-        {itemsQuery.isError && <p className="text-sm text-red-600">Unable to load items.</p>}
-        {!itemsQuery.isLoading && !itemsQuery.isError && (
+      {/* 3. TOOLBAR CARD (Search, Type Filter & CSV) */}
+      <section className="rounded-xl border border-border bg-card p-3 shadow-xs space-y-2.5">
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative min-w-[240px] flex-1">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="search"
+              className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-xs text-foreground outline-none transition placeholder:text-muted-foreground focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
+              placeholder="Search product items by name, group, unit, type…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+
+          <div className="inline-flex flex-none rounded-md border border-border bg-secondary/50 p-0.5 text-xs">
+            <button
+              type="button"
+              className={`rounded px-3 py-1 text-xs font-medium transition ${
+                typeFilter === 'all'
+                  ? 'bg-card text-foreground font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setTypeFilter('all')}
+            >
+              All ({allItems.length})
+            </button>
+            <button
+              type="button"
+              className={`rounded px-3 py-1 text-xs font-medium transition ${
+                typeFilter === 'electronic'
+                  ? 'bg-card text-foreground font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setTypeFilter('electronic')}
+            >
+              Electronic ({kpis.electronicCount})
+            </button>
+            <button
+              type="button"
+              className={`rounded px-3 py-1 text-xs font-medium transition ${
+                typeFilter === 'gas'
+                  ? 'bg-card text-foreground font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setTypeFilter('gas')}
+            >
+              Gas ({kpis.gasCount})
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={filteredItems.length === 0}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-xs font-semibold text-foreground shadow-2xs hover:bg-secondary transition disabled:opacity-50 shrink-0"
+            aria-label="Export items as CSV" title="Export items as CSV"
+          >
+            <Download size={13} /> CSV
+          </button>
+        </div>
+      </section>
+
+      {/* 4. MAIN SELLING PRODUCTS TABLE CARD */}
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5 shadow-xs overflow-hidden">
+        <div className="mb-3 flex justify-end"><select aria-label="Filter Sale items by status" value={activeFilter} onChange={(event) => setActiveFilter(event.target.value as typeof activeFilter)} className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs"><option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+        {itemsQuery.isLoading ? (
+          <div className="py-16 text-center text-sm text-muted-foreground animate-pulse">
+            Loading products catalog…
+          </div>
+        ) : (
           <div className="overflow-x-auto no-scrollbar">
-            <table className="w-full min-w-[1040px]">
+            <table className="w-full min-w-[940px] text-xs">
               <thead>
-                <tr className="bg-slate-50">
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Item</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Group</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Default Rate</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Type</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Unit</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Usage Count</th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Last Used</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
+                <tr className="border-b border-border bg-secondary/40 text-left text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-3.5 py-2.5">Item Name</th>
+                  <th className="px-3.5 py-2.5">Report Group</th>
+                  <th className="px-3.5 py-2.5 text-right">Default Rate</th>
+                  <th className="px-3.5 py-2.5">Part Type</th>
+                  <th className="px-3.5 py-2.5">Unit</th>
+                  <th className="px-3.5 py-2.5 text-right">Usage Count</th>
+                  <th className="px-3.5 py-2.5 text-left">Last Billed</th>
+                  <th className="px-3.5 py-2.5">Status</th>
+                  <th className="px-3.5 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody>
-                {(itemsQuery.data ?? []).length === 0 && (
+              <tbody className="divide-y divide-border">
+                {filteredItems.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-slate-500">
-                      No items yet. Add your first item to speed up bill entry.
+                    <td colSpan={9} className="py-16 text-center text-xs text-muted-foreground">
+                      {search ? `No products matching "${search}".` : 'No product items registered yet.'}
                     </td>
                   </tr>
-                )}
-                {(itemsQuery.data ?? []).map((item, index) => (
-                  <tr key={item.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
-                    <td className="px-3 py-3 text-sm font-medium text-slate-800">{item.name}</td>
-                    <td className="px-3 py-3 text-sm text-slate-600">{item.group || '-'}</td>
-                    <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{formatInrInteger(item.defaultRate)}</td>
-                    <td className="px-3 py-3 text-sm text-slate-700">{formatItemType(item.type)}</td>
-                    <td className="px-3 py-3 text-sm text-slate-700">{item.unit || '-'}</td>
-                    <td className="px-3 py-3 text-right font-mono text-sm text-slate-800">{item.usageCount}</td>
-                    <td className="px-3 py-3 text-sm text-slate-700">{item.lastUsedDate ? formatFullDate(item.lastUsedDate) : '-'}</td>
-                    <td className="px-3 py-3 text-right">
-                      <div className="inline-flex gap-2">
-                        <button type="button" className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100" onClick={() => startEdit(item)}>
-                          <Edit3 size={12} />
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-60 ${
-                            pendingDeleteId === item.id
-                              ? 'border-rose-600 bg-rose-600 text-white hover:bg-rose-700'
-                              : 'border-rose-300 bg-white text-rose-700 hover:bg-rose-50'
+                ) : (
+                  filteredItems.map((item) => (
+                    <tr key={item.id} className="transition hover:bg-secondary/30">
+                      <td className="px-3.5 py-3 font-bold text-sm text-foreground">
+                        {item.name}
+                      </td>
+                      <td className="px-3.5 py-3 font-medium text-muted-foreground">
+                        {item.group || '—'}
+                      </td>
+                      <td className="px-3.5 py-3 text-right font-mono text-xs font-semibold tabular-nums text-foreground">
+                        ₹{formatInrInteger(item.defaultRate)}
+                      </td>
+                      <td className="px-3.5 py-3">
+                        <span
+                          className={`rounded px-2 py-0.5 text-[11px] font-bold uppercase ${
+                            item.type === 'electronic'
+                              ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                              : 'bg-amber-50 text-amber-800 border border-amber-200'
                           }`}
-                          onClick={() => {
-                            if (pendingDeleteId === item.id) {
-                              setPendingDeleteId(null)
-                              void deleteMutation.mutateAsync(item.id)
-                              return
-                            }
-                            setPendingDeleteId(item.id)
-                            window.setTimeout(() => setPendingDeleteId((current) => (current === item.id ? null : current)), 4000)
-                          }}
-                          disabled={deleteMutation.isPending || item.usageCount > 0}
-                          title={item.usageCount > 0 ? 'Cannot delete item used in bills' : 'Delete item'}
                         >
-                          <Trash2 size={12} />
-                          {pendingDeleteId === item.id ? 'Confirm delete?' : 'Delete'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {formatItemType(item.type)}
+                        </span>
+                      </td>
+                      <td className="px-3.5 py-3 font-medium text-foreground">
+                        {item.unit || '—'}
+                        {item.type === 'gas' && item.bagWeight ? ` (${item.bagWeight}kg/bag)` : ''}
+                      </td>
+                      <td className="px-3.5 py-3 text-right font-mono text-xs tabular-nums text-foreground">
+                        {item.usageCount > 0 ? (
+                          <span className="font-semibold">{item.usageCount} bills</span>
+                        ) : (
+                          <span className="text-muted-foreground">0</span>
+                        )}
+                      </td>
+                      <td className="px-3.5 py-3 font-mono text-xs text-muted-foreground">
+                        {item.lastUsedDate ? formatFullDate(item.lastUsedDate) : '—'}
+                      </td>
+                      <td className="px-3.5 py-3 text-xs">{item.active ? 'Active' : 'Inactive'}</td>
+                      <td className="px-3.5 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => startEdit(item)}
+                            className="inline-flex h-7 items-center gap-1 rounded border border-border bg-card px-2.5 text-[11px] font-semibold text-foreground hover:bg-secondary transition"
+                            title="Edit product item"
+                          >
+                            <Edit3 size={12} /> Edit
+                          </button>
+                          <button type="button" onClick={() => toggleSaleActive.mutate({ id: item.id, active: !item.active })} className="inline-flex h-7 items-center rounded border border-slate-300 bg-white px-2 text-[11px] text-slate-700">{item.active ? 'Deactivate' : 'Activate'}</button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setItemToDelete({
+                                id: item.id,
+                                name: item.name,
+                                usageCount: item.usageCount,
+                              })
+                            }
+                            className="inline-flex h-7 items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 transition"
+                            title="Delete item"
+                          >
+                            <Trash2 size={12} /> Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
         )}
+
+        <div className="mt-3 border-t border-border pt-3 flex flex-wrap items-center justify-between text-xs text-muted-foreground">
+          <span>
+            Showing <strong className="text-foreground">{filteredItems.length}</strong> of{' '}
+            {allItems.length} product items
+          </span>
+          <span className="font-mono text-[11px]">
+            Master synchronized with sales billing
+          </span>
+        </div>
       </section>
+
+      {/* DELETE DIALOG FOR SELLING ITEM */}
+      {itemToDelete && (
+        <ConfirmDialog
+          open={Boolean(itemToDelete)}
+          onOpenChange={(open) => {
+            if (!open) setItemToDelete(null)
+          }}
+          title={<span>Delete Selling Product: <strong className="text-foreground">{itemToDelete.name}</strong></span>}
+          description={
+            itemToDelete.usageCount > 0 ? (
+              <div className="space-y-2">
+                <p>
+                  This product item is currently linked to{' '}
+                  <strong className="text-foreground">{itemToDelete.usageCount} sales bill(s)</strong>.
+                </p>
+                <p className="text-muted-foreground">
+                  This item will be deactivated for new bills. Historical bills stay intact.
+                </p>
+                <p className="font-semibold text-destructive">
+                  Deactivate this item?
+                </p>
+              </div>
+            ) : (
+              <p>
+                Are you sure you want to delete &ldquo;{itemToDelete.name}&rdquo;? It has not been used in any bills and will be permanently removed.
+              </p>
+            )
+          }
+          confirmLabel={itemToDelete.usageCount > 0 ? 'Deactivate' : 'Delete Product'}
+          tone={itemToDelete.usageCount > 0 ? 'primary' : 'danger'}
+          pending={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate(itemToDelete)}
+        />
+      )}
     </div>
   )
 }
 
-const inputClass =
-  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+/* ==========================================================================
+   VIEW 2: RAW SCRAP PURCHASES CATALOG
+   ========================================================================== */
 
-function formatItemType(type: string) {
-  if (type === 'electronic') return 'Electronic Part'
-  if (type === 'gas') return 'Gas Part'
-  return '-'
+type PurchaseItemFilter = 'all' | 'active' | 'inactive'
+
+type ScrapItemStats = {
+  billCount: number
+  allTimeKg: number
+  kgLast30d: number
+  totalSpendPaise: number
+  lastRateMilli: number | null
+  lastRateDate: string
+}
+
+function PurchaseItemsView() {
+  const queryClient = useQueryClient()
+  const searchParams = Route.useSearch()
+
+  const [query, setQuery] = useState(searchParams.q ?? '')
+  const [filter, setFilter] = useState<PurchaseItemFilter>(searchParams.purchaseFilter ?? 'all')
+  const [newItemName, setNewItemName] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState('')
+  const [statusText, setStatusText] = useState('')
+  const [rowError, setRowError] = useState('')
+  const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; billCount: number } | null>(null)
+
+  const itemsQuery = useQuery({ queryKey: ['purchase-items'], queryFn: listPurchaseItems })
+  const billsQuery = useQuery(purchaseBillsQueryOptions())
+
+  const allItems = itemsQuery.data ?? []
+
+  // Aggregate item usage stats across purchase bills
+  const statsByNameKey = useMemo(() => {
+    const bills30dCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const stats = new Map<string, ScrapItemStats>()
+
+    for (const bill of billsQuery.data ?? []) {
+      if (bill.cancelled) continue
+      const seenKeys = new Set<string>()
+
+      for (const line of bill.lines) {
+        const key = line.itemId ? `id:${line.itemId}` : `name:${itemNameKey(line.itemName)}`
+        const entry = stats.get(key) ?? {
+          billCount: 0,
+          allTimeKg: 0,
+          kgLast30d: 0,
+          totalSpendPaise: 0,
+          lastRateMilli: null,
+          lastRateDate: '',
+        }
+
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key)
+          entry.billCount += 1
+        }
+
+        const netKg = line.weightG / 1000
+        entry.allTimeKg += netKg
+        entry.totalSpendPaise += line.amountPaise
+
+        if (bill.date >= bills30dCutoff) {
+          entry.kgLast30d += netKg
+        }
+
+        if (bill.date > entry.lastRateDate) {
+          entry.lastRateDate = bill.date
+          entry.lastRateMilli = line.rateMilli
+        }
+
+        stats.set(key, entry)
+      }
+    }
+    return stats
+  }, [billsQuery.data])
+
+  const statsFor = (item: PurchaseItemView): ScrapItemStats => {
+    return (
+      statsByNameKey.get(`id:${item.id}`) ??
+      statsByNameKey.get(`name:${itemNameKey(item.name)}`) ?? {
+        billCount: 0,
+        allTimeKg: 0,
+        kgLast30d: 0,
+        totalSpendPaise: 0,
+        lastRateMilli: null,
+        lastRateDate: '',
+      }
+    )
+  }
+
+  const filteredItems = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    return allItems.filter((item) => {
+      if (filter === 'active' && !item.active) return false
+      if (filter === 'inactive' && item.active) return false
+      if (!needle) return true
+      return item.name.toLowerCase().includes(needle)
+    })
+  }, [allItems, query, filter])
+
+  const kpis = useMemo(() => {
+    const activeCount = allItems.filter((i) => i.active).length
+    const inactiveCount = allItems.length - activeCount
+    let totalKg = 0
+    let totalSpendPaise = 0
+    let totalBills = 0
+
+    for (const item of allItems) {
+      const s = statsFor(item)
+      totalKg += s.allTimeKg
+      totalSpendPaise += s.totalSpendPaise
+      totalBills += s.billCount
+    }
+
+    return {
+      totalItems: allItems.length,
+      activeCount,
+      inactiveCount,
+      totalKg,
+      totalSpendPaise,
+      totalBills,
+    }
+  }, [allItems, statsByNameKey])
+
+  const createMutation = useMutation({
+    mutationFn: async (name: string) => createPurchaseItem(name),
+    onSuccess: async () => {
+      setNewItemName('')
+      setStatusText('Scrap item created successfully.')
+      await invalidateAfterSupplierPurchaseWrite(queryClient)
+    },
+    onError: (err) => setStatusText(toUserMessage(err)),
+  })
+
+  const renameMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => renamePurchaseItem(id, name),
+    onSuccess: async () => {
+      setEditingId(null)
+      setEditingName('')
+      setRowError('')
+      setStatusText('Scrap item renamed successfully.')
+      await invalidateAfterSupplierPurchaseWrite(queryClient)
+    },
+    onError: (err) => setRowError(toUserMessage(err)),
+  })
+
+  const toggleActiveMutation = useMutation({
+    mutationFn: async ({ id, active }: { id: string; active: boolean }) => setPurchaseItemActive(id, active),
+    onSuccess: async () => {
+      setStatusText('Scrap item status updated.')
+      await invalidateAfterSupplierPurchaseWrite(queryClient)
+    },
+    onError: (err) => setStatusText(toUserMessage(err)),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: async (item: { id: string; billCount: number }) => item.billCount > 0 ? setPurchaseItemActive(item.id, false) : deletePurchaseItem(item.id),
+    onSuccess: async () => {
+      setItemToDelete(null)
+      setStatusText('Scrap item deleted successfully.')
+      await invalidateAfterSupplierPurchaseWrite(queryClient)
+    },
+    onError: (err) => {
+      setItemToDelete(null)
+      setStatusText(toUserMessage(err))
+    },
+  })
+
+  const commitRename = (id: string) => {
+    const trimmed = editingName.trim()
+    if (!trimmed) {
+      setEditingId(null)
+      setRowError('')
+      return
+    }
+    setRowError('')
+    renameMutation.mutate({ id, name: trimmed })
+  }
+
+  const isLoading = itemsQuery.isLoading || billsQuery.isLoading
+
+  return (
+    <div className="space-y-4">
+      {/* 1. TOP INTERACTIVE KPI CARDS */}
+      <section className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
+        <button
+          type="button"
+          onClick={() => setFilter('all')}
+          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
+            filter === 'all'
+              ? 'border-primary bg-primary/5 ring-1 ring-primary'
+              : 'border-border bg-card'
+          }`}
+          title="Click to view all scrap items"
+        >
+          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
+            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
+              <Boxes size={14} className="text-primary" /> Total Scrap Catalog
+            </span>
+            <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] font-bold text-muted-foreground">
+              All
+            </span>
+          </div>
+          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
+            {kpis.totalItems} <span className="text-xs font-semibold text-muted-foreground font-sans">scrap items</span>
+          </p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setFilter('active')}
+          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
+            filter === 'active'
+              ? 'border-emerald-500 bg-emerald-50/50 ring-1 ring-emerald-500'
+              : 'border-border bg-card'
+          }`}
+          title="Click to view active scrap items"
+        >
+          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
+            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
+              <Tag size={14} className="text-emerald-600" /> Active Scrap
+            </span>
+            <span className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[11px] font-bold text-emerald-700 font-mono">
+              Live
+            </span>
+          </div>
+          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-emerald-700">
+            {kpis.activeCount} <span className="text-xs font-semibold text-muted-foreground font-sans">in pickers</span>
+          </p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setFilter('inactive')}
+          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
+            filter === 'inactive'
+              ? 'border-amber-500 bg-amber-50/50 ring-1 ring-amber-500'
+              : 'border-border bg-card'
+          }`}
+          title="Click to view inactive scrap items"
+        >
+          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
+            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
+              <Package size={14} className="text-amber-600" /> Inactive / Archived
+            </span>
+            <span className="rounded bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[11px] font-bold text-amber-800 font-mono">
+              Hidden
+            </span>
+          </div>
+          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-amber-700">
+            {kpis.inactiveCount} <span className="text-xs font-semibold text-muted-foreground font-sans">archived</span>
+          </p>
+        </button>
+
+        <div className="rounded-xl border border-border bg-card p-3 sm:p-4 shadow-xs flex flex-col justify-between">
+          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
+            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
+              <Package size={14} className="text-blue-600" /> Total Procured
+            </span>
+            <span className="rounded bg-blue-50 border border-blue-200 px-1.5 py-0.5 text-[11px] font-bold text-blue-700 font-mono">
+              Volume
+            </span>
+          </div>
+          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
+            {fmtKg(kpis.totalKg)}{' '}
+            <span className="text-xs font-semibold text-muted-foreground font-sans">
+              ({formatPaiseInr(kpis.totalSpendPaise)})
+            </span>
+          </p>
+        </div>
+      </section>
+
+      {/* 2. FILTER & ADD TOOLBAR CARD (Strictly Enclosed Inside Card) */}
+      <section className="rounded-xl border border-border bg-card p-3 shadow-xs space-y-3">
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative min-w-[240px] flex-1">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="search"
+              className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-xs text-foreground shadow-2xs outline-none transition placeholder:text-muted-foreground focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
+              placeholder="Search scrap item by name…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+
+          <div className="inline-flex flex-none rounded-md border border-border bg-secondary/50 p-0.5 text-xs">
+            <button
+              type="button"
+              className={`rounded px-3 py-1 text-xs font-medium transition ${
+                filter === 'all'
+                  ? 'bg-card text-foreground font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setFilter('all')}
+            >
+              All ({allItems.length})
+            </button>
+            <button
+              type="button"
+              className={`rounded px-3 py-1 text-xs font-medium transition ${
+                filter === 'active'
+                  ? 'bg-card text-foreground font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setFilter('active')}
+            >
+              Active ({kpis.activeCount})
+            </button>
+            <button
+              type="button"
+              className={`rounded px-3 py-1 text-xs font-medium transition ${
+                filter === 'inactive'
+                  ? 'bg-card text-foreground font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setFilter('inactive')}
+            >
+              Inactive ({kpis.inactiveCount})
+            </button>
+          </div>
+
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              className="inline-flex h-9 items-center gap-1 rounded-md border border-border bg-secondary/50 px-2.5 text-xs font-medium text-foreground hover:bg-secondary transition shrink-0"
+              title="Clear search query"
+            >
+              <X size={13} /> Clear
+            </button>
+          )}
+        </div>
+
+        {/* Quick Add Scrap Item Form */}
+        <form
+          className="flex items-center gap-2 border-t border-border/70 pt-2.5"
+          onSubmit={(e) => {
+            e.preventDefault()
+            const trimmed = newItemName.trim()
+            if (trimmed) createMutation.mutate(trimmed)
+          }}
+        >
+          <input
+            value={newItemName}
+            onChange={(e) => setNewItemName(e.target.value)}
+            placeholder="Add new scrap grade (e.g. Brass Scrap, Copper Armor, Sisu)… and press Enter"
+            className="h-9 flex-1 rounded-md border border-border bg-background px-3 text-xs text-foreground outline-none transition placeholder:text-muted-foreground focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
+          />
+          <button
+            type="submit"
+            disabled={!newItemName.trim() || createMutation.isPending}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 sm:px-4 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90 disabled:opacity-50 shrink-0"
+          >
+            <Plus size={14} /> Add Item
+          </button>
+        </form>
+
+        {statusText && (
+          <p className="text-xs text-muted-foreground italic px-1" role="status">
+            {statusText}
+          </p>
+        )}
+      </section>
+
+      {/* 3. MAIN TABLE CARD */}
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5 shadow-xs overflow-hidden">
+        {isLoading ? (
+          <div className="py-16 text-center text-sm text-muted-foreground animate-pulse">
+            Loading scrap items catalog…
+          </div>
+        ) : (
+          <div className="overflow-x-auto no-scrollbar">
+            <table className="w-full min-w-[840px] text-xs">
+              <thead>
+                <tr className="border-b border-border bg-secondary/40 text-left text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-3.5 py-2.5">Scrap Item Name</th>
+                  <th className="px-3.5 py-2.5">Status</th>
+                  <th className="px-3.5 py-2.5 text-right">Bills Used</th>
+                  <th className="px-3.5 py-2.5 text-right">30D Weight</th>
+                  <th className="px-3.5 py-2.5 text-right">Total Weight</th>
+                  <th className="px-3.5 py-2.5 text-right">Avg Buy Rate</th>
+                  <th className="px-3.5 py-2.5 text-right">Last Purchase Rate</th>
+                  <th className="px-3.5 py-2.5 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {filteredItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-16 text-center text-xs text-muted-foreground">
+                      {query
+                        ? `No items matching "${query}".`
+                        : filter !== 'all'
+                          ? `No ${filter} items found.`
+                          : 'No scrap items found in catalog.'}
+                    </td>
+                  </tr>
+                ) : (
+                  filteredItems.map((item) => {
+                    const stats = statsFor(item)
+                    const isEditing = editingId === item.id
+                    const avgRate = stats.allTimeKg > 0 ? (stats.totalSpendPaise / 100) / stats.allTimeKg : 0
+
+                    return (
+                      <tr
+                        key={item.id}
+                        className={`transition hover:bg-secondary/30 ${item.active ? '' : 'opacity-70 bg-secondary/10'}`}
+                      >
+                        {/* Item Name & Quick Rename */}
+                        <td className="px-3.5 py-3 font-medium text-foreground">
+                          {isEditing ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                autoFocus
+                                value={editingName}
+                                onChange={(e) => setEditingName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') commitRename(item.id)
+                                  if (e.key === 'Escape') {
+                                    setEditingId(null)
+                                    setRowError('')
+                                  }
+                                }}
+                                onBlur={() => commitRename(item.id)}
+                                className="h-7 w-52 rounded-md border border-primary bg-background px-2 text-xs font-semibold text-foreground outline-none ring-2 ring-primary/20"
+                              />
+                              <button
+                                type="button"
+                                aria-label="Confirm rename"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => commitRename(item.id)}
+                              >
+                                <Check size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                aria-label="Cancel rename"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-secondary text-muted-foreground hover:bg-secondary/80 transition"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => {
+                                  setEditingId(null)
+                                  setRowError('')
+                                }}
+                              >
+                                <X size={13} />
+                              </button>
+                              {rowError && <span className="text-[11px] text-destructive ml-1">{rowError}</span>}
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-sm text-foreground">{item.name}</span>
+                              <button
+                                type="button"
+                                aria-label={`Rename ${item.name}`}
+                                onClick={() => {
+                                  setEditingId(item.id)
+                                  setEditingName(item.name)
+                                  setRowError('')
+                                }}
+                                className="rounded p-1 text-muted-foreground/60 transition hover:bg-secondary hover:text-foreground"
+                                title="Rename item"
+                              >
+                                <Edit3 size={13} />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Status Toggle Switch Badge */}
+                        <td className="whitespace-nowrap px-3.5 py-3">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={item.active}
+                            aria-label={item.active ? `Deactivate ${item.name}` : `Activate ${item.name}`}
+                            onClick={() => toggleActiveMutation.mutate({ id: item.id, active: !item.active })}
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold transition ${
+                              item.active
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                                : 'bg-secondary text-muted-foreground border border-border hover:bg-secondary/80'
+                            }`}
+                            title={item.active ? 'Click to deactivate item' : 'Click to activate item'}
+                          >
+                            {item.active ? (
+                              <>
+                                <ToggleRight size={16} className="text-emerald-600" />
+                                <span>Active</span>
+                              </>
+                            ) : (
+                              <>
+                                <ToggleLeft size={16} className="text-muted-foreground" />
+                                <span>Inactive</span>
+                              </>
+                            )}
+                          </button>
+                        </td>
+
+                        {/* Bills Count */}
+                        <td className="whitespace-nowrap px-3.5 py-3 text-right font-mono text-xs tabular-nums text-foreground">
+                          {stats.billCount > 0 ? (
+                            <span className="font-semibold">{stats.billCount} bills</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+
+                        {/* 30D Weight */}
+                        <td className="whitespace-nowrap px-3.5 py-3 text-right font-mono text-xs tabular-nums text-foreground">
+                          {fmtKg(stats.kgLast30d)}
+                        </td>
+
+                        {/* Total Weight */}
+                        <td className="whitespace-nowrap px-3.5 py-3 text-right font-mono text-xs font-semibold tabular-nums text-foreground">
+                          {fmtKg(stats.allTimeKg)}
+                        </td>
+
+                        {/* Avg Buy Rate */}
+                        <td className="whitespace-nowrap px-3.5 py-3 text-right font-mono text-xs tabular-nums">
+                          {avgRate > 0 ? (
+                            <span className="rounded bg-blue-50 px-2 py-0.5 font-bold text-blue-700 border border-blue-200">
+                              {fmtRate(avgRate)}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+
+                        {/* Last Rate */}
+                        <td className="whitespace-nowrap px-3.5 py-3 text-right font-mono text-xs tabular-nums">
+                          {stats.lastRateMilli != null ? (
+                            <div>
+                              <span className="font-bold text-foreground">
+                                ₹{milliToRateText(stats.lastRateMilli)}
+                              </span>
+                              {stats.lastRateDate && (
+                                <span className="block text-[11px] text-muted-foreground font-sans">
+                                  {formatFullDate(stats.lastRateDate)}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+
+                        {/* Row Actions */}
+                        <td className="whitespace-nowrap px-3.5 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingId(item.id)
+                                setEditingName(item.name)
+                                setRowError('')
+                              }}
+                              className="inline-flex h-7 items-center gap-1 rounded border border-border bg-card px-2 text-[11px] font-semibold text-foreground hover:bg-secondary transition"
+                              title="Rename item"
+                            >
+                              <Edit3 size={12} /> Rename
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => toggleActiveMutation.mutate({ id: item.id, active: !item.active })}
+                              className="inline-flex h-7 items-center rounded border border-border bg-card px-2 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition"
+                              title={item.active ? 'Deactivate item' : 'Activate item'}
+                            >
+                              {item.active ? 'Deactivate' : 'Activate'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setItemToDelete({
+                                  id: item.id,
+                                  name: item.name,
+                                  billCount: stats.billCount,
+                                })
+                              }
+                              className="inline-flex h-7 items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 transition"
+                              title="Delete item"
+                            >
+                              <Trash2 size={12} /> Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="mt-3 border-t border-border pt-3 flex flex-wrap items-center justify-between text-xs text-muted-foreground">
+          <span>
+            Showing <strong className="text-foreground">{filteredItems.length}</strong> of{' '}
+            {allItems.length} scrap items
+          </span>
+          <span className="font-mono text-[11px]">
+            Catalog synchronized with purchase billing
+          </span>
+        </div>
+      </section>
+
+      {/* DELETE DIALOG FOR SCRAP ITEM */}
+      {itemToDelete && (
+        <ConfirmDialog
+          open={Boolean(itemToDelete)}
+          onOpenChange={(open) => {
+            if (!open) setItemToDelete(null)
+          }}
+          title={<span>Delete Scrap Item: <strong className="text-foreground">{itemToDelete.name}</strong></span>}
+          description={
+            itemToDelete.billCount > 0 ? (
+              <div className="space-y-2">
+                <p>
+                  This scrap item is currently referenced in{' '}
+                  <strong className="text-foreground">{itemToDelete.billCount} purchase bill(s)</strong>.
+                </p>
+                <p className="text-muted-foreground">
+                  This item will be deactivated for new purchase bills. Historical bills stay intact.
+                </p>
+                <p className="font-semibold text-destructive">
+                  Deactivate this item?
+                </p>
+              </div>
+            ) : (
+              <p>
+                Are you sure you want to delete &ldquo;{itemToDelete.name}&rdquo;? It has no recorded bills and will be permanently removed from the catalog.
+              </p>
+            )
+          }
+          confirmLabel={itemToDelete.billCount > 0 ? 'Deactivate' : 'Delete Item'}
+          tone={itemToDelete.billCount > 0 ? 'primary' : 'danger'}
+          pending={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate(itemToDelete)}
+        />
+      )}
+    </div>
+  )
 }

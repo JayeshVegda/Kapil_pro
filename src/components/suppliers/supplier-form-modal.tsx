@@ -1,3 +1,4 @@
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
 import { useEffect, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { DateInput } from '@/components/ui/date-input'
@@ -35,8 +36,7 @@ export const emptySupplierFormState = (): SupplierFormState => ({
   active: true,
 })
 
-const inputClass =
-  'h-9 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100'
+const inputClass = `${baseInputClass}`
 
 /** Centered supplier create/edit modal. Esc closes, Ctrl+Enter saves. */
 export function SupplierFormModal({
@@ -185,8 +185,8 @@ export function SupplierFormModal({
           <Field label="Notes (optional)">
             <textarea
               rows={2}
-              className="w-full rounded-md border border-slate-300 bg-white p-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              placeholder="Terms, payment methods, bank details..."
+              className="w-full rounded-md border border-slate-300 bg-white p-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
+              placeholder="Terms, payment methods, bank details…"
               value={formState.notes}
               onChange={(e) => onChange({ ...formState, notes: e.target.value })}
             />
@@ -201,11 +201,11 @@ export function SupplierFormModal({
           </button>
           <button
             type="button"
-            className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
             onClick={onSave}
             disabled={!canSave}
           >
-            {isSaving ? 'Saving...' : formState.id ? 'Update Supplier' : 'Save Supplier'}
+            {isSaving ? 'Saving…' : formState.id ? 'Update Supplier' : 'Save Supplier'}
           </button>
         </div>
       </div>

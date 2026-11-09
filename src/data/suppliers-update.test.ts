@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/data/pocketbase', () => {
   const collectionMock = vi.fn()
@@ -26,6 +26,8 @@ type TableMock = {
 }
 
 function makeTables(names: string[]) {
+  const storage = new Map<string, string>()
+  vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) })
   const tables: Record<string, TableMock> = {}
   const getTable = (name: string): TableMock => {
     if (!tables[name]) {
@@ -55,10 +57,12 @@ function makeTables(names: string[]) {
         ops.push({ collection: name, op: 'delete', id })
       },
     }),
-    send: vi.fn().mockResolvedValue(undefined),
+    send: vi.fn().mockImplementation(async () => ops.map((op) => ({ status: op.op === 'delete' ? 204 : 200, body: { id: op.id, ...(op.payload as Record<string, unknown> ?? {}) } }))),
   }))
   return { tables, ops }
 }
+
+afterEach(() => vi.unstubAllGlobals())
 
 describe('updatePurchaseBill line preservation', () => {
   beforeEach(() => {
@@ -175,6 +179,7 @@ describe('loadAllSupplierPayments applied amounts', () => {
     tables.supplier_payments.getFullList.mockResolvedValue([
       { id: 'p1', supplier: 's1', date: '2026-04-04', pool: 'kacha', kind: 'payment', amount_paise: 60000, cancelled: false, created: '2026-04-04 10:00:00.000Z' },
       { id: 'p2', supplier: 's1', date: '2026-04-05', pool: 'kacha', kind: 'refund_received', amount_paise: 15000, cancelled: false, created: '2026-04-05 10:00:00.000Z' },
+      { id: 'p3', supplier: 's1', date: '2026-04-05', pool: 'kacha', kind: 'payment', amount_paise: 30000, cancelled: true, created: '2026-04-05 11:00:00.000Z' },
     ])
 
     const rows = await loadAllSupplierPayments()
@@ -185,5 +190,6 @@ describe('loadAllSupplierPayments applied amounts', () => {
     expect(p1).toMatchObject({ supplierName: 'ACME', amountPaise: 60000, appliedPaise: 60000, advancePaise: 0 })
     // A refund_received is a payable, not a prepayment — advance must be 0.
     expect(p2).toMatchObject({ amountPaise: 15000, appliedPaise: 0, advancePaise: 0 })
+    expect(rows.find((row) => row.id === 'p3')).toMatchObject({ cancelled: true, appliedPaise: 0, advancePaise: 0 })
   })
 })

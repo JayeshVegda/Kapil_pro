@@ -1,6 +1,6 @@
 import { Link, useRouterState } from '@tanstack/react-router'
 import { useMemo, useState, type ComponentType } from 'react'
-import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, Truck, Users, X } from 'lucide-react'
+import { BookOpen, Boxes, Calendar, CalendarDays, ChevronDown, ChevronRight, ClipboardList, CreditCard, Database, Download, FilePlus2, Flame, HeartPulse, LayoutDashboard, MoreHorizontal, Printer, ReceiptText, ScrollText, ShieldAlert, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { isPathHiddenByModules } from '@/lib/module-settings'
 import { useModuleSettings } from '@/lib/use-module-settings'
 
@@ -18,41 +18,52 @@ type NavGroup = {
 }
 
 const navGroups: NavGroup[] = [
-  { label: 'Dashboard', items: [{ to: '/', title: 'Dashboard', icon: LayoutDashboard }] },
+  { label: '', items: [
+    { to: '/', title: 'Dashboard', icon: LayoutDashboard },
+    { to: '/drafts', title: 'AI Drafts', icon: Sparkles },
+    { to: '/ledger', title: 'Party Ledger', icon: BookOpen },
+  ] },
   {
-    label: 'Transactions',
+    label: 'Sales',
     collapsible: true,
     items: [
-      { to: '/new-bill', title: 'Bills', icon: FilePlus2 },
-      { to: '/drafts', title: 'AI Drafts', icon: Sparkles },
-      { to: '/new-payment', title: 'Payments', icon: CreditCard },
-      { to: '/transactions', title: 'Logs', icon: ScrollText },
-      { to: '/print-bill', title: 'Print Bill', icon: Printer },
+      { to: '/sales-dashboard', title: 'Sales Dashboard', icon: LayoutDashboard },
+      { to: '/new-bill', title: 'Sale Bills', icon: FilePlus2 },
+      { to: '/new-payment', title: 'Sales Payment', icon: CreditCard },
+      { to: '/transactions', title: 'Sales Logs', icon: ScrollText },
+      { to: '/print-bill', title: 'Print Sale Bills', icon: Printer },
     ],
   },
   {
-    label: 'Customers',
+    label: 'Purchase',
     collapsible: true,
     items: [
-      { to: '/customers', title: 'Customers', icon: Users },
-      { to: '/ledger', title: 'Party Ledger', icon: BookOpen },
+      { to: '/purchase-dashboard', title: 'Purchase Dashboard', icon: LayoutDashboard },
+      { to: '/new-purchase-bill', title: 'New Purchase Bill', icon: FilePlus2 },
+      { to: '/new-supplier-payment', title: 'New Purchase Payment', icon: CreditCard },
+      { to: '/purchase-bills', title: 'Purchase Bills', icon: ReceiptText },
+      { to: '/purchase-logs', title: 'Purchase Logs', icon: ScrollText },
     ],
   },
   {
-    label: 'Purchases',
+    label: 'Casting',
     collapsible: true,
     items: [
-      { to: '/purchase-bills', title: 'Bills', icon: ScrollText },
-      { to: '/supplier-payments', title: 'Payments', icon: CreditCard },
-      { to: '/suppliers', title: 'Suppliers', icon: Truck },
+      { to: '/casting', title: 'Casting Dashboard', icon: LayoutDashboard },
+      { to: '/casting/new-session', title: 'New Casting Session', icon: Flame },
+      { to: '/casting/log', title: 'Casting Logs', icon: ClipboardList },
+      { to: '/casting/bill', title: 'Casting Bill', icon: ReceiptText },
     ],
   },
   {
     label: 'Reports',
     collapsible: true,
     items: [
-      { to: '/monthly-sales-calendar', title: 'Monthly Sales Calendar', icon: Calendar },
+      { to: '/monthly-sales-calendar', title: 'Calendar', icon: Calendar },
       { to: '/monthly-report', title: 'Company Report', icon: CalendarDays },
+      { to: '/reports/sales', title: 'Sales Report', icon: ScrollText },
+      { to: '/reports/purchase', title: 'Purchase Report', icon: ScrollText },
+      { to: '/reports/casting', title: 'Casting Report', icon: ScrollText },
       { to: '/export-reports', title: 'Exports', icon: Download },
     ],
   },
@@ -65,18 +76,6 @@ const navGroups: NavGroup[] = [
       { to: '/data-health', title: 'Data Health', icon: HeartPulse },
       { to: '/backup', title: 'Backup', icon: Database },
       { to: '/settings', title: 'Settings', icon: SlidersHorizontal },
-      { to: '/purchase-items', title: 'Purchase Items', icon: Boxes },
-    ],
-  },
-  {
-    label: 'Casting',
-    collapsible: true,
-    items: [
-      { to: '/casting', title: 'Dashboard', icon: LayoutDashboard },
-      { to: '/casting/new-session', title: 'New Session', icon: Flame },
-      { to: '/casting/log', title: 'Casting Log', icon: ClipboardList },
-      { to: '/casting/materials', title: 'Materials', icon: Boxes },
-      { to: '/casting/bill', title: 'Casting Bill', icon: ReceiptText },
     ],
   },
 ]
@@ -126,6 +125,22 @@ function loadSavedCollapsed(): Record<string, boolean> {
   return DEFAULT_COLLAPSED
 }
 
+function isItemActive(itemTo: string, currentPath: string): boolean {
+  if (itemTo === '/') return currentPath === '/'
+  if (currentPath === itemTo) return true
+  if (itemTo === '/purchase-bills' && currentPath.startsWith('/purchase-bills')) return true
+  if (itemTo === '/suppliers' && (currentPath.startsWith('/suppliers') || currentPath.startsWith('/supplier-ledger'))) return true
+  if (itemTo === '/new-supplier-payment' && (currentPath.startsWith('/supplier-payments') || currentPath.startsWith('/new-supplier-payment'))) return true
+  if (itemTo === '/purchase-dashboard' && currentPath === '/purchase-dashboard') return true
+  if (itemTo === '/new-purchase-bill' && currentPath === '/new-purchase-bill') return true
+  if (itemTo === '/purchase-logs' && currentPath === '/purchase-logs') return true
+  if (itemTo === '/customers' && currentPath.startsWith('/customers')) return true
+  if (itemTo === '/ledger' && currentPath.startsWith('/ledger')) return true
+  if (itemTo === '/casting' && currentPath === '/casting') return true
+  if (itemTo.startsWith('/casting/') && currentPath.startsWith(itemTo)) return true
+  return false
+}
+
 function NavGroupsList({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?: () => void }) {
   const currentPath = useRouterState({ select: (s) => s.location.pathname })
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(loadSavedCollapsed)
@@ -145,40 +160,41 @@ function NavGroupsList({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?
   return (
     <>
       {groups.map((group) => {
-        const hasActiveItem = group.items.some((item) =>
-          item.to === '/' ? currentPath === '/' : currentPath.startsWith(item.to)
-        )
+        const hasActiveItem = group.items.some((item) => isItemActive(item.to, currentPath))
         const isCollapsed = Boolean(group.collapsible && collapsedGroups[group.label] && !hasActiveItem)
 
         return (
-          <div key={group.label} className="mb-3">
+          <div key={group.label} className="mb-2.5">
             {group.collapsible ? (
               <button
                 type="button"
-                className="mb-1 flex w-full items-center justify-between rounded-md px-3 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 hover:bg-white/5 hover:text-slate-300"
+                className="mb-0.5 flex w-full items-center justify-between rounded-md px-2.5 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 transition hover:bg-white/[0.04] hover:text-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50"
                 onClick={() => toggleGroup(group.label)}
               >
                 <span>{group.label}</span>
                 {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
               </button>
             ) : (
-              <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{group.label}</p>
+              group.label ? <p className="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{group.label}</p> : null
             )}
             {!isCollapsed && group.items.map((item) => {
               const Icon = item.icon
+              const active = isItemActive(item.to, currentPath)
               return (
                 <Link
                   key={item.to}
                   to={item.to}
                   onClick={onNavigate}
-                  className="mb-0.5 flex items-center gap-2 rounded-md border-l-2 border-transparent px-3 py-2 text-[13px] text-slate-300 transition hover:bg-white/5 hover:text-slate-100"
-                  activeOptions={{ exact: true }}
-                  activeProps={{ className: 'border-l-blue-400 bg-blue-500/20 font-semibold text-white' }}
+                  className={`mb-px flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/60 ${
+                    active
+                      ? 'bg-blue-500/15 font-medium text-white'
+                      : 'text-slate-300 hover:bg-white/5 hover:text-slate-100'
+                  }`}
                 >
-                  <Icon size={15} />
-                  <span>{item.title}</span>
+                  <Icon size={16} className={active ? 'text-blue-300' : 'text-slate-400'} />
+                  <span className="truncate">{item.title}</span>
                   {item.badge != null && (
-                    <span className="ml-auto rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+                    <span className="ml-auto rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[11px] font-bold text-amber-300">
                       {item.badge}
                     </span>
                   )}
@@ -214,21 +230,21 @@ export function SidebarNavPanel({
   const visibleGroups = useVisibleNavGroups()
   return (
     <>
-      <aside className="sticky top-0 hidden h-dvh w-[224px] min-w-[224px] flex-col border-r border-white/10 bg-[#1e2a3b] text-slate-300 lg:flex">
-        <div className="border-b border-white/10 px-4 py-4">
+      <aside className="sticky top-0 hidden h-dvh max-h-dvh w-[224px] min-w-[224px] flex-col border-r border-white/10 bg-[#1e2a3b] text-slate-300 lg:flex overflow-hidden">
+        <div className="shrink-0 border-b border-white/10 px-4 py-3.5">
           <BrandBlock />
         </div>
-        <nav className="flex-1 overflow-y-auto px-2 py-3">
+        <nav className="rail-scroll flex-1 min-h-0 overflow-y-auto px-2 py-3 overscroll-contain">
           <NavGroupsList groups={visibleGroups} />
         </nav>
       </aside>
       <div className={`fixed inset-0 z-[70] bg-slate-950/45 transition lg:hidden ${mobileOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'}`} onClick={onMobileClose} />
       <aside
-        className={`fixed inset-y-0 left-0 z-[80] flex h-dvh w-[292px] max-w-[88vw] flex-col border-r border-white/10 bg-[#1e2a3b] text-slate-300 transition-transform duration-200 lg:hidden ${
+        className={`fixed inset-y-0 left-0 z-[80] flex h-dvh max-h-dvh w-[292px] max-w-[88vw] flex-col border-r border-white/10 bg-[#1e2a3b] text-slate-300 transition-transform duration-200 lg:hidden overflow-hidden ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-4">
+        <div className="shrink-0 flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3.5">
           <BrandBlock />
           <button
             type="button"
@@ -239,7 +255,7 @@ export function SidebarNavPanel({
             <X size={17} />
           </button>
         </div>
-        <nav className="flex-1 overflow-y-auto px-2 py-3">
+        <nav className="rail-scroll flex-1 min-h-0 overflow-y-auto px-2 py-3 overscroll-contain">
           <NavGroupsList groups={visibleGroups} onNavigate={onMobileClose} />
         </nav>
       </aside>

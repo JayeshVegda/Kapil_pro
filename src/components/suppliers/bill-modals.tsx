@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { X } from 'lucide-react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { toUserMessage } from '@/app/errors'
 import { invalidateAfterSupplierPurchaseWrite } from '@/app/query-invalidation'
 import { DateInput } from '@/components/ui/date-input'
@@ -9,85 +8,22 @@ import {
   cancelPurchaseBill,
   cancelSupplierPayment,
   createSupplierPayment,
-  loadAllSupplierPayments,
-  loadPurchaseBill,
 } from '@/data/suppliers'
+import { purchaseBillQueryOptions, supplierContextQueryOptions, supplierPaymentsQueryOptions } from '@/data/purchase-queries'
 import { validateManualPins } from '@/domain/supplier-settlement'
+import { computeBillNet } from '@/domain/supplier-purchases'
+import { buildSupplierPaymentWorkflow, prepareSupplierPaymentInput, type SupplierPaymentDraft } from '@/domain/supplier-payment-workflow'
+import { SUPPLIER_PAYMENT_MODES, supplierPaymentNeedsReference, type SupplierPaymentMode } from '@/domain/supplier-payment-modes'
 import { lineAmountPaise, rupeesToPaise } from '@/domain/supplier-units'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
+import { PaymentAmountInput } from '@/components/ui/payment-amount-input'
+import { PurchaseDialog, PurchaseReadNotice } from './purchase-dialog'
+import { getPurchaseReadState, requirePurchaseRecord } from './purchase-read-state'
 
 const MODAL_INPUT =
-  'h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100'
+  'h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
 const MODAL_LABEL = 'text-xs font-medium text-slate-600'
-
-/** Centered modal shell: Esc closes, Ctrl+Enter submits. */
-function ModalShell({
-  title,
-  onClose,
-  onSubmit,
-  canSubmit,
-  submitting,
-  submitLabel,
-  children,
-  width = 'max-w-md',
-}: {
-  title: string
-  onClose: () => void
-  onSubmit: () => void
-  canSubmit: boolean
-  submitting: boolean
-  submitLabel: string
-  children: ReactNode
-  width?: string
-}) {
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') onClose()
-      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canSubmit && !submitting) {
-        event.preventDefault()
-        onSubmit()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, onSubmit, canSubmit, submitting])
-
-  return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/60 p-4" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        className={`w-full ${width} rounded-xl border border-slate-200 bg-white shadow-2xl`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2.5">
-          <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-          <button type="button" aria-label="Close" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
-            <X size={15} />
-          </button>
-        </div>
-        <div className="space-y-3 px-4 py-3.5">{children}</div>
-        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-2.5">
-          <button type="button" onClick={onClose} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
-            Close
-          </button>
-          {submitLabel && (
-            <button
-              type="button"
-              onClick={onSubmit}
-              disabled={!canSubmit || submitting}
-              className="rounded-md bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {submitting ? 'Saving…' : submitLabel}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
 
 function ErrorText({ error }: { error?: string }) {
   if (!error) return null
@@ -108,8 +44,9 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
   const [cashStr, setCashStr] = useState('')
   const [errorText, setErrorText] = useState('')
 
-  const billQuery = useQuery({ queryKey: ['purchase-bill', billId], queryFn: () => loadPurchaseBill(billId) })
-  const bill = billQuery.data
+  const billQuery = useQuery(purchaseBillQueryOptions(billId))
+  const billState = getPurchaseReadState(billQuery, billQuery.data?.bill.id === billId ? billQuery.data : null)
+  const bill = billState.status === 'ready' ? billState.record : null
   const lines = bill?.lines ?? []
   const selectedLine = lines.find((l) => l.id === lineId) ?? lines[0]
   const grams = Math.round((parseFloat(kgStr) || 0) * 1000)
@@ -118,30 +55,30 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
 
   const addMutation = useMutation({
     mutationFn: async () => {
-      if (!bill) throw new Error('Bill still loading.')
+      const currentBill = requirePurchaseRecord(billState, 'Bill')
       if (grams <= 0) throw new Error('Enter a valid bardan weight in kg.')
       await addPurchaseBardanEntry({
-        billId: bill.bill.id,
+        billId: currentBill.bill.id,
         bardanG: grams,
         rateLineId: selectedLine?.id,
         rateMilli: selectedLine?.rateMilli ?? 0,
         method,
         creditPaise,
         cashAmountPaise: cashPaise,
-        date: date || bill.bill.date,
+        date: date || currentBill.bill.date,
         note: note.trim(),
       })
+      return currentBill.bill.supplierId
     },
-    onSuccess: async () => {
-      await invalidateAfterSupplierPurchaseWrite(queryClient, bill?.bill.supplierId)
-      await queryClient.invalidateQueries({ queryKey: ['purchase-bill', billId] })
+    onSuccess: async (supplierId) => {
+      await invalidateAfterSupplierPurchaseWrite(queryClient, supplierId)
       onClose()
     },
     onError: (err) => setErrorText(toUserMessage(err)),
   })
 
   return (
-    <ModalShell
+    <PurchaseDialog
       title="Add Bardan"
       onClose={onClose}
       onSubmit={() => addMutation.mutate()}
@@ -150,7 +87,7 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
       submitLabel="Save Bardan"
     >
       {!bill ? (
-        <p className="text-xs text-slate-400">Loading bill…</p>
+        <PurchaseReadNotice state={billState} subject="Bill" />
       ) : (
         <>
           <div className="grid grid-cols-2 gap-2.5">
@@ -214,7 +151,7 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
           <ErrorText error={errorText} />
         </>
       )}
-    </ModalShell>
+    </PurchaseDialog>
   )
 }
 
@@ -238,71 +175,71 @@ export function RecordPaymentModal({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  const totalDuePaise = pins.reduce((sum, pin) => sum + pin.duePaise, 0)
-  const [amountStr, setAmountStr] = useState(() => (totalDuePaise > 0 ? String(totalDuePaise / 100) : ''))
-  const [mode, setMode] = useState('cash')
+  const [amountRupees, setAmountRupees] = useState<number>(() => pins.reduce((sum, pin) => sum + pin.duePaise, 0) / 100)
+  const [mode, setMode] = useState<SupplierPaymentMode>('cash')
   const [reference, setReference] = useState('')
   const [errorText, setErrorText] = useState('')
 
-  const amountPaise = rupeesToPaise(parseFloat(amountStr) || 0)
-  const needsReference = ['upi', 'rtgs', 'neft', 'cheque'].includes(mode)
+  const supplierQuery = useQuery(supplierContextQueryOptions(supplierId))
+  const supplierState = getPurchaseReadState(supplierQuery, supplierQuery.data?.bundle.supplier.id === supplierId ? supplierQuery.data : null)
+  const context = supplierState.status === 'ready' ? supplierState.record : null
+  const currentBills = context?.settlement.pools[pool].bills.filter((bill) => bill.status !== 'cancelled') ?? []
+  const currentPins = pins.flatMap((pin) => {
+    const bill = currentBills.find((candidate) => candidate.billId === pin.billId)
+    return bill ? [{ ...pin, duePaise: bill.duePaise }] : []
+  })
+  const targetsState = getPurchaseReadState(supplierQuery, context && currentPins.length === pins.length ? currentPins : null)
+  const totalDuePaise = currentPins.reduce((sum, pin) => sum + pin.duePaise, 0)
+  const amountPaise = rupeesToPaise(amountRupees)
+  const needsReference = supplierPaymentNeedsReference(mode)
 
-  const allocationPlan = (() => {
-    let remaining = amountPaise
-    const plan: Array<{ billId: string; amountPaise: number }> = []
-    for (const pin of pins) {
-      if (remaining <= 0) break
-      const applied = Math.min(pin.duePaise, remaining)
-      plan.push({ billId: pin.billId, amountPaise: applied })
-      remaining -= applied
-    }
-    return plan
-  })()
+  const draft: SupplierPaymentDraft = {
+    supplierId, date: getLocalIsoDate(), pool, kind: 'payment', amountPaise, mode, reference, payeeName: '', privateNote: '',
+  }
+  const workflow = context && targetsState.status === 'ready' ? buildSupplierPaymentWorkflow(context, {
+    ...draft, selectedBillIds: new Set(currentPins.map((pin) => pin.billId)), pinOrder: 'selection',
+  }) : null
+  const allocationPlan = workflow?.allocations ?? []
   const pinnedTotalPaise = allocationPlan.reduce((sum, a) => sum + a.amountPaise, 0)
-  const advancePaise = Math.max(0, amountPaise - pinnedTotalPaise)
+  const advancePaise = Math.max(0, amountPaise - (workflow?.allocationPreview.appliedToDuesPaise ?? 0))
   const validation = validateManualPins(
     pool,
     amountPaise,
-    allocationPlan.map((a) => ({ billId: a.billId, billPool: pool, billDuePaise: pins.find((p) => p.billId === a.billId)?.duePaise ?? 0, pinnedPaise: a.amountPaise })),
+    allocationPlan.map((a) => ({ billId: a.billId, billPool: pool, billDuePaise: currentPins.find((p) => p.billId === a.billId)?.duePaise ?? 0, pinnedPaise: a.amountPaise })),
   )
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      requirePurchaseRecord(supplierState, 'Supplier')
+      requirePurchaseRecord(targetsState, 'Bill')
       if (amountPaise <= 0) throw new Error('Payment amount must be greater than zero.')
       if (!validation.valid) throw new Error(validation.error ?? 'Invalid allocation.')
       if (needsReference && !reference.trim()) throw new Error(`Reference is required for ${mode.toUpperCase()}.`)
-      await createSupplierPayment({
-        supplierId,
-        date: getLocalIsoDate(),
-        pool,
-        kind: 'payment',
-        amountPaise,
-        mode,
-        reference: reference.trim(),
-        allocations: allocationPlan.filter((a) => a.amountPaise > 0),
-      })
+      return createSupplierPayment(prepareSupplierPaymentInput(draft, workflow))
     },
-    onSuccess: async () => {
-      await invalidateAfterSupplierPurchaseWrite(queryClient, supplierId)
+    onSuccess: async (saved) => {
+      await invalidateAfterSupplierPurchaseWrite(queryClient, saved.supplierId)
       onClose()
     },
     onError: (err) => setErrorText(toUserMessage(err)),
   })
 
   return (
-    <ModalShell
+    <PurchaseDialog
       title={`Record Payment${supplierName ? ` · ${supplierName}` : ''}`}
       onClose={onClose}
       onSubmit={() => saveMutation.mutate()}
-      canSubmit={amountPaise > 0 && validation.valid && (!needsReference || reference.trim().length > 0)}
+      canSubmit={supplierState.status === 'ready' && targetsState.status === 'ready' && amountPaise > 0 && validation.valid && (!needsReference || reference.trim().length > 0)}
       submitting={saveMutation.isPending}
       submitLabel="Save Payment"
     >
+      {supplierState.status !== 'ready' ? <PurchaseReadNotice state={supplierState} subject="Supplier" />
+        : targetsState.status !== 'ready' ? <PurchaseReadNotice state={targetsState} subject="Bill" /> : <>
       <div className="rounded-md border border-slate-200 bg-slate-50/70 px-2.5 py-2 text-xs text-slate-600">
         {pins.length === 1 ? (
           <>
             Pinned to <span className="font-mono font-semibold text-slate-800">{pins[0].inNo || 'bill'}</span> · due{' '}
-            <span className="font-mono">{formatPaiseInr(pins[0].duePaise)}</span>
+            <span className="font-mono">{formatPaiseInr(currentPins[0].duePaise)}</span>
           </>
         ) : (
           <>Pinned to {pins.length} bills · total due <span className="font-mono">{formatPaiseInr(totalDuePaise)}</span></>
@@ -311,17 +248,12 @@ export function RecordPaymentModal({
       <div className="grid grid-cols-2 gap-2.5">
         <label className="flex flex-col gap-1">
           <span className={MODAL_LABEL}>Amount (₹)</span>
-          <input className={MODAL_INPUT} type="text" inputMode="decimal" placeholder="0" value={amountStr} onChange={(e) => setAmountStr(e.target.value)} autoFocus />
+          <PaymentAmountInput value={amountRupees} onChange={setAmountRupees} className={MODAL_INPUT} />
         </label>
         <label className="flex flex-col gap-1">
           <span className={MODAL_LABEL}>Mode</span>
-          <select className={MODAL_INPUT} value={mode} onChange={(e) => setMode(e.target.value)}>
-            <option value="cash">Cash</option>
-            <option value="upi">UPI</option>
-            <option value="rtgs">RTGS</option>
-            <option value="neft">NEFT</option>
-            <option value="cheque">Cheque</option>
-            <option value="other">Other</option>
+          <select className={MODAL_INPUT} value={mode} onChange={(e) => setMode(e.target.value as SupplierPaymentMode)}>
+                {SUPPLIER_PAYMENT_MODES.map((option) => <option key={option} value={option}>{option === 'cash' ? 'Cash' : option === 'cheque' ? 'Cheque' : option === 'other' ? 'Other' : option.toUpperCase()}</option>)}
           </select>
         </label>
       </div>
@@ -338,9 +270,19 @@ export function RecordPaymentModal({
             {' '}· advance <strong className="font-mono">{formatPaiseInr(advancePaise)}</strong>
           </>
         )}
+        {pins.length === 1 && pinnedTotalPaise > 0 ? (
+          <>
+            {' '}· after saving, this bill's due drops from{' '}
+            <span className="font-mono">{formatPaiseInr(currentPins[0].duePaise)}</span> to{' '}
+            <span className="font-mono font-semibold text-slate-800">{formatPaiseInr(Math.max(0, currentPins[0].duePaise - pinnedTotalPaise))}</span>
+          </>
+        ) : pinnedTotalPaise > 0 ? (
+          <> · pinned dues drop by {formatPaiseInr(pinnedTotalPaise)} in total</>
+        ) : null}
       </p>
       <ErrorText error={errorText} />
-    </ModalShell>
+      </>}
+    </PurchaseDialog>
   )
 }
 
@@ -353,7 +295,6 @@ export function SettleToNilModal({
   pool,
   billId,
   inNo,
-  duePaise,
   onClose,
 }: {
   supplierId: string
@@ -368,40 +309,50 @@ export function SettleToNilModal({
   const [confirmed, setConfirmed] = useState(false)
   const [errorText, setErrorText] = useState('')
 
+  const supplierQuery = useQuery(supplierContextQueryOptions(supplierId))
+  const supplierState = getPurchaseReadState(supplierQuery, supplierQuery.data?.bundle.supplier.id === supplierId ? supplierQuery.data : null)
+  const context = supplierState.status === 'ready' ? supplierState.record : null
+  const billState = getPurchaseReadState(supplierQuery, context?.settlement.pools[pool].bills.find((bill) => bill.billId === billId && bill.status !== 'cancelled'))
+  const bill = billState.status === 'ready' ? billState.record : null
+  const duePaise = bill?.duePaise ?? 0
   const needsConfirm = duePaise > 50_000
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      const currentSupplier = requirePurchaseRecord(supplierState, 'Supplier')
+      const currentBill = requirePurchaseRecord(billState, 'Bill')
       if (!reason.trim()) throw new Error('Reason is required.')
-      if (duePaise <= 0) throw new Error('This bill is already settled.')
-      await createSupplierPayment({
-        supplierId,
+      if (currentBill.duePaise <= 0) throw new Error('This bill is already settled.')
+      if (needsConfirm && !confirmed) throw new Error('Please confirm this write-off.')
+      return createSupplierPayment({
+        supplierId: currentSupplier.bundle.supplier.id,
         date: getLocalIsoDate(),
         pool,
         kind: 'settle_off',
-        amountPaise: duePaise,
+        amountPaise: currentBill.duePaise,
         mode: 'other',
         reference: reason.trim(),
-        allocations: [{ billId, amountPaise: duePaise }],
+        allocations: [{ billId: currentBill.billId, amountPaise: currentBill.duePaise }],
       })
     },
-    onSuccess: async () => {
-      await invalidateAfterSupplierPurchaseWrite(queryClient, supplierId)
-      await queryClient.invalidateQueries({ queryKey: ['purchase-bill', billId] })
+    onSuccess: async (saved) => {
+      await invalidateAfterSupplierPurchaseWrite(queryClient, saved.supplierId)
       onClose()
     },
     onError: (err) => setErrorText(toUserMessage(err)),
   })
 
   return (
-    <ModalShell
+    <PurchaseDialog
       title="Settle to NIL"
       onClose={onClose}
       onSubmit={() => saveMutation.mutate()}
-      canSubmit={reason.trim().length > 0 && duePaise > 0 && (!needsConfirm || confirmed)}
+      canSubmit={Boolean(bill) && reason.trim().length > 0 && duePaise > 0 && (!needsConfirm || confirmed)}
       submitting={saveMutation.isPending}
       submitLabel="Settle to NIL"
     >
+      {supplierState.status !== 'ready' ? <PurchaseReadNotice state={supplierState} subject="Supplier" />
+        : !bill ? <PurchaseReadNotice state={billState} subject="Bill" /> : <>
       <p className="text-xs text-slate-600">
         Remaining due on <span className="font-mono font-semibold text-slate-800">{inNo || 'bill'}</span>:{' '}
         <span className="font-mono text-base font-bold text-rose-600">{formatPaiseInr(duePaise)}</span>
@@ -420,7 +371,8 @@ export function SettleToNilModal({
         <input className={MODAL_INPUT} type="text" placeholder="e.g. rounding off small leftover" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
       </label>
       <ErrorText error={errorText} />
-    </ModalShell>
+      </>}
+    </PurchaseDialog>
   )
 }
 
@@ -433,28 +385,46 @@ export function CancelBillModal({ billId, inNo, onClose }: { billId: string; inN
   const [reason, setReason] = useState('')
   const [errorText, setErrorText] = useState('')
 
+  const billQuery = useQuery(purchaseBillQueryOptions(billId))
+  const billState = getPurchaseReadState(billQuery, billQuery.data?.bill.id === billId ? billQuery.data : null)
+  const bill = billState.status === 'ready' ? billState.record : null
+  const netPaise = bill ? computeBillNet(bill.lines, bill.adjustments, bill.bardan, bill.bill.taxMode, bill.bill.gstRateBp).netPaise : 0
+
   const cancelMutation = useMutation({
     mutationFn: async () => {
+      const currentBill = requirePurchaseRecord(billState, 'Bill')
       if (!reason.trim()) throw new Error('Cancellation reason is required.')
-      await cancelPurchaseBill(billId, reason.trim())
+      return cancelPurchaseBill(currentBill.bill.id, reason.trim())
     },
-    onSuccess: async () => {
-      await invalidateAfterSupplierPurchaseWrite(queryClient)
-      await queryClient.invalidateQueries({ queryKey: ['purchase-bill', billId] })
+    onSuccess: async (saved) => {
+      await invalidateAfterSupplierPurchaseWrite(queryClient, saved.supplierId)
       onClose()
     },
     onError: (err) => setErrorText(toUserMessage(err)),
   })
 
   return (
-    <ModalShell
+    <PurchaseDialog
       title={`Cancel Bill ${inNo || ''}`}
       onClose={onClose}
       onSubmit={() => cancelMutation.mutate()}
-      canSubmit={reason.trim().length > 0}
+      canSubmit={Boolean(bill) && reason.trim().length > 0}
       submitting={cancelMutation.isPending}
       submitLabel="Cancel Bill"
+      tone="danger"
     >
+      {!bill ? <PurchaseReadNotice state={billState} subject="Bill" /> : <>
+        <div className="rounded-md border border-slate-200 bg-slate-50/70 px-2.5 py-2 text-xs text-slate-600">
+          <p>
+            <span className="font-mono font-semibold text-slate-800">{bill.bill.inNo || inNo}</span> · {formatFullDate(bill.bill.date)} ·{' '}
+            {netPaise >= 0
+              ? `net ${formatPaiseInr(netPaise)}`
+              : 'credit bill'}
+          </p>
+          <p className="mt-1 text-rose-700">
+            Cancelling removes it from dues and the ledger money flow, and frees any payments pinned to it.
+          </p>
+        </div>
       <p className="text-xs text-slate-600">
         Soft cancellation: the bill stays struck-through in the ledger for the audit trail and loses all money effect.
       </p>
@@ -463,7 +433,8 @@ export function CancelBillModal({ billId, inNo, onClose }: { billId: string; inN
         <input className={MODAL_INPUT} type="text" placeholder="e.g. duplicate entry" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
       </label>
       <ErrorText error={errorText} />
-    </ModalShell>
+      </>}
+    </PurchaseDialog>
   )
 }
 
@@ -477,23 +448,25 @@ export function PaymentDetailsModal({ paymentId, onClose }: { paymentId: string;
   const [showCancel, setShowCancel] = useState(false)
   const [errorText, setErrorText] = useState('')
 
-  const paymentsQuery = useQuery({ queryKey: ['supplier-payments'], queryFn: loadAllSupplierPayments })
-  const payment = (paymentsQuery.data ?? []).find((p) => p.id === paymentId)
+  const paymentsQuery = useQuery(supplierPaymentsQueryOptions())
+  const paymentState = getPurchaseReadState(paymentsQuery, paymentsQuery.data?.find((p) => p.id === paymentId))
+  const payment = paymentState.status === 'ready' ? paymentState.record : null
 
   const cancelMutation = useMutation({
     mutationFn: async () => {
+      const currentPayment = requirePurchaseRecord(paymentState, 'Payment')
       if (!cancelReason.trim()) throw new Error('Cancellation reason is required.')
-      await cancelSupplierPayment(paymentId, cancelReason.trim())
+      return cancelSupplierPayment(currentPayment.id, cancelReason.trim())
     },
-    onSuccess: async () => {
-      await invalidateAfterSupplierPurchaseWrite(queryClient)
+    onSuccess: async (saved) => {
+      await invalidateAfterSupplierPurchaseWrite(queryClient, saved.supplierId)
       onClose()
     },
     onError: (err) => setErrorText(toUserMessage(err)),
   })
 
   return (
-    <ModalShell
+    <PurchaseDialog
       title="Payment Details"
       onClose={onClose}
       onSubmit={() => {}}
@@ -503,7 +476,7 @@ export function PaymentDetailsModal({ paymentId, onClose }: { paymentId: string;
       width="max-w-lg"
     >
       {!payment ? (
-        <p className="text-xs text-slate-400">Loading…</p>
+        <PurchaseReadNotice state={paymentState} subject="Payment" />
       ) : (
         <div className="space-y-2.5 text-xs">
           <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
@@ -545,6 +518,13 @@ export function PaymentDetailsModal({ paymentId, onClose }: { paymentId: string;
             </p>
           ) : showCancel ? (
             <div className="space-y-1.5 rounded-md border border-rose-200 bg-rose-50/60 p-2.5">
+              <p className="text-[11px] leading-4 text-rose-800">
+                Cancelling frees <strong className="font-mono">{formatPaiseInr(payment.appliedPaise)}</strong> of applied credit back into bills to be paid
+                {payment.advancePaise > 0 && (
+                  <> and removes <strong className="font-mono">{formatPaiseInr(payment.advancePaise)}</strong> of standing advance</>
+                )}
+                .
+              </p>
               <label className="flex flex-col gap-1">
                 <span className="text-xs font-medium text-slate-700">Cancellation reason (required)</span>
                 <input className={MODAL_INPUT} type="text" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} autoFocus />
@@ -573,7 +553,7 @@ export function PaymentDetailsModal({ paymentId, onClose }: { paymentId: string;
           <ErrorText error={errorText} />
         </div>
       )}
-    </ModalShell>
+    </PurchaseDialog>
   )
 }
 

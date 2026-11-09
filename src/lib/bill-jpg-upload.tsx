@@ -113,7 +113,9 @@ export async function renderAndUploadBillJpg(billId: string): Promise<string | n
     } finally {
       try {
         root.unmount()
-      } catch {}
+      } catch {
+        // The temporary host is removed below even if React cleanup fails.
+      }
       host.remove()
     }
 

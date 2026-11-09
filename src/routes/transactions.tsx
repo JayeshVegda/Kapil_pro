@@ -1,6 +1,8 @@
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
+import { LogsDateWindow, LogsPager, defaultLogFromDate, useLogsPager } from '@/components/logging/logs-shell'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Edit3, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
+import { Download, Edit3, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { AlertDialog } from 'radix-ui'
@@ -16,7 +18,7 @@ import {
   updatePayment,
 } from '@/data/transactions'
 import { cleanupExpiredTrash, type BillItemSnapshot, type BillSnapshot, type PaymentSnapshot, buildTransactionRows, matchesTransactionSearch, type TransactionRow, type TrashEntry } from '@/domain/transactions'
-import { formatDateTime, toDateTimeLocalInputValue, toStoredDateTimeValue } from '@/lib/date'
+import { formatDateTime, getLocalIsoDate, toDateTimeLocalInputValue, toStoredDateTimeValue } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 import { openTransactionEditor } from '@/components/transactions/transaction-editor-events'
 
@@ -91,6 +93,7 @@ function TransactionsPage() {
   const routeSearch = Route.useSearch()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
+  const [dateFrom, setDateFrom] = useState(() => defaultLogFromDate(getLocalIsoDate()))
   const [kindFilter, setKindFilter] = useState<'all' | 'bill' | 'payment'>('all')
   const [viewMode, setViewMode] = useState<'active' | 'deleted'>('active')
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>(() => readTrashEntries())
@@ -102,8 +105,8 @@ function TransactionsPage() {
   const autoOpenedFocusRef = useRef('')
 
   const transactionsQuery = useQuery({
-    queryKey: TRANSACTIONS_QUERY_KEY,
-    queryFn: loadTransactionsContext,
+    queryKey: [...TRANSACTIONS_QUERY_KEY, routeSearch.focusId ? '' : dateFrom],
+    queryFn: () => loadTransactionsContext(routeSearch.focusId ? '' : dateFrom),
   })
 
   useEffect(() => {
@@ -133,8 +136,24 @@ function TransactionsPage() {
     if (routeSearch.focusId && routeSearch.focusKind) {
       return base.filter((row) => row.kind === routeSearch.focusKind && row.id === routeSearch.focusId)
     }
-    return base.filter((row) => (kindFilter === 'all' ? true : row.kind === kindFilter)).filter((row) => matchesTransactionSearch(row, search))
-  }, [rows, trashEntries, viewMode, kindFilter, search, trashMap, routeSearch.focusId, routeSearch.focusKind])
+    return base.filter((row) => row.date.slice(0, 10) >= dateFrom).filter((row) => (kindFilter === 'all' ? true : row.kind === kindFilter)).filter((row) => matchesTransactionSearch(row, search))
+  }, [rows, trashEntries, viewMode, kindFilter, search, trashMap, routeSearch.focusId, routeSearch.focusKind, dateFrom])
+
+  const pager = useLogsPager(visibleRows)
+
+  function exportVisibleCsv() {
+    const cell = (value: unknown) => {
+      const raw = String(value ?? '')
+      const safe = /^[=+@-]/.test(raw) ? `'${raw}` : raw
+      return `"${safe.replace(/"/g, '""')}"`
+    }
+    const lines = [['Date', 'Type', 'Customer', 'Reference', 'Amount'], ...visibleRows.map((row) => [row.date, row.subtitle, row.customerName, row.reference, row.amount])]
+    const blob = new Blob([lines.map((row) => row.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url; link.download = `sales-logs-${getLocalIsoDate()}.csv`; link.click()
+    URL.revokeObjectURL(url)
+  }
 
   useEffect(() => {
     if (!routeSearch.focusId || !routeSearch.focusKind) return
@@ -271,12 +290,14 @@ function TransactionsPage() {
               Deleted
             </button>
           </div>
+          <button type="button" disabled={visibleRows.length === 0} onClick={exportVisibleCsv} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 disabled:opacity-40"><Download size={14} />CSV</button>
         </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-3 flex justify-end"><LogsDateWindow from={dateFrom} onFromChange={setDateFrom} /></div>
         {transactionsQuery.isLoading && <p className="text-sm text-slate-500">Loading transactions...</p>}
-        {transactionsQuery.isError && <p className="text-sm text-red-600">Unable to load transactions.</p>}
+        {transactionsQuery.isError && <p className="text-sm text-rose-600">Unable to load transactions.</p>}
         {!transactionsQuery.isLoading && !transactionsQuery.isError && (
           <div className="overflow-x-auto no-scrollbar">
             <table className="w-full min-w-[920px]">
@@ -298,7 +319,7 @@ function TransactionsPage() {
                     </td>
                   </tr>
                 )}
-                {visibleRows.map((row, index) => (
+                {pager.pageRows.map((row, index) => (
                   <tr key={row.key} className={`border-t border-slate-100 ${routeSearch.focusId === row.id && routeSearch.focusKind === row.kind ? 'bg-blue-50 ring-1 ring-inset ring-blue-200' : index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}>
                     <td className="px-3 py-3 text-sm text-slate-700">{formatDateTime(row.date)}</td>
                     <td className="px-3 py-3 text-sm">
@@ -354,12 +375,14 @@ function TransactionsPage() {
         )}
       </section>
 
+      <LogsPager {...pager} />
+
       {editing && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 p-4">
           <div className="max-h-[92vh] w-full max-w-5xl overflow-auto rounded-xl border border-slate-200 bg-white shadow-2xl">
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
               <h3 className="text-base font-semibold text-slate-900">{editing.kind === 'bill' ? 'Edit Bill' : 'Edit Payment'}</h3>
-              <button type="button" className="rounded-md p-1 text-slate-500 hover:bg-slate-100" onClick={() => setEditing(null)}>
+              <button type="button" aria-label="Close transaction editor" className="rounded-md p-1 text-slate-500 hover:bg-slate-100" onClick={() => setEditing(null)}>
                 <X size={16} />
               </button>
             </div>
@@ -544,7 +567,7 @@ function TransactionsPage() {
               </span>
               <span className="block text-xs text-amber-700">It can be restored from the Deleted tab for three hours in this browser.</span>
             </AlertDialog.Description>
-            {deleteMutation.isError && <p className="mt-3 text-sm text-red-700">Delete failed. The record remains available; refresh and try again.</p>}
+            {deleteMutation.isError && <p className="mt-3 text-sm text-rose-700">Delete failed. The record remains available; refresh and try again.</p>}
             <div className="mt-5 flex justify-end gap-2">
               <AlertDialog.Cancel asChild><button className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">Cancel</button></AlertDialog.Cancel>
               <AlertDialog.Action asChild>
@@ -576,5 +599,4 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-const inputClass =
-  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+const inputClass = `${baseInputClass} h-10`

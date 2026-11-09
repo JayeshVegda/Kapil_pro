@@ -1,3 +1,4 @@
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, RefreshCw, Trash2, Sparkles, Check, X, ArrowRight, Eye } from 'lucide-react'
@@ -11,7 +12,7 @@ import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { invalidateAfterPaymentWrite } from '@/app/query-invalidation'
 import { assertBillNumberAvailable, getCustomerBookSelection, getNextBillNoForBook, saveBillWithItems } from '@/data/bills'
 import { loadCustomerAutoBalanceContext, type AutoBalanceContext } from '@/data/customer-balance'
-import { createItem, suggestItemGroup } from '@/data/items'
+import { createItem, loadItemOptions, suggestItemGroup } from '@/data/items'
 import { bookNoForBillNo, getBookRange, isBillNoInBook } from '@/domain/bill-books'
 import { pb } from '@/data/pocketbase'
 import { calculateBillTotals } from '@/domain/billing-calculations'
@@ -300,18 +301,7 @@ function NewBillPage() {
 
   const itemsQuery = useQuery({
     queryKey: ['items-options'],
-    queryFn: async (): Promise<ItemOption[]> => {
-      const records = await pb.collection('items').getFullList({ sort: 'name' })
-      return records.map((r) => ({
-        id: r.id,
-        name: String(r.name ?? ''),
-        defaultRate: Number(r.default_rate ?? 0),
-        type: String(r.type ?? ''),
-        unit: String(r.unit ?? ''),
-        bagWeight: Number(r.bag_weight ?? 50),
-        aliases: String(r.aliases ?? ''),
-      }))
-    },
+    queryFn: loadItemOptions,
   })
   const nextBillNoQuery = useQuery({
     queryKey: ['next-bill-no', bookNo],
@@ -1169,7 +1159,7 @@ function NewBillPage() {
 
     // 4. Resolve Market Rate (Prioritize draft MKT, then historical date MKT, then live feed)
     let resolvedMkt = Number(draft.mkt || 0)
-    let mktFromDraft = resolvedMkt > 0
+    const mktFromDraft = resolvedMkt > 0
     if (!(resolvedMkt > 0)) {
       try {
         const savedDateRate = await loadSavedMarketRateForDate(draftDate)
@@ -1385,7 +1375,7 @@ function NewBillPage() {
                   MKT ₹{mktRate}
                 </span>
                 {gstMode === 'percent18' && (
-                  <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-bold text-purple-800 border border-purple-200">
+                  <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-bold text-purple-800 border border-purple-200">
                     18% GST
                   </span>
                 )}
@@ -1417,25 +1407,25 @@ function NewBillPage() {
           {billDraftsQuery.data.map((draft: any) => (
             <div
               key={draft.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50/90 via-indigo-50/50 to-white p-3.5 shadow-sm sm:px-4"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/90 via-blue-50/50 to-white p-3.5 shadow-sm sm:px-4"
             >
               <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white shadow-sm">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
                   <Sparkles size={17} />
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-xs font-bold uppercase tracking-wider text-indigo-700">Muse AI Bill Staged</p>
-                    <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-800">
+                    <p className="text-xs font-bold uppercase tracking-wider text-blue-700">Muse AI Bill Staged</p>
+                    <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-800">
                       {Math.round((draft.confidence ?? 0.95) * 100)}% match
                     </span>
                     {Number(draft.mkt) > 0 && (
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900 border border-amber-300 font-mono">
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900 border border-amber-300 font-mono">
                         MKT ₹{draft.mkt}
                       </span>
                     )}
                     {Number(draft.book_no) > 0 && Number(draft.bill_no) > 0 && (
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-700 border border-slate-200 font-mono">
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-700 border border-slate-200 font-mono">
                         #{draft.book_no}/{draft.bill_no}
                       </span>
                     )}
@@ -1450,7 +1440,7 @@ function NewBillPage() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 transition shadow-sm"
+                  className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 transition shadow-sm"
                   onClick={() => applyDraft({ ...draft, autoOpenPreview: true })}
                   title="Direct 1-click preview"
                 >
@@ -1458,7 +1448,7 @@ function NewBillPage() {
                 </button>
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 transition"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 transition"
                   onClick={() => applyDraft(draft)}
                 >
                   <Check size={14} /> Review & Load
@@ -1476,18 +1466,18 @@ function NewBillPage() {
           ))}
         </div>
       ) : (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-100 bg-gradient-to-r from-indigo-50/40 via-white to-slate-50 px-3.5 py-2 text-xs text-slate-600 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-100 bg-gradient-to-r from-blue-50/40 via-white to-slate-50 px-3.5 py-2 text-xs text-slate-600 shadow-sm">
           <div className="flex items-center gap-2">
             <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
             <span className="font-semibold text-slate-800">Muse AI Staging Inbox Active</span>
             <span className="hidden sm:inline text-slate-400">· Drafts sent by Muse appear here for 1-click review & load</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">0 pending</span>
+            <span className="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">0 pending</span>
             <button
               type="button"
               onClick={() => void navigate({ to: '/drafts' })}
-              className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 hover:underline inline-flex items-center gap-0.5"
+              className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-0.5"
             >
               Open AI Inbox <ArrowRight size={11} />
             </button>
@@ -1672,7 +1662,7 @@ function NewBillPage() {
                 <span className="min-w-0 max-w-[12rem] truncate font-medium">{lr}</span>
                 <button
                   type="button"
-                  className="shrink-0 rounded p-0.5 text-slate-500 transition hover:bg-red-50 hover:text-red-600"
+                  className="shrink-0 rounded p-0.5 text-slate-500 transition hover:bg-rose-50 hover:text-rose-600"
                   aria-label={`Remove ${lr}`}
                   onClick={() => setLrList((prev) => prev.filter((v) => v !== lr))}
                 >
@@ -1738,7 +1728,7 @@ function NewBillPage() {
             No quick payments added. Add one if the party pays while making this bill.
           </div>
         ) : (
-          <div className="overflow-x-auto no-scrollbar">
+          <div className="relative overflow-x-auto no-scrollbar">
             <table className="w-full min-w-[820px] table-fixed border-separate border-spacing-x-2 border-spacing-y-0">
               <colgroup>
                 <col className="w-[18%]" />
@@ -1791,7 +1781,7 @@ function NewBillPage() {
                     <td className="px-3 py-2.5 align-middle text-center">
                       <button
                         type="button"
-                        className="rounded-md p-1 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                        className="rounded-md p-1 text-slate-500 hover:bg-rose-50 hover:text-rose-600"
                         onClick={() => removeQuickPaymentRow(payment.id)}
                         aria-label={`Remove quick payment ${index + 1}`}
                       >
@@ -1834,7 +1824,7 @@ function NewBillPage() {
             </button>
           </div>
         </div>
-        <div className="overflow-x-auto no-scrollbar">
+        <div className="relative overflow-x-auto no-scrollbar">
           <table className="w-full min-w-[900px] table-fixed border-separate border-spacing-x-2 border-spacing-y-0">
             <colgroup>
               <col className="w-[34%]" />
@@ -1957,7 +1947,7 @@ function NewBillPage() {
                     <td className="px-3 py-2.5 align-middle text-center">
                       <button
                         type="button"
-                        className="rounded-md p-1 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                        className="rounded-md p-1 text-slate-500 hover:bg-rose-50 hover:text-rose-600"
                         onClick={() => removeItemRow(i)}
                         aria-label={`Remove item row ${i + 1}`}
                       >
@@ -2075,7 +2065,7 @@ function NewBillPage() {
               <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => void savePreviewAsJpg()}>
                 Save JPG
               </button>
-              <button type="button" className="rounded-md border border-green-300 bg-green-50 px-3 py-2 text-sm text-green-700 hover:bg-green-100" onClick={shareOnWhatsApp}>
+              <button type="button" className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-100" onClick={shareOnWhatsApp}>
                 Share WhatsApp
               </button>
               <button type="button" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" onClick={() => { setIsPreviewOpen(false); setPreviewPrintProps(null) }}>
@@ -2233,5 +2223,4 @@ function CalcMetric({ label, value }: { label: string; value: string }) {
   )
 }
 
-const inputClass =
-  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+const inputClass = `${baseInputClass} h-10`

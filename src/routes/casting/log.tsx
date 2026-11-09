@@ -1,11 +1,16 @@
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
+import { LogsPager, defaultLogFromDate, useLogsPager } from '@/components/logging/logs-shell'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Edit3, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
+import { Edit3, Eye, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { deleteCastingSession, loadCastingMaterials, loadCastingSessions, saveCastingSession, updateCastingSession } from '@/data/casting'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { CastingTicket } from '@/components/casting/casting-ticket'
 import type { CastingInputRow } from '@/domain/casting-calculations'
 import type { CastingSessionTrashSnapshot, CastingSessionWithInputs, CastingTrashEntry } from '@/domain/casting-types'
 import { cleanupExpiredCastingTrash } from '@/domain/casting-trash'
@@ -145,14 +150,15 @@ const editSchema = z
     }
   })
 
-function CastingLogPage() {
+export function CastingLogPage() {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
+  const [dateFrom, setDateFrom] = useState(() => defaultLogFromDate(getLocalIsoDate()))
   const [dateTo, setDateTo] = useState('')
   const [viewMode, setViewMode] = useState<'active' | 'deleted'>('active')
   const [trashEntries, setTrashEntries] = useState<CastingTrashEntry[]>(() => readTrash())
   const [statusText, setStatusText] = useState('')
+  const [viewing, setViewing] = useState<CastingSessionWithInputs | null>(null)
   const [editing, setEditing] = useState<CastingSessionWithInputs | null>(null)
   const [deletingSession, setDeletingSession] = useState<CastingSessionWithInputs | null>(null)
   const [editDate, setEditDate] = useState('')
@@ -212,6 +218,8 @@ function CastingLogPage() {
     if (viewMode === 'active') return filteredSessions.filter((s) => !trashMap.has(`casting:${s.id}`))
     return trashEntries.map((e) => snapshotToSession(e.snapshot))
   }, [filteredSessions, trashEntries, trashMap, viewMode])
+
+  const pager = useLogsPager(visibleRows)
 
   function snapshotToSession(snap: CastingSessionTrashSnapshot): CastingSessionWithInputs {
     return {
@@ -417,47 +425,42 @@ function CastingLogPage() {
         </div>
       ) : null}
 
-      {/* Section 1: Dashboard Header & Filter Panel */}
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900">Casting Session Logs</h3>
-            <p className="mt-0.5 text-xs text-slate-500">Search, filter, and manage historical furnace session outputs.</p>
-          </div>
-          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold shadow-sm">
-            <button type="button" className={`rounded-md px-3 py-1.5 transition ${viewMode === 'active' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`} onClick={() => setViewMode('active')}>
-              Active Logs
+      {/* Section 1: one short card toolbar (operational redesign Phase 4) —
+          the Active/Trash switch, search, date range, and quick ranges all
+          share a single wrap row instead of a stacked multi-row panel. */}
+      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold" role="group" aria-label="Casting log view">
+            <button type="button" aria-pressed={viewMode === 'active'} className={`rounded-md px-3 py-1.5 transition ${viewMode === 'active' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`} onClick={() => setViewMode('active')}>
+              Active logs
             </button>
-            <button type="button" className={`rounded-md px-3 py-1.5 transition ${viewMode === 'deleted' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`} onClick={() => setViewMode('deleted')}>
-              Temporary Trash
+            <button type="button" aria-pressed={viewMode === 'deleted'} className={`rounded-md px-3 py-1.5 transition ${viewMode === 'deleted' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`} onClick={() => setViewMode('deleted')}>
+              Temporary trash
             </button>
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-12 items-end">
-          <div className="lg:col-span-4 relative">
-            <span className="text-xs font-semibold text-slate-500 tracking-wide block mb-1.5">Search Logs</span>
-            <div className="relative">
-              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                className={`${inputClass} pl-8`}
-                placeholder="Search date, note, material..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
+          <div className="relative w-full sm:w-56">
+            <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              aria-label="Search casting sessions"
+              className={`${inputClass} h-9 pl-8`}
+              placeholder="Search date, note, material..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
-          <div className="lg:col-span-2">
-            <Field label="From Date">
-              <input className={inputClass} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            </Field>
+          <div className="w-[150px]">
+            <label className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-slate-500">From</span>
+              <input aria-label="From date" className={`${inputClass} w-[104px]`} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            </label>
           </div>
-          <div className="lg:col-span-2">
-            <Field label="To Date">
-              <input className={inputClass} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-            </Field>
+          <div className="w-[150px]">
+            <label className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-slate-500">To</span>
+              <input aria-label="To date" className={`${inputClass} w-[104px]`} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            </label>
           </div>
-          <div className="lg:col-span-4 flex justify-end gap-1.5 h-10 items-center">
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-3 py-2 transition shadow-sm"
@@ -486,7 +489,7 @@ function CastingLogPage() {
                 setDateTo('')
               }}
             >
-              Clear Filters
+              Clear filters
             </button>
           </div>
         </div>
@@ -521,7 +524,7 @@ function CastingLogPage() {
                     </td>
                   </tr>
                 )}
-                {visibleRows.map((row, index) => (
+                {pager.pageRows.map((row, index) => (
                   <tr key={`${row.id}-${index}`} className="hover:bg-slate-50/30 transition text-slate-800">
                     <td className="px-3 py-3 font-semibold text-slate-800">{formatFullDate(row.date)}</td>
                     <td className="px-3 py-3 text-center font-mono tabular-nums text-slate-700">{row.unit}</td>
@@ -541,6 +544,9 @@ function CastingLogPage() {
                       <div className="inline-flex justify-end gap-2">
                         {viewMode === 'active' && (
                           <>
+                            <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-3 py-1.5 transition shadow-sm" onClick={() => setViewing(row)}>
+                              <Eye size={12} /> View
+                            </button>
                             <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-3 py-1.5 transition shadow-sm" onClick={() => openEdit(row)}>
                               <Edit3 size={12} /> Edit
                             </button>
@@ -581,66 +587,48 @@ function CastingLogPage() {
         )}
       </section>
 
-      {/* Delete Confirmation Modal */}
-      {deletingSession && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl animate-scale-up">
-            <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/50 px-4 py-3">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-700">Delete Casting Session</h3>
-              <button type="button" className="rounded-md p-1 text-slate-400 hover:bg-slate-150 transition" onClick={() => setDeletingSession(null)}>
+      <LogsPager {...pager} />
+
+      <ConfirmDialog
+        open={Boolean(deletingSession)}
+        onOpenChange={(open) => { if (!open) setDeletingSession(null) }}
+        title="Delete Casting Session"
+        description={deletingSession ? `Move the ${formatFullDate(deletingSession.date)} session (${deletingSession.unit} runs, ${deletingSession.wireOut.toFixed(3)} kg wire out) to temporary trash for 3 hours?` : undefined}
+        confirmLabel="Delete session"
+        tone="danger"
+        pending={deleteMutation.isPending}
+        onConfirm={() => { if (deletingSession) void deleteMutation.mutateAsync(deletingSession).then(() => setDeletingSession(null)) }}
+      />
+
+      {/* View Casting Session Modal: centered, sharing the printed ticket */}
+      {viewing && (
+        <Dialog open onOpenChange={(open) => { if (!open) setViewing(null) }}>
+          <DialogContent showCloseButton={false} className="max-h-[92vh] max-w-2xl overflow-auto border border-slate-200 bg-white p-0 shadow-xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+              <DialogTitle className="text-sm font-semibold text-slate-950">
+                Casting session ticket — {formatFullDate(viewing.date)}
+              </DialogTitle>
+              <button type="button" aria-label="Close casting ticket" className="rounded-md p-1 text-slate-400 hover:bg-slate-100 transition" onClick={() => setViewing(null)}>
                 <X size={16} />
               </button>
             </div>
-            <div className="p-5 space-y-4">
-              <p className="text-sm text-slate-650 leading-relaxed">
-                Are you sure you want to delete this casting session? This will move it to the temporary trash for 3 hours.
+            <div className="p-4">
+              <CastingTicket session={viewing} />
+              <p className="mt-2 text-center text-[11px] text-slate-400">
+                Same ticket the Casting Bill page prints — values come from the saved session.
               </p>
-              <div className="rounded-lg bg-slate-50 border border-slate-150 p-3 space-y-2 text-xs">
-                <div className="flex justify-between items-center py-0.5 border-b border-dashed border-slate-200">
-                  <span className="text-slate-500 font-semibold">Date</span>
-                  <span className="font-mono text-slate-800 font-bold">{formatFullDate(deletingSession.date)}</span>
-                </div>
-                <div className="flex justify-between items-center py-0.5 border-b border-dashed border-slate-200">
-                  <span className="text-slate-500 font-semibold">Batches</span>
-                  <span className="font-mono text-slate-800 font-bold">{deletingSession.unit} runs</span>
-                </div>
-                <div className="flex justify-between items-center py-0.5 border-b border-dashed border-slate-200">
-                  <span className="text-slate-500 font-semibold">Wire Out</span>
-                  <span className="font-mono text-slate-850 font-bold">{deletingSession.wireOut.toFixed(3)} kg</span>
-                </div>
-                <div className="flex justify-between items-center py-0.5">
-                  <span className="text-slate-500 font-semibold">Material Value</span>
-                  <span className="font-mono text-slate-900 font-bold">{formatInrInteger(deletingSession.totalInputCost)}</span>
-                </div>
-              </div>
             </div>
-            <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/50 px-4 py-3">
-              <button type="button" className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-4 py-2 transition shadow-sm" onClick={() => setDeletingSession(null)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="rounded-lg bg-rose-600 hover:bg-rose-700 text-xs font-semibold text-white px-4 py-2 transition shadow-sm disabled:opacity-60"
-                onClick={async () => {
-                  await deleteMutation.mutateAsync(deletingSession)
-                  setDeletingSession(null)
-                }}
-                disabled={deleteMutation.isPending}
-              >
-                {deleteMutation.isPending ? 'Deleting...' : 'Confirm Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Edit Casting Session Modal */}
       {editing && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-          <div className="max-h-[92vh] w-full max-w-4xl overflow-auto rounded-xl border border-slate-200 bg-white shadow-2xl animate-scale-up">
+        <Dialog open onOpenChange={(open) => { if (!open) closeEdit() }}>
+          <DialogContent showCloseButton={false} className="max-h-[92vh] max-w-4xl overflow-auto border border-slate-200 bg-white p-0 shadow-xl">
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-700">Edit Casting Session</h3>
-              <button type="button" className="rounded-md p-1 text-slate-400 hover:bg-slate-150 transition" onClick={closeEdit}>
+              <DialogTitle className="text-sm font-semibold text-slate-950">Edit Casting Session</DialogTitle>
+              <button type="button" aria-label="Close casting editor" className="rounded-md p-1 text-slate-400 hover:bg-slate-150 transition" onClick={closeEdit}>
                 <X size={16} />
               </button>
             </div>
@@ -706,7 +694,7 @@ function CastingLogPage() {
                             <td className="p-0 align-middle text-center w-32">
                               <MathInput className="w-full h-9 bg-transparent text-center font-mono px-1 outline-none transition focus:bg-slate-50" value={r.rate} onChange={(val) => updateEditRow(r.clientId, { rate: val })} placeholder="0.00" />
                             </td>
-                            <td className="px-3 py-2 align-middle text-right font-mono font-semibold text-slate-850 w-36">{formatInrInteger(amt)}</td>
+                            <td className="px-3 py-2 align-middle text-right font-mono font-semibold tabular-nums text-slate-850 w-36">{formatInrInteger(amt)}</td>
                             <td className="px-3 py-2 align-middle text-right w-24">
                               <button type="button" className="text-xs font-semibold text-rose-600 hover:text-rose-700 disabled:opacity-30 transition" onClick={() => removeEditRow(r.clientId)} disabled={editRows.length <= 1}>
                                 <Trash2 size={13} className="inline mr-1" /> Remove
@@ -724,12 +712,12 @@ function CastingLogPage() {
               <button type="button" className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-4 py-2 transition shadow-sm" onClick={closeEdit}>
                 Cancel
               </button>
-              <button type="button" className="rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white px-5 py-2 transition shadow-sm disabled:opacity-60" onClick={() => void updateMutation.mutateAsync()} disabled={updateMutation.isPending}>
+              <button type="button" className="rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white px-5 py-2 transition shadow-sm disabled:opacity-60" onClick={() => void updateMutation.mutateAsync()} disabled={updateMutation.isPending}>
                 {updateMutation.isPending ? 'Saving...' : 'Save changes'}
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   )
@@ -755,5 +743,4 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-const inputClass =
-  'h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+const inputClass = `${baseInputClass} h-10`

@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, ArrowRight, Plus } from 'lucide-react'
+import { AlertCircle, ArrowRight, Plus, TrendingUp } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useModuleSettings } from '@/lib/use-module-settings'
 import { useDashboardData } from '@/domain/dashboard'
@@ -330,20 +330,20 @@ export function DashboardPage() {
     <div className="flex flex-wrap items-center gap-2">
       <Link
         to="/new-bill"
-        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+        className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
       >
         <Plus size={14} /> New Sale Bill
       </Link>
       <Link
         to="/new-payment"
-        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-700"
       >
         <Plus size={14} /> Record Payment
       </Link>
       {purchaseEnabled && (
         <Link
           to="/new-purchase-bill"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-700"
         >
           <Plus size={14} /> New Purchase Bill
         </Link>
@@ -351,7 +351,7 @@ export function DashboardPage() {
       {castingEnabled && (
         <Link
           to="/casting/new-session"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-700"
         >
           <Plus size={14} /> New Casting Heat
         </Link>
@@ -370,6 +370,9 @@ export function DashboardPage() {
     <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {/* 1. Dashboard Toolbar (Cards Rule compliant) */}
       <DashboardToolbar
+        title="Main Dashboard"
+        subtitle="Executive command center"
+        icon={<TrendingUp size={15} />}
         mode={mode}
         onModeChange={setMode}
         selectedMonth={selectedMonth}
@@ -386,7 +389,7 @@ export function DashboardPage() {
           actions={
             <Link
               to="/sales-dashboard"
-              className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               Open <ArrowRight size={12} />
             </Link>
@@ -421,7 +424,7 @@ export function DashboardPage() {
           </div>
 
           {/* Supporting Metrics: 3 Meta items */}
-          <div className="mt-4 grid grid-cols-3 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-2.5 sm:gap-3 sm:p-3">
+          <div className="mt-4 grid grid-cols-3 gap-2 rounded-lg border border-blue-50/60 bg-blue-50/20 p-2.5 sm:gap-3 sm:p-3">
             <div className="min-w-0">
               <p className="truncate text-[11px] font-medium text-slate-500">Collected</p>
               <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-slate-900">
@@ -431,7 +434,7 @@ export function DashboardPage() {
             </div>
             <div className="min-w-0">
               <p className="truncate text-[11px] font-medium text-slate-500">Still to receive</p>
-              <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-slate-900">
+              <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-blue-700">
                 {formatCompactInr(salesData.kpis.outstanding)}
               </p>
               <p className="truncate text-[10px] text-slate-400">
@@ -459,7 +462,7 @@ export function DashboardPage() {
             actions={
               <Link
                 to="/purchase-dashboard"
-                className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 transition hover:text-blue-800"
               >
                 Open <ArrowRight size={12} />
               </Link>
@@ -499,7 +502,7 @@ export function DashboardPage() {
             </div>
 
             {/* Supporting Metrics: 3 Meta items */}
-            <div className="mt-4 grid grid-cols-3 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-2.5 sm:gap-3 sm:p-3">
+            <div className="mt-4 grid grid-cols-3 gap-2 rounded-lg border border-blue-50/60 bg-blue-50/20 p-2.5 sm:gap-3 sm:p-3">
               <div className="min-w-0">
                 <p className="truncate text-[11px] font-medium text-slate-500">Paid out</p>
                 <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-slate-900">
@@ -518,7 +521,7 @@ export function DashboardPage() {
               </div>
               <div className="min-w-0">
                 <p className="truncate text-[11px] font-medium text-slate-500">Advance held</p>
-                <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-slate-900">
+                <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-blue-700">
                   {formatCompactInr(purchasePositions.totalAdvancePaise / 100)}
                 </p>
                 <p className="truncate text-[10px] text-slate-400">
@@ -536,7 +539,7 @@ export function DashboardPage() {
             actions={
               <Link
                 to="/casting"
-                className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 transition hover:text-blue-800"
               >
                 Open <ArrowRight size={12} />
               </Link>
@@ -571,7 +574,7 @@ export function DashboardPage() {
             </div>
 
             {/* Supporting Metrics: 3 Meta items */}
-            <div className="mt-4 grid grid-cols-3 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-2.5 sm:gap-3 sm:p-3">
+            <div className="mt-4 grid grid-cols-3 gap-2 rounded-lg border border-blue-50/60 bg-blue-50/20 p-2.5 sm:gap-3 sm:p-3">
               <div className="min-w-0">
                 <p className="truncate text-[11px] font-medium text-slate-500">Metal input</p>
                 <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-slate-900">
@@ -581,7 +584,7 @@ export function DashboardPage() {
               </div>
               <div className="min-w-0">
                 <p className="truncate text-[11px] font-medium text-slate-500">Loaded cost</p>
-                <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-slate-900">
+                <p className="mt-0.5 truncate font-mono text-sm font-semibold tabular-nums text-blue-700">
                   {periodCasting.avgLoadedCostKg > 0 ? `₹${Math.round(periodCasting.avgLoadedCostKg)}` : '—'}
                 </p>
                 <p className="truncate text-[10px] text-slate-400">Per kg wire</p>
@@ -610,7 +613,7 @@ export function DashboardPage() {
             <Link
               to="/ledger"
               search={{ tab: 'customers' }}
-              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               Customer ledger →
             </Link>
@@ -618,7 +621,7 @@ export function DashboardPage() {
         >
           <RankedBars
             rows={whoToReceiveRows}
-            tone="slate"
+            tone="blue"
             emptyText="No customer balance overdue."
           />
         </SectionCard>
@@ -632,7 +635,7 @@ export function DashboardPage() {
               <Link
                 to="/ledger"
                 search={{ tab: 'suppliers' }}
-                className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+                className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
               >
                 Supplier ledger →
               </Link>
@@ -640,7 +643,7 @@ export function DashboardPage() {
           >
             <RankedBars
               rows={whoToPayRows}
-              tone="slate"
+              tone="blue"
               emptyText="No supplier balance due."
             />
           </SectionCard>
@@ -657,7 +660,7 @@ export function DashboardPage() {
             <Link
               to="/transactions"
               search={{ focusKind: '', focusId: '' }}
-              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               All transactions →
             </Link>
@@ -678,12 +681,12 @@ export function DashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                   {latestSaleBills.map((b) => (
-                    <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
+                    <tr key={b.id} className="hover:bg-blue-50/40 transition-colors">
                       <td className="py-2.5 font-mono">
                         <Link
                           to="/print-bill"
                           search={{ billId: b.id, billRef: '' }}
-                          className="hover:underline text-slate-900 font-semibold"
+                          className="hover:underline hover:text-blue-700 text-slate-900 font-semibold transition"
                         >
                           #{b.billNo}
                         </Link>
@@ -711,7 +714,7 @@ export function DashboardPage() {
             actions={
               <Link
                 to="/purchase-bills"
-                className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+                className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
               >
                 All purchase bills →
               </Link>
@@ -733,12 +736,12 @@ export function DashboardPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                     {latestPurchaseBills.map((b) => (
-                      <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
+                      <tr key={b.id} className="hover:bg-blue-50/40 transition-colors">
                         <td className="py-2.5 font-mono">
                           <Link
                             to="/purchase-bills/$billId"
                             params={{ billId: b.id }}
-                            className="hover:underline text-slate-900 font-semibold"
+                            className="hover:underline hover:text-blue-700 text-slate-900 font-semibold transition"
                           >
                             {b.inNo}
                           </Link>

@@ -1,18 +1,24 @@
+import { countItemReferences, countNameOnlyReferences } from '@/data/item-usage'
+import { toast } from 'sonner'
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
+import { executeConfirmedBatch, generatePurchaseRecordId } from '@/data/confirmed-write'
+import { validateSupplierPaymentMode, type SupplierPaymentMode } from '@/domain/supplier-payment-modes'
+import { formatPurchaseLineMemos, parsePurchaseLineMemos } from '@/domain/purchase-receipt-memos'
 import { nextPurchaseInNo } from '@/domain/in-no'
 import { findItemNameCollision, itemNameKey, normalizeItemName } from '@/domain/purchase-item-name'
+import { bundleToLedgerInput, bundleToSettlementInput } from '@/domain/supplier-bundle'
 import {
-  CREDIT_KINDS,
+  buildPurchaseReadModel, buildSupplierBundle, groupPurchaseCollections,
+  type PurchaseCollections, type PurchaseReadModel,
+} from '@/domain/purchase-read-model'
+export { bundleToLedgerInput, bundleToSettlementInput } from '@/domain/supplier-bundle'
+import {
   computeSupplierSettlement,
-  type SupplierSettlementBillRow,
-  type SupplierSettlementInput,
-  type SupplierSettlementPaymentRow,
   type SupplierSettlementResult,
 } from '@/domain/supplier-settlement'
 import {
-  extractUserNote,
-  parseBagsAtReceiptKg,
+  computeBillNet,
 } from '@/domain/supplier-purchases'
 import {
   buildSupplierLedger,
@@ -84,6 +90,7 @@ export type PurchaseLineView = {
   weightG: number
   rateMilli: number
   amountPaise: number
+  receiptMemo?: string
   created: string
 }
 
@@ -295,7 +302,7 @@ const mapAllocation = (row: PBRow): SupplierAllocationView => ({
 
 function currentActor(): string {
   const record = pb.authStore.record
-  const actor = record && typeof record.get === 'function' ? text(record.get('email')) : ''
+  const actor = record && typeof record.get === 'function' ? text(record.get('email')) : text(record?.email)
   return actor.trim()
 }
 
@@ -329,88 +336,6 @@ async function fetchAll<T>(collection: string, map: (row: PBRow) => T, options?:
     filter: options?.filter,
   })
   return (result as unknown as PBRow[]).map(map)
-}
-
-export function bundleToSettlementInput(bundle: SupplierBundle): SupplierSettlementInput {
-  return {
-    supplier: {
-      openingKachaPaise: bundle.supplier.openingKachaPaise,
-      openingGstPaise: bundle.supplier.openingGstPaise,
-    },
-    bills: bundle.bills.map((bill) => ({
-      id: bill.id,
-      date: bill.date,
-      created: bill.created,
-      pool: bill.pool,
-      taxMode: bill.taxMode,
-      gstRateBp: bill.gstRateBp,
-      cancelled: bill.cancelled,
-    })),
-    lines: bundle.lines.map((line) => ({ billId: line.billId, amountPaise: line.amountPaise })),
-    adjustments: bundle.adjustments.map((row) => ({ billId: row.billId, type: row.type, amountPaise: row.amountPaise })),
-    bardan: bundle.bardan.map((row) => ({
-      billId: row.billId,
-      method: row.method,
-      creditPaise: row.creditPaise,
-      cashAmountPaise: row.cashAmountPaise,
-      note: row.note,
-    })),
-    payments: bundle.payments.map((payment) => ({
-      id: payment.id,
-      date: payment.date,
-      created: payment.created,
-      pool: payment.pool,
-      kind: payment.kind,
-      amountPaise: payment.amountPaise,
-      cancelled: payment.cancelled,
-    })),
-    allocations: bundle.allocations.map((pin) => ({
-      paymentId: pin.paymentId,
-      billId: pin.billId,
-      amountPaise: pin.amountPaise,
-    })),
-  }
-}
-
-export function bundleToLedgerInput(bundle: SupplierBundle, filter?: SupplierLedgerInput['filter']): SupplierLedgerInput {
-  const billIds = new Set(bundle.bills.filter((bill) => !bill.cancelled).map((bill) => bill.id))
-  return {
-    bills: bundle.bills.map((bill) => ({
-      id: bill.id,
-      date: bill.date,
-      created: bill.created,
-      pool: bill.pool,
-      taxMode: bill.taxMode,
-      gstRateBp: bill.gstRateBp,
-      cancelled: bill.cancelled,
-    })),
-    lines: bundle.lines.filter((line) => billIds.has(line.billId)).map((line) => ({ billId: line.billId, amountPaise: line.amountPaise })),
-    adjustments: bundle.adjustments
-      .filter((row) => billIds.has(row.billId))
-      .map((row) => ({ billId: row.billId, type: row.type, amountPaise: row.amountPaise })),
-    bardan: bundle.bardan.map((row) => ({
-      id: row.id,
-      billId: row.billId,
-      date: row.date,
-      created: row.created,
-      method: row.method,
-      creditPaise: row.creditPaise,
-      cashAmountPaise: row.cashAmountPaise,
-      note: row.note,
-    })),
-    payments: bundle.payments.map((payment) => ({
-      id: payment.id,
-      date: payment.date,
-      created: payment.created,
-      pool: payment.pool,
-      kind: payment.kind,
-      amountPaise: payment.amountPaise,
-      cancelled: payment.cancelled,
-    })),
-    openingKachaPaise: bundle.supplier.openingKachaPaise,
-    openingGstPaise: bundle.supplier.openingGstPaise,
-    filter,
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +448,7 @@ export async function renamePurchaseItem(itemId: string, name: string): Promise<
     const existing = await pb.collection('purchase_items').getFullList({ fields: 'id,name' })
     const collision = existing.find((row) => String((row as unknown as { id: string }).id) !== itemId && itemNameKey(String((row as unknown as { name?: string }).name ?? '')) === itemNameKey(candidate))
     if (collision) throw new Error(`Item "${String((collision as unknown as { name?: string }).name ?? '')}" already exists.`)
+    if (itemNameKey(text(before.name)) !== itemNameKey(candidate) && await countNameOnlyReferences('purchase', text(before.name)) > 0) throw new Error('Old bills use this name without an item link. Deactivate it and add a new item instead.')
     const row = (await pb.collection('purchase_items').update(itemId, { name: candidate })) as PBRow
     await writeAuditRow({ collection: 'purchase_items', recordId: itemId, action: 'rename', before, after: { name: candidate } })
     return mapItem(row)
@@ -538,12 +464,23 @@ export async function setPurchaseItemActive(itemId: string, active: boolean): Pr
   })
 }
 
+export async function deletePurchaseItem(itemId: string): Promise<void> {
+  return runDataOperation('delete-purchase-item', async () => {
+    const before = (await pb.collection('purchase_items').getOne(itemId)) as PBRow
+    const count = await countItemReferences('purchase', itemId, text(before.name))
+    if (count > 0) throw new Error(`Used in ${count} purchase bill lines. Deactivate this item instead.`)
+    await pb.collection('purchase_items').delete(itemId)
+    await writeAuditRow({ collection: 'purchase_items', recordId: itemId, action: 'delete', before, after: null })
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Purchase bills / lines / adjustments / bardan (create only in Phase 2; UI is
 // the Phase 3 lanes) — wrappers are typed so later phases plug in directly.
 // ---------------------------------------------------------------------------
 
 export type PurchaseBillCreateInput = {
+  requestId?: string
   supplierId: string
   inNo: string
   supplierBillNo?: string
@@ -555,18 +492,28 @@ export type PurchaseBillCreateInput = {
   privateNote?: string
   groupId?: string
   photos?: File[]
-  lines: Array<{ itemId?: string; itemName: string; weightG: number; rateMilli: number; amountPaise: number }>
+  payment?: { amountPaise: number; mode: SupplierPaymentMode; reference?: string; note?: string }
+  lines: Array<{ itemId?: string; itemName: string; weightG: number; rateMilli: number; amountPaise: number; receiptMemo?: string }>
   adjustments?: Array<{ type: string; amountPaise: number; note?: string }>
   bardan?: Array<{ bardanG: number; rateLineIndex?: number; rateMilli: number; method: string; creditPaise?: number; cashAmountPaise?: number; date?: string; note?: string }>
 }
 
 function generateRecordId(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
-  let id = ''
-  for (let i = 0; i < 15; i++) {
-    id += chars.charAt(Math.floor(Math.random() * chars.length))
+  return generatePurchaseRecordId()
+}
+
+function requirePositiveInteger(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${label} must be a positive whole number.`)
+}
+
+function validatePurchaseLines(lines: PurchaseBillCreateInput['lines']): void {
+  if (lines.length === 0) throw new Error('A purchase bill needs at least one item line.')
+  for (const [index, line] of lines.entries()) {
+    if (!line.itemName.trim()) throw new Error(`Item name is required on line ${index + 1}.`)
+    requirePositiveInteger(line.weightG, `Weight on line ${index + 1}`)
+    requirePositiveInteger(line.rateMilli, `Rate on line ${index + 1}`)
+    requirePositiveInteger(line.amountPaise, `Amount on line ${index + 1}`)
   }
-  return id
 }
 
 export async function getNextPurchaseInNo(dateYyyyMmDd: string): Promise<string> {
@@ -577,14 +524,21 @@ export async function getNextPurchaseInNo(dateYyyyMmDd: string): Promise<string>
 
 export async function createPurchaseBill(input: PurchaseBillCreateInput): Promise<PurchaseBillView> {
   return runDataOperation('create-purchase-bill', async () => {
+    validatePurchaseLines(input.lines)
+    if (input.payment) {
+      requirePositiveInteger(input.payment.amountPaise, 'Payment amount')
+      validateSupplierPaymentMode(input.payment.mode, input.payment.reference)
+    }
     let inNo = (input.inNo || '').trim()
     if (!inNo) {
       inNo = await getNextPurchaseInNo(input.date)
     }
 
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const billId = generateRecordId()
+    const saved = await executeConfirmedBatch({
+      confirmationCollection: 'purchase_bills', scope: input.supplierId,
+      label: `Purchase bill ${inNo}`, input,
+      build: (billId) => {
+        const lineIds = input.lines.map(() => generateRecordId())
         const billPayload = {
           id: billId,
           supplier: input.supplierId,
@@ -595,15 +549,13 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
           tax_mode: input.taxMode,
           gst_rate_bp: input.gstRateBp ?? 0,
           vehicle_no: input.vehicleNo ?? '',
-          private_note: input.privateNote ?? '',
+          private_note: formatPurchaseLineMemos(input.privateNote ?? '', Object.fromEntries(input.lines.map((line, index) => [lineIds[index], line.receiptMemo ?? '']))),
           group_id: input.groupId ?? '',
         }
         const batch = pb.createBatch()
         batch.collection('purchase_bills').create(billPayload)
-        const lineIds: string[] = []
-        for (const line of input.lines) {
-          const lineId = generateRecordId()
-          lineIds.push(lineId)
+        for (const [index, line] of input.lines.entries()) {
+          const lineId = lineIds[index]
           batch.collection('purchase_bill_lines').create({
             id: lineId,
             bill: billId,
@@ -637,6 +589,32 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
             note: entry.note ?? '',
           })
         }
+        if (input.payment) {
+          const paymentId = generateRecordId()
+          const paymentPayload = {
+            id: paymentId, supplier: input.supplierId, date: input.date, pool: input.pool,
+            kind: 'payment', amount_paise: input.payment.amountPaise,
+            mode: input.payment.mode, reference: input.payment.reference ?? '',
+            payee_name: '', private_note: input.payment.note?.trim() || `Paid with purchase bill ${inNo}`,
+          }
+          batch.collection('supplier_payments').create(paymentPayload)
+          const billNetPaise = computeBillNet(input.lines, input.adjustments ?? [], (input.bardan ?? []).map((entry) => ({ ...entry, creditPaise: entry.creditPaise ?? 0 })), input.taxMode, input.gstRateBp ?? 0).netPaise
+          const pinnedPaise = Math.min(input.payment.amountPaise, Math.max(0, billNetPaise))
+          if (pinnedPaise > 0) {
+            const allocationId = generateRecordId()
+            batch.collection('supplier_payment_allocations').create({
+              id: allocationId, payment: paymentId, bill: billId, amount_paise: pinnedPaise,
+            })
+            batch.collection('purchase_audit_log').create({
+              collection: 'supplier_payment_allocations', record_id: allocationId, action: 'create',
+              after_json: JSON.stringify({ payment: paymentId, bill: billId, amount_paise: pinnedPaise }), actor: currentActor(),
+            })
+          }
+          batch.collection('purchase_audit_log').create({
+            collection: 'supplier_payments', record_id: paymentId, action: 'create',
+            after_json: JSON.stringify(paymentPayload), actor: currentActor(),
+          })
+        }
         batch.collection('purchase_audit_log').create({
           collection: 'purchase_bills',
           record_id: billId,
@@ -644,28 +622,22 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
           after_json: JSON.stringify(billPayload),
           actor: currentActor(),
         })
-        await batch.send()
-        if (input.photos && input.photos.length > 0) {
-          try {
-            const formData = new FormData()
-            for (const file of input.photos) {
-              formData.append('photos', file)
-            }
-            await pb.collection('purchase_bills').update(billId, formData)
-          } catch (e) {
-            console.warn('[suppliers] Failed to upload bill photos', e)
-          }
-        }
-        return mapBill((await pb.collection('purchase_bills').getOne(billId)) as PBRow)
-      } catch (err) {
-        if (attempt < 2) {
-          inNo = await getNextPurchaseInNo(input.date)
-          continue
-        }
-        throw err
+        return { batch, record: billPayload }
+      },
+    })
+    const billId = saved.id
+    if (input.photos && input.photos.length > 0) {
+      try {
+        const formData = new FormData()
+        for (const file of input.photos) formData.append('photos', file)
+        const uploaded = await pb.collection('purchase_bills').update(billId, formData)
+        saved.photos = uploaded.photos
+      } catch (error) {
+        console.warn('[suppliers] Failed to upload bill photos', error)
+        toast.warning('Bill saved, but its photos did not upload. Open the bill and add them again.')
       }
     }
-    throw new Error('Failed to create purchase bill after retries')
+    return mapBill(saved)
   })
 }
 
@@ -679,12 +651,13 @@ export type PurchaseBillUpdateInput = {
   vehicleNo?: string
   privateNote?: string
   photos?: File[]
-  lines: Array<{ id?: string; itemId?: string; itemName: string; weightG: number; rateMilli: number; amountPaise: number }>
+  lines: Array<{ id?: string; itemId?: string; itemName: string; weightG: number; rateMilli: number; amountPaise: number; receiptMemo?: string }>
   adjustments?: Array<{ type: string; amountPaise: number; note?: string }>
 }
 
 export async function updatePurchaseBill(billId: string, input: PurchaseBillUpdateInput): Promise<PurchaseBillView> {
   return runDataOperation('update-purchase-bill', async () => {
+    validatePurchaseLines(input.lines)
     const beforeBill = (await pb.collection('purchase_bills').getOne(billId)) as PBRow
     const oldLines = await pb.collection('purchase_bill_lines').getFullList({ filter: `bill = "${billId}"` })
     const oldAdjustments = await pb.collection('purchase_bill_adjustments').getFullList({ filter: `bill = "${billId}"` })
@@ -696,8 +669,8 @@ export async function updatePurchaseBill(billId: string, input: PurchaseBillUpda
       pool: input.pool,
       tax_mode: input.taxMode,
       gst_rate_bp: input.gstRateBp ?? 0,
-      vehicle_no: input.vehicleNo ?? '',
-      private_note: input.privateNote ?? '',
+      vehicle_no: input.vehicleNo ?? text(beforeBill.vehicle_no),
+      private_note: input.privateNote ?? text(beforeBill.private_note),
     }
 
     // Keep existing line ids wherever the edit still carries them: bardan
@@ -705,16 +678,27 @@ export async function updatePurchaseBill(billId: string, input: PurchaseBillUpda
     // (or, with the old cascadeDelete, silently destroy) those entries.
     const oldLineIds = new Set(oldLines.map((row) => row.id))
     const claimedLineIds = new Set<string>()
+    const oldMemos = parsePurchaseLineMemos(text(beforeBill.private_note))
     const lineOps = input.lines.map((line) => {
       const keepId = line.id && oldLineIds.has(line.id) && !claimedLineIds.has(line.id) ? line.id : ''
       if (keepId) claimedLineIds.add(keepId)
-      return { line, keepId }
+      return { line, keepId, recordId: keepId || generateRecordId() }
     })
+    billPayload.private_note = formatPurchaseLineMemos(billPayload.private_note, Object.fromEntries(lineOps.map(({ line, keepId, recordId }) => [recordId, line.receiptMemo ?? (keepId ? oldMemos[keepId] ?? '' : '')])))
 
+    const saved = await executeConfirmedBatch({
+      confirmationCollection: 'purchase_audit_log', scope: `bill-update:${billId}`,
+      label: `Changes to purchase bill ${text(beforeBill.in_no)}`, input,
+      recover: (audit) => {
+        const snapshot = parseAuditJson(text(audit.after_json))
+        const header = snapshot?.bill && typeof snapshot.bill === 'object' ? snapshot.bill as Record<string, unknown> : billPayload
+        return { ...beforeBill, ...header, id: billId, updated: audit.created }
+      },
+      build: async (auditId) => {
     const batch = pb.createBatch()
     batch.collection('purchase_bills').update(billId, billPayload)
 
-    for (const { line, keepId } of lineOps) {
+    for (const { line, keepId, recordId } of lineOps) {
       const linePayload = {
         bill: billId,
         item: line.itemId ?? '',
@@ -726,7 +710,7 @@ export async function updatePurchaseBill(billId: string, input: PurchaseBillUpda
       if (keepId) {
         batch.collection('purchase_bill_lines').update(keepId, linePayload)
       } else {
-        batch.collection('purchase_bill_lines').create({ id: generateRecordId(), ...linePayload })
+        batch.collection('purchase_bill_lines').create({ id: recordId, ...linePayload })
       }
     }
 
@@ -765,31 +749,37 @@ export async function updatePurchaseBill(billId: string, input: PurchaseBillUpda
     }
 
     batch.collection('purchase_audit_log').create({
+      id: auditId,
       collection: 'purchase_bills',
       record_id: billId,
       action: 'update',
-      before_json: JSON.stringify(beforeBill),
-      after_json: JSON.stringify(billPayload),
+      before_json: JSON.stringify({ bill: beforeBill, lines: oldLines, adjustments: oldAdjustments }),
+      after_json: JSON.stringify({ bill: billPayload, lines: input.lines, adjustments: input.adjustments ?? [] }),
       actor: currentActor(),
     })
 
-    await batch.send()
+    return { batch, record: { ...beforeBill, ...billPayload, id: billId } }
+      },
+    })
     if (input.photos && input.photos.length > 0) {
       try {
         const formData = new FormData()
         for (const file of input.photos) {
           formData.append('photos', file)
         }
-        await pb.collection('purchase_bills').update(billId, formData)
+        const uploaded = await pb.collection('purchase_bills').update(billId, formData)
+        saved.photos = uploaded.photos
       } catch (e) {
         console.warn('[suppliers] Failed to upload bill photos', e)
+        toast.warning('Bill changes saved, but its photos did not upload. Add them again.')
       }
     }
-    return mapBill((await pb.collection('purchase_bills').getOne(billId)) as PBRow)
+    return mapBill(saved)
   })
 }
 
 export type PurchaseBardanEntryInput = {
+  requestId?: string
   billId: string
   bardanG: number
   rateLineId?: string
@@ -804,7 +794,10 @@ export type PurchaseBardanEntryInput = {
 export async function addPurchaseBardanEntry(input: PurchaseBardanEntryInput): Promise<PurchaseBardanView> {
   return runDataOperation('add-purchase-bardan-entry', async () => {
     const bill = (await pb.collection('purchase_bills').getOne(input.billId)) as PBRow
-    const bardanId = generateRecordId()
+    const saved = await executeConfirmedBatch({
+      confirmationCollection: 'purchase_bardan', scope: input.billId,
+      label: `Bardan entry for bill ${text(bill.in_no)}`, input,
+      build: (bardanId) => {
     const bardanPayload = {
       id: bardanId,
       bill: input.billId,
@@ -853,8 +846,10 @@ export async function addPurchaseBardanEntry(input: PurchaseBardanEntryInput): P
       actor: currentActor(),
     })
 
-    await batch.send()
-    return mapBardan((await pb.collection('purchase_bardan').getOne(bardanId)) as PBRow)
+    return { batch, record: bardanPayload }
+      },
+    })
+    return mapBardan(saved)
   })
 }
 
@@ -881,6 +876,7 @@ export async function uncancelPurchaseBill(billId: string): Promise<PurchaseBill
 // ---------------------------------------------------------------------------
 
 export type SupplierPaymentCreateInput = {
+  requestId?: string
   supplierId: string
   date: string
   pool: SupplierPool
@@ -896,7 +892,18 @@ export type SupplierPaymentCreateInput = {
 
 export async function createSupplierPayment(input: SupplierPaymentCreateInput): Promise<SupplierPaymentView> {
   return runDataOperation('create-supplier-payment', async () => {
-    const paymentId = generateRecordId()
+    requirePositiveInteger(input.amountPaise, 'Payment amount')
+    const pinnedTotal = (input.allocations ?? []).reduce((sum, allocation) => {
+      requirePositiveInteger(allocation.amountPaise, 'Allocation amount')
+      return sum + allocation.amountPaise
+    }, 0)
+    if (pinnedTotal > input.amountPaise) throw new Error('Allocations exceed the payment amount.')
+    validateSupplierPaymentMode(input.mode || 'cash', input.reference)
+    if (input.kind === 'refund_received' && pinnedTotal > 0) throw new Error('Refunds cannot be pinned to purchase bills.')
+    const saved = await executeConfirmedBatch({
+      confirmationCollection: 'supplier_payments', scope: input.supplierId,
+      label: 'Supplier payment', input,
+      build: (paymentId) => {
     const payload = {
       id: paymentId,
       supplier: input.supplierId,
@@ -904,7 +911,7 @@ export async function createSupplierPayment(input: SupplierPaymentCreateInput): 
       pool: input.pool,
       kind: input.kind,
       amount_paise: input.amountPaise,
-      mode: input.mode ?? '',
+      mode: input.mode || 'cash',
       reference: input.reference ?? '',
       payee_name: input.payeeName ?? '',
       private_note: input.privateNote ?? '',
@@ -938,19 +945,24 @@ export async function createSupplierPayment(input: SupplierPaymentCreateInput): 
       after_json: JSON.stringify(payload),
       actor: currentActor(),
     })
-    await batch.send()
+    return { batch, record: payload }
+      },
+    })
+    const paymentId = saved.id
     if (input.photos && input.photos.length > 0) {
       try {
         const formData = new FormData()
         for (const file of input.photos) {
           formData.append('photos', file)
         }
-        await pb.collection('supplier_payments').update(paymentId, formData)
+        const uploaded = await pb.collection('supplier_payments').update(paymentId, formData)
+        saved.photos = uploaded.photos
       } catch (e) {
         console.warn('[suppliers] Failed to upload payment photos', e)
+        toast.warning('Payment saved, but its photos did not upload. Add them again.')
       }
     }
-    return mapPayment((await pb.collection('supplier_payments').getOne(paymentId)) as PBRow)
+    return mapPayment(saved)
   })
 }
 
@@ -964,9 +976,16 @@ export type PurchaseBillDetail = {
 
 /** Look up a purchase bill by its IN document number (globally unique). */
 export async function loadPurchaseBillIdByInNo(inNo: string): Promise<string | null> {
-  const safe = String(inNo ?? '').replace(/"/g, '\\"')
-  const row = await pb.collection('purchase_bills').getFirstListItem(`in_no = "${safe}"`, { fields: 'id' }).catch(() => null)
-  return row ? String(row.id) : null
+  return runDataOperation('load-purchase-bill-id', async () => {
+    const safe = String(inNo ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    try {
+      const row = await pb.collection('purchase_bills').getFirstListItem(`in_no = "${safe}"`, { fields: 'id' })
+      return String(row.id)
+    } catch (error) {
+      if (error && typeof error === 'object' && 'status' in error && error.status === 404) return null
+      throw error
+    }
+  })
 }
 
 export async function loadPurchaseBill(billId: string): Promise<PurchaseBillDetail> {
@@ -980,7 +999,7 @@ export async function loadPurchaseBill(billId: string): Promise<PurchaseBillDeta
     ])
     return {
       bill: mapBill(billRaw as PBRow),
-      lines,
+      lines: lines.map((line) => ({ ...line, receiptMemo: parsePurchaseLineMemos(text(billRaw.private_note))[line.id] ?? '' })),
       adjustments,
       bardan,
       allocations,
@@ -1018,29 +1037,34 @@ const SUPPLIER_COLLECTIONS = {
   allocations: 'supplier_payment_allocations',
 } as const
 
+async function readPurchaseCollections(): Promise<PurchaseCollections> {
+  const [bills, lines, adjustments, bardan, payments, allocations] = await Promise.all([
+    fetchAll(SUPPLIER_COLLECTIONS.bills, mapBill, { sort: 'date,created,id' }),
+    fetchAll(SUPPLIER_COLLECTIONS.lines, mapLine, { sort: 'created,id' }),
+    fetchAll(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment, { sort: 'created,id' }),
+    fetchAll(SUPPLIER_COLLECTIONS.bardan, mapBardan, { sort: 'date,created,id' }),
+    fetchAll(SUPPLIER_COLLECTIONS.payments, mapPayment, { sort: 'date,created,id' }),
+    fetchAll(SUPPLIER_COLLECTIONS.allocations, mapAllocation, { sort: 'created,id' }),
+  ])
+  return { bills, lines, adjustments, bardan, payments, allocations }
+}
+
+async function readPurchaseModel(): Promise<PurchaseReadModel> {
+  const [suppliers, collections] = await Promise.all([
+    fetchAll('suppliers', mapSupplier, { sort: 'company_name' }),
+    readPurchaseCollections(),
+  ])
+  return buildPurchaseReadModel(suppliers, collections)
+}
+
+export async function loadPurchaseReadModel(): Promise<PurchaseReadModel> {
+  return runDataOperation('load-purchase-read-model', readPurchaseModel)
+}
+
 export async function loadSupplierBundle(supplierId: string): Promise<SupplierBundle> {
   return runDataOperation('load-supplier-bundle', async () => {
     const supplier = await getSupplier(supplierId)
-    const [bills, lines, adjustments, bardan, payments, allocations] = await Promise.all([
-      fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill, { sort: 'date,created,id' }),
-      fetchAll<PurchaseLineView>(SUPPLIER_COLLECTIONS.lines, mapLine, { sort: 'created,id' }),
-      fetchAll<PurchaseAdjustmentView>(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment, { sort: 'created,id' }),
-      fetchAll<PurchaseBardanView>(SUPPLIER_COLLECTIONS.bardan, mapBardan, { sort: 'date,created,id' }),
-      fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment, { sort: 'date,created,id' }),
-      fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation, { sort: 'created,id' }),
-    ])
-    const supplierBillIds = new Set(bills.filter((bill) => bill.supplierId === supplierId).map((bill) => bill.id))
-    const paymentsOfSupplier = payments.filter((payment) => payment.supplierId === supplierId)
-    const paymentsById = new Set(paymentsOfSupplier.map((payment) => payment.id))
-    return {
-      supplier,
-      bills: bills.filter((bill) => bill.supplierId === supplierId),
-      lines: lines.filter((line) => supplierBillIds.has(line.billId)),
-      adjustments: adjustments.filter((row) => supplierBillIds.has(row.billId)),
-      bardan: bardan.filter((row) => supplierBillIds.has(row.billId)),
-      payments: paymentsOfSupplier,
-      allocations: allocations.filter((pin) => paymentsById.has(pin.paymentId)),
-    }
+    return buildSupplierBundle(supplier, groupPurchaseCollections(await readPurchaseCollections()))
   })
 }
 
@@ -1052,87 +1076,8 @@ export function computeSupplierBundleLedger(bundle: SupplierBundle, filter?: Sup
   return buildSupplierLedger(bundleToLedgerInput(bundle, filter))
 }
 
-function lastActivity(bundle: SupplierBundle): string {
-  let latest = ''
-  const touch = (date: string, created: string) => {
-    const candidate = date || day(created)
-    if (candidate && candidate > latest) latest = candidate
-  }
-  for (const bill of bundle.bills) touch(bill.date, bill.created)
-  for (const entry of bundle.bardan) touch(entry.date, entry.created)
-  for (const payment of bundle.payments) touch(payment.date, payment.created)
-  return latest
-}
-
 export async function loadSuppliersSummary(): Promise<SupplierSummary[]> {
-  return runDataOperation('load-suppliers-summary', async () => {
-    const suppliers = await listSuppliers({ includeInactive: true })
-    const [allBills, allLines, allAdjustments, allBardan, allPayments, allAllocations] = await Promise.all([
-      fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill, { sort: 'date,created,id' }),
-      fetchAll<PurchaseLineView>(SUPPLIER_COLLECTIONS.lines, mapLine, { sort: 'created,id' }),
-      fetchAll<PurchaseAdjustmentView>(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment, { sort: 'created,id' }),
-      fetchAll<PurchaseBardanView>(SUPPLIER_COLLECTIONS.bardan, mapBardan, { sort: 'date,created,id' }),
-      fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment, { sort: 'date,created,id' }),
-      fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation, { sort: 'created,id' }),
-    ])
-
-    const rows: SupplierSummary[] = []
-    for (const supplier of suppliers) {
-      const bills = allBills.filter((bill) => bill.supplierId === supplier.id)
-      const billIds = new Set(bills.map((bill) => bill.id))
-      const payments = allPayments.filter((payment) => payment.supplierId === supplier.id)
-      const paymentIds = new Set(payments.map((payment) => payment.id))
-      const settlement = computeSupplierSettlement({
-        supplier: { openingKachaPaise: supplier.openingKachaPaise, openingGstPaise: supplier.openingGstPaise },
-        bills,
-        lines: allLines.filter((line) => billIds.has(line.billId)).map((line) => ({ billId: line.billId, amountPaise: line.amountPaise })),
-        adjustments: allAdjustments
-          .filter((row) => billIds.has(row.billId))
-          .map((row) => ({ billId: row.billId, type: row.type, amountPaise: row.amountPaise })),
-        bardan: allBardan
-          .filter((row) => billIds.has(row.billId))
-          .map((row) => ({ billId: row.billId, method: row.method, creditPaise: row.creditPaise, cashAmountPaise: row.cashAmountPaise, note: row.note })),
-        payments: payments.map((payment) => ({
-          id: payment.id,
-          date: payment.date,
-          created: payment.created,
-          pool: payment.pool,
-          kind: payment.kind,
-          amountPaise: payment.amountPaise,
-          cancelled: payment.cancelled,
-        })),
-        allocations: allAllocations.filter((pin) => paymentIds.has(pin.paymentId)).map((pin) => ({
-          paymentId: pin.paymentId,
-          billId: pin.billId,
-          amountPaise: pin.amountPaise,
-        })),
-      })
-      const poolBills = [...settlement.pools.kacha.bills, ...settlement.pools.gst.bills]
-      const bardanPendingCount = poolBills.filter((b) => b.bardanPending).length
-      const openBills = poolBills.filter((b) => b.status === 'open' || b.status === 'partial')
-      let oldestDueDays: number | null = null
-      if (openBills.length > 0) {
-        const today = new Date().toISOString().slice(0, 10)
-        const earliestDate = openBills.reduce((min, b) => (!min || b.date < min ? b.date : min), '')
-        if (earliestDate) {
-          const diffMs = new Date(today).getTime() - new Date(earliestDate).getTime()
-          oldestDueDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)))
-        }
-      }
-
-      rows.push({
-        supplier,
-        kachaDuePaise: settlement.pools.kacha.outstandingPaise,
-        gstDuePaise: settlement.pools.gst.outstandingPaise,
-        advancePaise: settlement.combined.advancePaise,
-        outstandingPaise: settlement.combined.netPositionPaise,
-        lastActivityDate: lastActivity({ supplier, bills, lines: [], adjustments: [], bardan: allBardan.filter((row) => billIds.has(row.billId)), payments, allocations: [] }),
-        bardanPendingCount,
-        oldestDueDays,
-      })
-    }
-    return rows
-  })
+  return runDataOperation('load-suppliers-summary', async () => (await readPurchaseModel()).summaries)
 }
 
 /** Vilaity history for the internal-only premium column (₨/kg -> milli). */
@@ -1189,225 +1134,11 @@ export type EnrichedSupplierPayment = {
 }
 
 export async function loadAllPurchaseBills(): Promise<EnrichedPurchaseBill[]> {
-  return runDataOperation('load-all-purchase-bills', async () => {
-    const [suppliers, allBills, allLines, allAdjustments, allBardan, allPayments, allAllocations] =
-      await Promise.all([
-        fetchAll<SupplierView>('suppliers', mapSupplier),
-        fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill, { sort: '-date,-created,-id' }),
-        fetchAll<PurchaseLineView>(SUPPLIER_COLLECTIONS.lines, mapLine, { sort: 'created,id' }),
-        fetchAll<PurchaseAdjustmentView>(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment, { sort: 'created,id' }),
-        fetchAll<PurchaseBardanView>(SUPPLIER_COLLECTIONS.bardan, mapBardan, { sort: 'date,created,id' }),
-        fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment, { sort: 'date,created,id' }),
-        fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation, { sort: 'created,id' }),
-      ])
-
-    const supplierMap = new Map(suppliers.map((s) => [s.id, s]))
-    const settlementBillMap = new Map<string, SupplierSettlementBillRow>()
-
-    // Run settlement per supplier to calculate true bill dues and bardan pending
-    for (const supplier of suppliers) {
-      const supplierBills = allBills.filter((b) => b.supplierId === supplier.id)
-      if (supplierBills.length === 0) continue
-      const billIds = new Set(supplierBills.map((b) => b.id))
-      const supplierPayments = allPayments.filter((p) => p.supplierId === supplier.id)
-      const paymentIds = new Set(supplierPayments.map((p) => p.id))
-
-      const settlement = computeSupplierSettlement({
-        supplier: { openingKachaPaise: supplier.openingKachaPaise, openingGstPaise: supplier.openingGstPaise },
-        bills: supplierBills,
-        lines: allLines.filter((l) => billIds.has(l.billId)).map((l) => ({ billId: l.billId, amountPaise: l.amountPaise })),
-        adjustments: allAdjustments
-          .filter((a) => billIds.has(a.billId))
-          .map((a) => ({ billId: a.billId, type: a.type, amountPaise: a.amountPaise })),
-        bardan: allBardan
-          .filter((b) => billIds.has(b.billId))
-          .map((b) => ({ billId: b.billId, method: b.method, creditPaise: b.creditPaise, cashAmountPaise: b.cashAmountPaise, note: b.note })),
-        payments: supplierPayments.map((p) => ({
-          id: p.id,
-          date: p.date,
-          created: p.created,
-          pool: p.pool,
-          kind: p.kind,
-          amountPaise: p.amountPaise,
-          cancelled: p.cancelled,
-        })),
-        allocations: allAllocations
-          .filter((a) => paymentIds.has(a.paymentId))
-          .map((a) => ({ paymentId: a.paymentId, billId: a.billId, amountPaise: a.amountPaise })),
-      })
-
-      for (const row of [...settlement.pools.kacha.bills, ...settlement.pools.gst.bills]) {
-        settlementBillMap.set(row.billId, row)
-      }
-    }
-
-    const linesByBill = new Map<string, PurchaseLineView[]>()
-    for (const l of allLines) {
-      const list = linesByBill.get(l.billId) ?? []
-      list.push(l)
-      linesByBill.set(l.billId, list)
-    }
-
-    const adjsByBill = new Map<string, PurchaseAdjustmentView[]>()
-    for (const a of allAdjustments) {
-      const list = adjsByBill.get(a.billId) ?? []
-      list.push(a)
-      adjsByBill.set(a.billId, list)
-    }
-
-    const bardanByBill = new Map<string, PurchaseBardanView[]>()
-    for (const b of allBardan) {
-      const list = bardanByBill.get(b.billId) ?? []
-      list.push(b)
-      bardanByBill.set(b.billId, list)
-    }
-
-    return allBills.map((bill) => {
-      const supplier = supplierMap.get(bill.supplierId)
-      const bLines = linesByBill.get(bill.id) ?? []
-      const bAdjs = adjsByBill.get(bill.id) ?? []
-      const bBardan = bardanByBill.get(bill.id) ?? []
-      const sBill = settlementBillMap.get(bill.id)
-
-      const totalWeightG = bLines.reduce((sum, l) => sum + l.weightG, 0)
-      const netPaise = sBill?.netPaise ?? 0
-      const paidPaise = sBill?.paidPaise ?? 0
-      const duePaise = sBill?.duePaise ?? (bill.cancelled ? 0 : netPaise)
-      const status = sBill?.status ?? (bill.cancelled ? 'cancelled' : 'open')
-      const bardanPending = sBill?.bardanPending ?? (!bill.cancelled && bBardan.length === 0)
-
-      return {
-        id: bill.id,
-        inNo: bill.inNo,
-        date: bill.date,
-        created: bill.created,
-        supplierId: bill.supplierId,
-        supplierName: supplier?.companyName ?? 'Unknown Supplier',
-        pool: bill.pool,
-        taxMode: bill.taxMode,
-        gstRateBp: bill.gstRateBp,
-        supplierBillNo: bill.supplierBillNo,
-        vehicleNo: bill.vehicleNo,
-        privateNote: bill.privateNote,
-        userNote: extractUserNote(bill.privateNote),
-        bagsAtReceiptKg: parseBagsAtReceiptKg(bill.privateNote),
-        photos: bill.photos,
-        cancelled: bill.cancelled,
-        cancelReason: bill.cancelReason,
-        totalWeightG,
-        totalKg: totalWeightG / 1000,
-        netPaise,
-        paidPaise,
-        duePaise,
-        status,
-        bardanPending,
-        bardanEntryCount: bBardan.length,
-        lines: bLines,
-        adjustments: bAdjs,
-        bardan: bBardan,
-      }
-    })
-  })
+  return runDataOperation('load-all-purchase-bills', async () => (await readPurchaseModel()).bills)
 }
 
 export async function loadAllSupplierPayments(): Promise<EnrichedSupplierPayment[]> {
-  return runDataOperation('load-all-supplier-payments', async () => {
-    const [suppliers, allBills, allLines, allAdjustments, allBardan, allPayments, allAllocations] = await Promise.all([
-      fetchAll<SupplierView>('suppliers', mapSupplier),
-      fetchAll<PurchaseBillView>(SUPPLIER_COLLECTIONS.bills, mapBill, { sort: 'date,created,id' }),
-      fetchAll<PurchaseLineView>(SUPPLIER_COLLECTIONS.lines, mapLine, { sort: 'created,id' }),
-      fetchAll<PurchaseAdjustmentView>(SUPPLIER_COLLECTIONS.adjustments, mapAdjustment, { sort: 'created,id' }),
-      fetchAll<PurchaseBardanView>(SUPPLIER_COLLECTIONS.bardan, mapBardan, { sort: 'date,created,id' }),
-      fetchAll<SupplierPaymentView>(SUPPLIER_COLLECTIONS.payments, mapPayment, { sort: '-date,-created,-id' }),
-      fetchAll<SupplierAllocationView>(SUPPLIER_COLLECTIONS.allocations, mapAllocation, { sort: 'created,id' }),
-    ])
-
-    const supplierMap = new Map(suppliers.map((s) => [s.id, s]))
-    const billMap = new Map(allBills.map((b) => [b.id, b]))
-    const settlementPaymentMap = new Map<string, SupplierSettlementPaymentRow>()
-
-    for (const supplier of suppliers) {
-      const supplierBills = allBills.filter((b) => b.supplierId === supplier.id)
-      const supplierPayments = allPayments.filter((p) => p.supplierId === supplier.id)
-      if (supplierPayments.length === 0) continue
-      const billIds = new Set(supplierBills.map((b) => b.id))
-      const paymentIds = new Set(supplierPayments.map((p) => p.id))
-
-      // Full bill inputs are required here: without line amounts every bill net
-      // is 0, no payables exist, and every payment would report as pure advance.
-      const settlement = computeSupplierSettlement({
-        supplier: { openingKachaPaise: supplier.openingKachaPaise, openingGstPaise: supplier.openingGstPaise },
-        bills: supplierBills,
-        lines: allLines.filter((l) => billIds.has(l.billId)).map((l) => ({ billId: l.billId, amountPaise: l.amountPaise })),
-        adjustments: allAdjustments
-          .filter((a) => billIds.has(a.billId))
-          .map((a) => ({ billId: a.billId, type: a.type, amountPaise: a.amountPaise })),
-        bardan: allBardan
-          .filter((b) => billIds.has(b.billId))
-          .map((b) => ({ billId: b.billId, method: b.method, creditPaise: b.creditPaise, cashAmountPaise: b.cashAmountPaise, note: b.note })),
-        payments: supplierPayments.map((p) => ({
-          id: p.id,
-          date: p.date,
-          created: p.created,
-          pool: p.pool,
-          kind: p.kind,
-          amountPaise: p.amountPaise,
-          cancelled: p.cancelled,
-        })),
-        allocations: allAllocations
-          .filter((a) => paymentIds.has(a.paymentId))
-          .map((a) => ({ paymentId: a.paymentId, billId: a.billId, amountPaise: a.amountPaise })),
-      })
-
-      for (const row of [...settlement.pools.kacha.payments, ...settlement.pools.gst.payments]) {
-        settlementPaymentMap.set(row.paymentId, row)
-      }
-    }
-
-    const allocsByPayment = new Map<string, SupplierAllocationView[]>()
-    for (const a of allAllocations) {
-      const list = allocsByPayment.get(a.paymentId) ?? []
-      list.push(a)
-      allocsByPayment.set(a.paymentId, list)
-    }
-
-    return allPayments.map((payment) => {
-      const supplier = supplierMap.get(payment.supplierId)
-      const pRow = settlementPaymentMap.get(payment.id)
-      const appliedPaise = pRow?.appliedPaise ?? 0
-      // Only credit kinds can leave advance; refunds are payables, not prepayments.
-      const advancePaise = CREDIT_KINDS.has(payment.kind) ? Math.max(0, payment.amountPaise - appliedPaise) : 0
-      const manualAllocs = allocsByPayment.get(payment.id) ?? []
-
-      const allocations = manualAllocs.map((a) => ({
-        billId: a.billId,
-        inNo: billMap.get(a.billId)?.inNo ?? '',
-        amountPaise: a.amountPaise,
-        isManual: true,
-      }))
-
-      return {
-        id: payment.id,
-        date: payment.date,
-        created: payment.created,
-        supplierId: payment.supplierId,
-        supplierName: supplier?.companyName ?? 'Unknown Supplier',
-        pool: payment.pool,
-        kind: payment.kind,
-        mode: payment.mode,
-        reference: payment.reference,
-        payeeName: payment.payeeName,
-        privateNote: payment.privateNote,
-        photos: payment.photos,
-        amountPaise: payment.amountPaise,
-        appliedPaise,
-        advancePaise,
-        cancelled: payment.cancelled,
-        cancelReason: payment.cancelReason,
-        allocations,
-      }
-    })
-  })
+  return runDataOperation('load-all-supplier-payments', async () => (await readPurchaseModel()).payments)
 }
 
 /** Vilaity history for the internal-only premium column (₨/kg -> milli). */
@@ -1445,3 +1176,152 @@ export async function loadBardanPendingCount(): Promise<number> {
   })
 }
 
+
+// ---------------------------------------------------------------------------
+// Purchase audit log — read-only feed for the /purchase-logs screen
+// ---------------------------------------------------------------------------
+
+export type PurchaseAuditEntryView = {
+  id: string
+  collection: string
+  recordId: string
+  action: string
+  beforeJson: string
+  afterJson: string
+  actor: string
+  created: string
+  /** Human-readable one-liner resolved against live master data. */
+  title: string
+  /** Optional context line (supplier, bill IN no, payment mode, ...). */
+  detail: string
+  /** Amount snapshot from the after_json, in paise, when it can be extracted. */
+  amountPaise: number | null
+}
+
+type AuditRow = Record<string, unknown> & { id: string }
+
+function parseAuditJson(raw: string): Record<string, unknown> | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+export async function loadPurchaseAuditLog(fromDate?: string): Promise<PurchaseAuditEntryView[]> {
+  return runDataOperation('load-purchase-audit-log', async () => {
+    const [rawEntries, bills, payments, suppliers, items] = await Promise.all([
+      pb.collection('purchase_audit_log').getFullList({
+        sort: '-created',
+        ...(fromDate ? { filter: pb.filter('created >= {:from}', { from: `${fromDate} 00:00:00` }) } : {}),
+      }),
+      pb.collection('purchase_bills').getFullList({ fields: 'id,in_no,supplier' }),
+      pb.collection('supplier_payments').getFullList({ fields: 'id,supplier,kind,mode,amount_paise,reference' }),
+      pb.collection('suppliers').getFullList({ fields: 'id,company_name' }),
+      pb.collection('purchase_items').getFullList({ fields: 'id,name' }),
+    ])
+    const billById = new Map((bills as unknown as AuditRow[]).map((row) => [row.id, { inNo: String(row.in_no ?? ''), supplierId: String(row.supplier ?? '') }]))
+    const paymentById = new Map((payments as unknown as AuditRow[]).map((row) => [row.id, { supplierId: String(row.supplier ?? ''), kind: String(row.kind ?? ''), mode: String(row.mode ?? ''), amountPaise: num(row.amount_paise), reference: String(row.reference ?? '') }]))
+    const supplierById = new Map((suppliers as unknown as AuditRow[]).map((row) => [row.id, String(row.company_name ?? '')]))
+    const itemById = new Map((items as unknown as AuditRow[]).map((row) => [row.id, String(row.name ?? '')]))
+
+    const supplierNameOfBill = (billId: string) => {
+      const bill = billById.get(billId)
+      return bill ? supplierById.get(bill.supplierId) ?? '' : ''
+    }
+
+    return (rawEntries as unknown as AuditRow[]).map((row) => {
+      const collection = String(row.collection ?? '')
+      const recordId = String(row.record_id ?? '')
+      const action = String(row.action ?? '')
+      const beforeJson = text(row.before_json)
+      const afterJson = text(row.after_json)
+      const before = parseAuditJson(beforeJson)
+      const after = parseAuditJson(afterJson)
+      const actor = text(row.actor)
+      const created = text(row.created)
+      const unwrapBill = (snapshot: AuditRow | Record<string, unknown> | null): Record<string, unknown> => snapshot?.bill && typeof snapshot.bill === 'object' ? snapshot.bill as Record<string, unknown> : snapshot ?? {}
+      const source = { ...unwrapBill(before), ...unwrapBill(after) }
+      const rawAmount = source.amount_paise ?? (source.method === 'cash_back' ? source.cash_amount_paise : source.credit_paise)
+      const amountPaise = rawAmount != null ? num(rawAmount) : null
+
+      let title = `${collection.replace(/_/g, ' ')} — ${action.replace(/_/g, ' ')}`
+      let detail = ''
+
+      switch (collection) {
+        case 'purchase_bills': {
+          const inNo = String(source.in_no ?? billById.get(recordId)?.inNo ?? '')
+          const sup = supplierById.get(String(source.supplier ?? '')) || supplierNameOfBill(recordId)
+          title = action === 'create' ? `Bill ${inNo} created` : action === 'cancel' ? `Bill ${inNo} cancelled` : action === 'uncancel' ? `Bill ${inNo} restored` : `Bill ${inNo} edited`
+          detail = sup
+          break
+        }
+        case 'purchase_bill_lines': {
+          const billId = String(source.bill ?? '')
+          const inNo = billById.get(billId)?.inNo ?? ''
+          const itemName = String(source.item_name ?? itemById.get(String(source.item ?? '')) ?? '')
+          const kg = num(source.weight_g) > 0 ? ` · ${(num(source.weight_g) / 1000).toFixed(3)} kg` : ''
+          title = `${action === 'delete' ? 'Line removed from' : 'Line on'} Bill ${inNo}`
+          detail = [itemName, kg.replace(' · ', '')].filter(Boolean).join(' · ')
+          break
+        }
+        case 'purchase_bill_adjustments': {
+          const billId = String(source.bill ?? '')
+          const inNo = billById.get(billId)?.inNo ?? ''
+          const type = String(source.type ?? '').replace(/_/g, ' ')
+          title = action === 'delete' ? `Adjustment removed from Bill ${inNo}` : `${type || 'Adjustment'} on Bill ${inNo}`
+          detail = amountPaise != null ? formatRupeesShort(amountPaise) : ''
+          break
+        }
+        case 'purchase_bardan': {
+          const billId = String(source.bill ?? '')
+          const inNo = billById.get(billId)?.inNo ?? ''
+          const method = String(source.method ?? '').replace(/_/g, ' ')
+          title = action === 'unlink_rate_line' ? `Bardan rate line unlinked on Bill ${inNo}` : `Bardan (${method}) on Bill ${inNo}`
+          detail = amountPaise ? formatRupeesShort(amountPaise) : ''
+          break
+        }
+        case 'supplier_payments': {
+          const payment = paymentById.get(recordId)
+          const sup = supplierById.get(String(source.supplier ?? payment?.supplierId ?? '')) ?? ''
+          const kind = String(source.kind ?? payment?.kind ?? 'payment').replace(/_/g, ' ')
+          const amount = amountPaise ?? payment?.amountPaise ?? 0
+          title = `${action === 'cancel' ? 'Payment cancelled' : 'Payment recorded'} · ${kind}`
+          detail = [sup, amount ? formatRupeesShort(amount) : '', String(source.mode ?? payment?.mode ?? '').toUpperCase()].filter(Boolean).join(' · ')
+          break
+        }
+        case 'supplier_payment_allocations': {
+          const billId = String(source.bill ?? '')
+          const inNo = billById.get(billId)?.inNo ?? ''
+          title = `Payment pinned to Bill ${inNo}`
+          detail = amountPaise ? formatRupeesShort(amountPaise) : ''
+          break
+        }
+        case 'suppliers': {
+          const name = String(source.company_name ?? before?.company_name ?? '')
+          title = action === 'create' ? `Supplier ${name} added` : action === 'deactivate' ? `Supplier ${name} deactivated` : action === 'reactivate' ? `Supplier ${name} reactivated` : `Supplier ${name} edited`
+          detail = name
+          break
+        }
+        case 'purchase_items': {
+          const name = String(source.name ?? before?.name ?? '')
+          title = action === 'create' ? `Item "${name}" added` : action === 'rename' ? `Item renamed to "${name}"` : action === 'deactivate' ? `Item "${name}" deactivated` : action === 'activate' ? `Item "${name}" reactivated` : `Item "${name}" updated`
+          detail = name
+          break
+        }
+        default:
+          break
+      }
+
+      return { id: row.id, collection, recordId, action, beforeJson, afterJson, actor, created, title, detail, amountPaise }
+    })
+  })
+}
+
+function formatRupeesShort(paise: number): string {
+  const rupees = Math.abs(paise) / 100
+  const text = rupees >= 100_000 ? `₹${(rupees / 100_000).toFixed(2)}L` : `₹${rupees.toLocaleString('en-IN', { maximumFractionDigits: rupees % 1 === 0 ? 0 : 2 })}`
+  return paise < 0 ? `-${text}` : text
+}

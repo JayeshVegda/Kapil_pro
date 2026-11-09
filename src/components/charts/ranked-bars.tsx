@@ -18,7 +18,7 @@ export type RankedBarRow = {
 export type RankedBarsProps = {
   rows: readonly RankedBarRow[]
   maxScale?: number
-  tone?: 'slate' | 'emerald' | 'amber' | 'rose'
+  tone?: 'blue' | 'slate' | 'emerald' | 'amber' | 'rose'
   emptyText?: string
   actionSlot?: (row: RankedBarRow) => ReactNode
   className?: string
@@ -31,7 +31,7 @@ export type RankedBarsProps = {
 export function RankedBars({
   rows,
   maxScale,
-  tone = 'slate',
+  tone = 'blue',
   emptyText = 'No items to display',
   actionSlot,
   className,
@@ -43,13 +43,15 @@ export function RankedBars({
   const maxValue = maxScale ?? Math.max(1, ...rows.map((r) => Math.max(0, r.value)))
 
   const barColor =
-    tone === 'emerald'
-      ? 'bg-emerald-600'
-      : tone === 'amber'
-        ? 'bg-amber-500'
-        : tone === 'rose'
-          ? 'bg-rose-500'
-          : 'bg-slate-700'
+    tone === 'blue'
+      ? 'bg-blue-600'
+      : tone === 'emerald'
+        ? 'bg-emerald-600'
+        : tone === 'amber'
+          ? 'bg-amber-500'
+          : tone === 'rose'
+            ? 'bg-rose-500'
+            : 'bg-slate-700'
 
   return (
     <div className={cn('space-y-3', className)}>
@@ -61,7 +63,7 @@ export function RankedBars({
           <div key={row.id} className="group min-w-0 space-y-1">
             <div className="flex items-center justify-between gap-2 text-xs">
               <div className="flex min-w-0 items-center gap-2">
-                <span className="truncate font-medium text-slate-800" title={row.label}>
+                <span className="truncate font-medium text-slate-800 transition-colors group-hover:text-blue-700" title={row.label}>
                   {row.label}
                 </span>
 
@@ -91,7 +93,7 @@ export function RankedBars({
                 ) : row.href ? (
                   <Link
                     to={row.href}
-                    className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                    className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
                   >
                     {row.actionLabel ?? 'View'}
                   </Link>
@@ -99,7 +101,7 @@ export function RankedBars({
                   <button
                     type="button"
                     onClick={row.onAction}
-                    className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                    className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
                   >
                     {row.actionLabel ?? 'Act'}
                   </button>

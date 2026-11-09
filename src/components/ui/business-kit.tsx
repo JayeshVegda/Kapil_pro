@@ -62,7 +62,7 @@ export function KpiCard({
   delta?: ReactNode
   sparkline?: ReactNode
   hint?: string
-  tone?: 'neutral' | 'positive' | 'warning'
+  tone?: 'neutral' | 'positive' | 'warning' | 'danger' | 'blue'
   icon?: ReactNode
   href?: string
 }) {
@@ -87,7 +87,11 @@ export function KpiCard({
               ? 'text-emerald-700'
               : tone === 'warning'
                 ? 'text-amber-800'
-                : 'text-slate-900',
+                : tone === 'danger'
+                  ? 'text-rose-700'
+                  : tone === 'blue'
+                    ? 'text-blue-700'
+                    : 'text-slate-900',
           )}
         >
           {value}
@@ -98,14 +102,14 @@ export function KpiCard({
       {delta && <div className="mt-1.5 flex items-center gap-1">{delta}</div>}
     </>
   )
-  const className = 'block rounded-xl border border-slate-200 bg-white p-4 shadow-sm'
+  const className = 'block rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-all duration-200 hover:border-blue-200 hover:shadow-sm'
   return href ? (
     <a
       href={href}
       data-card="true"
       className={cn(
         className,
-        'hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400',
+        'hover:border-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40',
       )}
     >
       {content}

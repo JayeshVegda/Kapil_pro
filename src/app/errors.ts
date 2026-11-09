@@ -98,7 +98,12 @@ export function toUserMessage(error: unknown) {
 }
 
 function isPocketBaseError(value: unknown): value is PocketBaseLikeError {
-  return typeof value === 'object' && value !== null && ('status' in value || 'data' in value || 'message' in value)
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (('status' in value && typeof (value as { status?: unknown }).status === 'number') ||
+      ('isAbort' in value && typeof (value as { isAbort?: unknown }).isAbort === 'boolean'))
+  )
 }
 
 function extractPocketBaseMessage(error: PocketBaseLikeError) {
@@ -119,6 +124,7 @@ function extractPocketBaseMessage(error: PocketBaseLikeError) {
 }
 
 function codeFromStatus(status: number): AppErrorCode {
+  if (status === 0) return 'NETWORK'
   if (status === 400) return 'VALIDATION'
   if (status === 401) return 'UNAUTHORIZED'
   if (status === 403) return 'FORBIDDEN'
@@ -130,6 +136,7 @@ function codeFromStatus(status: number): AppErrorCode {
 }
 
 function fallbackMessageForStatus(status: number) {
+  if (status === 0) return 'Cannot connect to backend server. Please verify the service is running.'
   if (status === 400) return 'Invalid request.'
   if (status === 401) return 'Session expired. Please sign in again.'
   if (status === 403) return 'You are not allowed to perform this action.'

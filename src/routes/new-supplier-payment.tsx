@@ -1,35 +1,27 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
+import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
-  ArrowLeft,
-  Check,
+  ArrowDownRight,
+  CheckCircle2,
   CreditCard,
-  Image as ImageIcon,
-  Upload,
-  X,
+  IndianRupee,
+  Landmark,
+  ReceiptText,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { invalidateAfterSupplierPurchaseWrite } from '@/app/query-invalidation'
 import { DateInput } from '@/components/ui/date-input'
+import { PaymentAmountInput } from '@/components/ui/payment-amount-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
-import {
-  bundleToSettlementInput,
-  createSupplierPayment,
-  listSuppliers,
-  loadSupplierBundle,
-  type SupplierBundle,
-  type SupplierPaymentCreateInput,
-} from '@/data/suppliers'
-import {
-  computeSupplierSettlement,
-  validateManualPins,
-  type SupplierPool,
-} from '@/domain/supplier-settlement'
-import { computeDaysSince } from '@/domain/supplier-purchases'
-import { rupeesToPaise } from '@/domain/supplier-units'
+import { createSupplierPayment, type SupplierPaymentView } from '@/data/suppliers'
+import { supplierContextQueryOptions, supplierListQueryOptions } from '@/data/purchase-queries'
+import type { SupplierPool } from '@/domain/supplier-settlement'
+import { buildSupplierPaymentWorkflow, prepareSupplierPaymentInput, type SupplierPaymentKind } from '@/domain/supplier-payment-workflow'
+import { SUPPLIER_PAYMENT_MODES, supplierPaymentNeedsReference, type SupplierPaymentMode } from '@/domain/supplier-payment-modes'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
 
@@ -44,190 +36,77 @@ export const Route = createFileRoute('/new-supplier-payment')({
   component: NewSupplierPaymentPage,
 })
 
-type PaymentKind = 'payment' | 'paid_on_behalf' | 'settle_off' | 'refund_received'
-type PaymentMode = 'cash' | 'upi' | 'rtgs' | 'neft' | 'cheque' | 'other'
+type PaymentKind = SupplierPaymentKind
+type PaymentMode = SupplierPaymentMode
 
-const PAYMENT_KINDS: Array<{ kind: PaymentKind; label: string; desc: string }> = [
-  { kind: 'payment', label: 'Payment', desc: 'Direct payment to supplier (reduces balance)' },
-  { kind: 'paid_on_behalf', label: 'Paid for them (labour/transport)', desc: 'Paid third-party on supplier behalf' },
-  { kind: 'settle_off', label: 'Small settle-off', desc: 'Write off tiny leftover balance' },
-  { kind: 'refund_received', label: 'Refund from supplier', desc: 'Supplier returned cash/bank (increases balance)' },
+const KIND_OPTIONS: Array<{ kind: PaymentKind; label: string; allowPins: boolean }> = [
+  { kind: 'payment', label: 'Payment', allowPins: true },
+  { kind: 'paid_on_behalf', label: 'Paid for them (Labour/Freight)', allowPins: true },
+  { kind: 'settle_off', label: 'Small settle-off difference', allowPins: true },
+  { kind: 'refund_received', label: 'Refund from supplier', allowPins: false },
 ]
 
 function NewSupplierPaymentPage() {
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { supplierId: initialSupplierId, pool: initialPool, billId: initialBillId } = Route.useSearch()
 
-  const [supplierId, setSupplierId] = useState(initialSupplierId ?? '')
   const [date, setDate] = useState(() => getLocalIsoDate())
+  const [supplierId, setSupplierId] = useState(initialSupplierId ?? '')
   const [pool, setPool] = useState<SupplierPool>(initialPool ?? 'kacha')
   const [kind, setKind] = useState<PaymentKind>('payment')
-  const [amountRupeesStr, setAmountRupeesStr] = useState('')
   const [mode, setMode] = useState<PaymentMode>('cash')
+  const [amountRupees, setAmountRupees] = useState<number>(0)
   const [reference, setReference] = useState('')
   const [payeeName, setPayeeName] = useState('')
   const [privateNote, setPrivateNote] = useState('')
-  const [photos, setPhotos] = useState<File[]>([])
-  const [selectedBillIds, setSelectedBillIds] = useState<Set<string>>(
-    () => new Set(initialBillId ? [initialBillId] : []),
-  )
-  const [isManualPicking, setIsManualPicking] = useState(Boolean(initialBillId))
-  const [manualPins, setManualPins] = useState<Record<string, string>>({})
+  const [selectedBillIds, setSelectedBillIds] = useState<Set<string>>(() => new Set(initialBillId ? [initialBillId] : []))
   const [statusText, setStatusText] = useState('')
+  const [lastSavedPayment, setLastSavedPayment] = useState<SupplierPaymentView | null>(null)
 
-  const suppliersQuery = useQuery({
-    queryKey: ['suppliers-list'],
-    queryFn: () => listSuppliers({ includeInactive: false }),
-  })
+  const amountInputRef = useRef<HTMLInputElement | null>(null)
+  const noteInputRef = useRef<HTMLInputElement | null>(null)
 
-  const bundleQuery = useQuery({
-    queryKey: ['supplier-bundle', supplierId],
-    queryFn: () => loadSupplierBundle(supplierId),
-    enabled: Boolean(supplierId),
-  })
+  const allowPins = KIND_OPTIONS.find((option) => option.kind === kind)?.allowPins ?? true
 
-  const amountPaise = useMemo(() => {
-    return rupeesToPaise(parseFloat(amountRupeesStr) || 0)
-  }, [amountRupeesStr])
+  const suppliersQuery = useQuery(supplierListQueryOptions())
+  const contextQuery = useQuery(supplierContextQueryOptions(supplierId))
 
-  // Calculate open bills in the selected pool
-  const openBills = useMemo(() => {
-    if (!bundleQuery.data) return []
-    const bundle: SupplierBundle = bundleQuery.data
-    const settlement = computeSupplierSettlement(bundleToSettlementInput(bundle))
-    const poolBills = settlement.pools[pool].bills
+  const selectedSupplier = useMemo(
+    () => (suppliersQuery.data ?? []).find((s) => s.id === supplierId) ?? null,
+    [suppliersQuery.data, supplierId],
+  )
 
-    const billDetailMap = new Map(bundle.bills.map((b) => [b.id, b]))
+  const amountPaise = Math.round(amountRupees * 100)
 
-    return poolBills
-      .filter((b) => b.status !== 'cancelled' && b.duePaise > 0)
-      .map((b) => {
-        const detail = billDetailMap.get(b.billId)
-        return {
-          billId: b.billId,
-          inNo: detail?.inNo ?? '',
-          date: detail?.date ?? '',
-          netPaise: b.netPaise,
-          paidPaise: b.paidPaise,
-          duePaise: b.duePaise,
-          daysOld: computeDaysSince(detail?.date ?? ''),
-        }
-      })
-  }, [bundleQuery.data, pool])
+  const workflow = useMemo(() => {
+    const context = contextQuery.data
+    if (!context || contextQuery.isError || context.bundle.supplier.id !== supplierId) return null
+    return buildSupplierPaymentWorkflow(context, { pool, date, kind, amountPaise, selectedBillIds })
+  }, [contextQuery.data, contextQuery.isError, supplierId, pool, date, kind, amountPaise, selectedBillIds])
+  const openBills = workflow?.openBills ?? []
+  const totalDuePaise = workflow?.totalDuePaise ?? 0
+  const totalSelectedPaise = workflow?.totalSelectedPaise ?? 0
+  const allocationPreview = workflow?.allocationPreview ?? { lines: [], appliedToDuesPaise: 0, advancePaise: 0, outstandingAfterPaise: 0 }
+  const outstandingBefore = workflow?.outstandingBefore ?? 0
+  const outstandingAfter = allocationPreview.outstandingAfterPaise
+  const advanceAfter = allocationPreview.advancePaise
+  const coveragePercent = workflow?.coveragePercent ?? 0
+  const recentPayments = workflow?.recentPayments ?? []
+  const contextMessage = contextQuery.isError ? 'Unable to load supplier ledger.'
+    : contextQuery.isLoading ? 'Loading supplier ledger…' : 'Supplier not found.'
 
-  // Pre-fill amount when navigated with initialBillId
+  // Prefill from ?billId= deep-link
   useEffect(() => {
-    if (initialBillId && openBills.length > 0) {
-      const target = openBills.find((b) => b.billId === initialBillId)
-      if (target) {
-        setAmountRupeesStr((target.duePaise / 100).toString())
-        setIsManualPicking(true)
-        setManualPins({ [target.billId]: (target.duePaise / 100).toString() })
-        setSelectedBillIds(new Set([target.billId]))
-      }
+    if (!initialBillId || openBills.length === 0) return
+    if (!selectedBillIds.has(initialBillId)) {
+      setSelectedBillIds(new Set([initialBillId]))
     }
-  }, [initialBillId, openBills])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialBillId, openBills.length])
 
-  // FIFO Allocation Preview
-  const fifoAllocations = useMemo(() => {
-    if (amountPaise <= 0 || openBills.length === 0) {
-      return { lines: [], advancePaise: amountPaise }
-    }
-    let remaining = amountPaise
-    const lines: Array<{
-      billId: string
-      inNo: string
-      duePaise: number
-      allocatedPaise: number
-      isFullyCovered: boolean
-    }> = []
+  const isRefRequired = supplierPaymentNeedsReference(mode)
 
-    for (const bill of openBills) {
-      if (remaining <= 0) break
-      const allocated = Math.min(bill.duePaise, remaining)
-      lines.push({
-        billId: bill.billId,
-        inNo: bill.inNo,
-        duePaise: bill.duePaise,
-        allocatedPaise: allocated,
-        isFullyCovered: allocated === bill.duePaise,
-      })
-      remaining -= allocated
-    }
-
-    return { lines, advancePaise: Math.max(0, remaining) }
-  }, [amountPaise, openBills])
-
-  // Manual allocation summary & validation
-  const manualAllocationSummary = useMemo(() => {
-    let totalPinnedPaise = 0
-    const parsedAllocations: Array<{ billId: string; amountPaise: number }> = []
-
-    for (const bill of openBills) {
-      const pinStr = manualPins[bill.billId]
-      if (!pinStr) continue
-      const pinnedPaise = rupeesToPaise(parseFloat(pinStr) || 0)
-      if (pinnedPaise <= 0) continue
-
-      totalPinnedPaise += pinnedPaise
-      parsedAllocations.push({ billId: bill.billId, amountPaise: pinnedPaise })
-    }
-
-    const pinCandidates = parsedAllocations.map((p) => ({
-      billId: p.billId,
-      billPool: pool,
-      billDuePaise: openBills.find((b) => b.billId === p.billId)?.duePaise ?? 0,
-      pinnedPaise: p.amountPaise,
-    }))
-
-    const validation = validateManualPins(pool, amountPaise, pinCandidates)
-    const unallocatedPaise = Math.max(0, amountPaise - totalPinnedPaise)
-
-    return {
-      totalPinnedPaise,
-      unallocatedPaise,
-      validation,
-      parsedAllocations,
-    }
-  }, [manualPins, openBills, pool, amountPaise])
-
-  const supplierOptions = useMemo(() => {
-    return (suppliersQuery.data ?? []).map((s) => ({
-      id: s.id,
-      name: s.companyName,
-      suffix: s.city ? `(${s.city})` : undefined,
-    }))
-  }, [suppliersQuery.data])
-
-  // Handler for Kind change
-  const handleKindSelect = (nextKind: PaymentKind) => {
-    setKind(nextKind)
-    if (nextKind === 'paid_on_behalf') {
-      setPool('kacha')
-    }
-  }
-
-  // Handler for Pay Full Due
-  const handlePayFullDue = () => {
-    const totalDuePaise = openBills.reduce((s, b) => s + b.duePaise, 0)
-    setAmountRupeesStr((totalDuePaise / 100).toString())
-  }
-
-  // Handler for Pay Selected Bills
-  const handlePaySelectedBills = () => {
-    const selected = openBills.filter((b) => selectedBillIds.has(b.billId))
-    const totalSelectedPaise = selected.reduce((s, b) => s + b.duePaise, 0)
-    setAmountRupeesStr((totalSelectedPaise / 100).toString())
-    setIsManualPicking(true)
-    const pins: Record<string, string> = {}
-    for (const b of selected) {
-      pins[b.billId] = (b.duePaise / 100).toString()
-    }
-    setManualPins(pins)
-  }
-
-  const toggleBillSelect = (billId: string) => {
+  const toggleBill = (billId: string) => {
     setSelectedBillIds((prev) => {
       const next = new Set(prev)
       if (next.has(billId)) next.delete(billId)
@@ -236,532 +115,592 @@ function NewSupplierPaymentPage() {
     })
   }
 
-  const selectAllBills = () => {
-    if (selectedBillIds.size === openBills.length) {
-      setSelectedBillIds(new Set())
-    } else {
-      setSelectedBillIds(new Set(openBills.map((b) => b.billId)))
-    }
+  const resetForm = () => {
+    setAmountRupees(0)
+    setReference('')
+    setPrivateNote('')
+    setPayeeName('')
+    setSelectedBillIds(new Set())
+    setStatusText('')
   }
-
-  const isRefRequired = ['upi', 'rtgs', 'neft', 'cheque'].includes(mode)
 
   const saveMutation = useMutation({
     mutationFn: async () => {
       setStatusText('')
-      if (!supplierId) throw new Error('Please select a supplier.')
-      if (amountPaise <= 0) throw new Error('Payment amount must be greater than zero.')
-
-      if (kind === 'paid_on_behalf' && !payeeName.trim()) {
-        throw new Error('Payee name is required when paying on behalf of supplier.')
-      }
-
-      if (isRefRequired && !reference.trim()) {
-        throw new Error(`Reference number / transaction ID is required for ${mode.toUpperCase()} payments.`)
-      }
-
-      if (isManualPicking && !manualAllocationSummary.validation.valid) {
-        throw new Error(manualAllocationSummary.validation.error ?? 'Manual allocations are invalid.')
-      }
-
-      const allocationsToSave = isManualPicking ? manualAllocationSummary.parsedAllocations : undefined
-
-      const payload: SupplierPaymentCreateInput = {
-        supplierId,
-        date,
-        pool,
-        kind,
-        amountPaise,
-        mode,
-        reference: reference.trim(),
-        payeeName: kind === 'paid_on_behalf' ? payeeName.trim() : undefined,
-        privateNote: privateNote.trim(),
-        photos: photos.length > 0 ? photos : undefined,
-        allocations: allocationsToSave,
-      }
-
-      return await createSupplierPayment(payload)
+      const payload = prepareSupplierPaymentInput({ supplierId, date, pool, kind, amountPaise, mode, reference, payeeName, privateNote }, workflow)
+      return createSupplierPayment(payload)
     },
-    onSuccess: async () => {
-      await invalidateAfterSupplierPurchaseWrite(queryClient, supplierId)
-      await queryClient.invalidateQueries({ queryKey: ['supplier-payments'] })
-      void navigate({
-        to: '/supplier-ledger/$supplierId',
-        params: { supplierId },
-      })
+    onSuccess: async (savedPayment) => {
+      setLastSavedPayment(savedPayment)
+      await invalidateAfterSupplierPurchaseWrite(queryClient, savedPayment.supplierId)
+      resetForm()
     },
     onError: (err) => setStatusText(toUserMessage(err)),
   })
 
+  // Keyboard shortcut Ctrl+Enter to save
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault()
+        if (!saveMutation.isPending && workflow && amountPaise > 0) {
+          saveMutation.mutate()
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [saveMutation, workflow, amountPaise])
+
   return (
-    <div className="w-full space-y-4 px-3 pb-16 pt-3 sm:px-4 lg:px-6">
-      {/* Top Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => window.history.back()}
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            <ArrowLeft size={14} /> Back
-          </button>
-          <h1 className="text-base font-bold text-slate-900">Record Supplier Payment</h1>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => saveMutation.mutate()}
-          disabled={saveMutation.isPending}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
-        >
-          <CreditCard size={14} />
-          {saveMutation.isPending ? 'Recording...' : 'Save Payment'}
-        </button>
-      </div>
-
+    <div className="w-full space-y-5 px-3 pb-12 pt-3 sm:px-4 lg:px-6">
+      {/* Error alert */}
       {statusText && (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
-          {statusText}
+        <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 shadow-xs">
+          <AlertCircle size={16} className="mt-0.5 shrink-0 text-rose-500" />
+          <span>{statusText}</span>
         </div>
       )}
 
-      {/* Main Payment Details Form */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
-        {/* Payment Kind Chips */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-semibold text-slate-700">Payment Type</label>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4">
-            {PAYMENT_KINDS.map((item) => {
-              const active = kind === item.kind
-              return (
-                <button
-                  key={item.kind}
-                  type="button"
-                  onClick={() => handleKindSelect(item.kind)}
-                  className={`rounded-lg border p-2.5 text-left transition ${
-                    active
-                      ? 'border-emerald-500 bg-emerald-50/80 ring-2 ring-emerald-200'
-                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className={`text-xs font-bold ${active ? 'text-emerald-950' : 'text-slate-800'}`}>
-                      {item.label}
-                    </span>
-                    {active && <Check size={14} className="text-emerald-600" />}
-                  </div>
-                  <p className="mt-0.5 text-[10px] text-slate-500">{item.desc}</p>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Supplier, Date, Pool */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
-          <div className="space-y-1 sm:col-span-2">
-            <label className="text-xs font-semibold text-slate-700">
-              Supplier <span className="text-rose-600">*</span>
-            </label>
-            <SearchableCombobox
-              options={supplierOptions}
-              value={supplierId}
-              onChange={setSupplierId}
-              inputClassName="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-              placeholder="Select supplier..."
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Payment Date</label>
-            <DateInput
-              value={date}
-              onChange={setDate}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Pool</label>
-            <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
-              <button
-                type="button"
-                className={`rounded-md py-1.5 transition ${
-                  pool === 'kacha' ? 'bg-amber-100 text-amber-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                }`}
-                onClick={() => setPool('kacha')}
-              >
-                Kacha
-              </button>
-              <button
-                type="button"
-                className={`rounded-md py-1.5 transition ${
-                  pool === 'gst' ? 'bg-blue-100 text-blue-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                }`}
-                onClick={() => setPool('gst')}
-              >
-                GST
-              </button>
+      {/* Top 2-Column Split: Payment Entry + Payment Impact */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+        {/* ================= LEFT CARD: PAYMENT ENTRY ================= */}
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-950">Supplier Payment Entry</h2>
+              <p className="mt-1 text-xs text-slate-500">Record outgoing payment and preview auto-settlement before saving.</p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                {pool}
+              </span>
+              <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                {mode}
+              </span>
             </div>
           </div>
-        </div>
 
-        {/* If kind is paid_on_behalf, show Payee Name input */}
-        {kind === 'paid_on_behalf' && (
-          <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-3">
-            <div className="max-w-md space-y-1">
-              <label className="text-xs font-semibold text-amber-900">
-                Third-Party Payee Name <span className="text-rose-600">*</span>
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Jamnagar Transport Co., Ramu Labour"
-                value={payeeName}
-                onChange={(e) => setPayeeName(e.target.value)}
-                className="h-9 w-full rounded-md border border-amber-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-amber-500"
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {/* Date */}
+            <Field label="Payment Date">
+              <DateInput className={inputClass} value={date} onChange={setDate} />
+            </Field>
+
+            {/* Supplier */}
+            <Field label="Supplier *">
+              <SearchableCombobox
+                options={(suppliersQuery.data ?? []).map((s) => ({
+                  id: s.id,
+                  name: s.companyName,
+                  suffix: s.city ? `(${s.city})` : undefined,
+                }))}
+                value={supplierId}
+                onChange={(nextId) => {
+                  setSupplierId(nextId)
+                  setSelectedBillIds(new Set())
+                  setStatusText('')
+                }}
+                inputClassName={inputClass}
+                placeholder="Search supplier…"
+                disabled={suppliersQuery.isLoading || suppliersQuery.isError}
+                emptyText="No matching supplier found."
+                autoFocus
+                onSelectionComplete={() => amountInputRef.current?.focus()}
               />
-              <p className="text-[10px] text-amber-700">
-                This payment reduces what we owe the supplier, but was disbursed directly to this party.
-              </p>
-            </div>
-          </div>
-        )}
+            </Field>
 
-        {/* Open Bills Box (Shown only when supplier is chosen, BEFORE Amount field) */}
-        {supplierId && (
-          <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-xs font-bold text-slate-900">
-                  Open Bills ({pool.toUpperCase()} Pool)
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  {openBills.length === 0
-                    ? `No open bills with remaining balance in ${pool} pool.`
-                    : `${openBills.length} open bill${openBills.length > 1 ? 's' : ''} available for settlement.`}
-                </p>
-              </div>
-
-              {openBills.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1.5">
+            {/* Pool Toggle */}
+            <Field label="Pool">
+              <div className="grid grid-cols-2 gap-1 rounded-md border border-slate-300 bg-slate-50 p-1">
+                {(['kacha', 'gst'] as const).map((p) => (
                   <button
+                    key={p}
                     type="button"
-                    onClick={handlePayFullDue}
-                    className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-100"
+                    className={`h-8 rounded px-2 text-xs font-semibold uppercase transition ${
+                      pool === p
+                        ? (p === 'kacha' ? 'bg-amber-100 text-amber-950 shadow-xs ring-1 ring-amber-300' : 'bg-blue-100 text-blue-950 shadow-xs ring-1 ring-blue-300')
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                    onClick={() => {
+                      setPool(p)
+                      setSelectedBillIds(new Set())
+                                      }}
                   >
-                    Pay Full Due ({formatPaiseInr(openBills.reduce((s, b) => s + b.duePaise, 0))})
+                    {p === 'kacha' ? 'Kacha' : 'GST'}
                   </button>
-                  {selectedBillIds.size > 0 && (
-                    <button
-                      type="button"
-                      onClick={handlePaySelectedBills}
-                      className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
-                    >
-                      Pay Selected ({selectedBillIds.size})
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {openBills.length > 0 && (
-              <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200 bg-white">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
-                    <tr>
-                      <th className="px-2.5 py-2 w-8 text-center">
-                        <input
-                          type="checkbox"
-                          checked={selectedBillIds.size === openBills.length}
-                          onChange={selectAllBills}
-                          className="rounded text-emerald-600"
-                        />
-                      </th>
-                      <th className="px-2.5 py-2 text-left">IN No</th>
-                      <th className="px-2.5 py-2 text-left">Bill Date</th>
-                      <th className="px-2.5 py-2 text-right">Age</th>
-                      <th className="px-2.5 py-2 text-right">Net Bill</th>
-                      <th className="px-2.5 py-2 text-right">Already Paid</th>
-                      <th className="px-2.5 py-2 text-right">Due Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {openBills.map((b) => {
-                      const isSelected = selectedBillIds.has(b.billId)
-                      return (
-                        <tr
-                          key={b.billId}
-                          className={`transition ${isSelected ? 'bg-emerald-50/60' : 'hover:bg-slate-50/70'}`}
-                        >
-                          <td className="px-2.5 py-2 text-center">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => toggleBillSelect(b.billId)}
-                              className="rounded text-emerald-600"
-                            />
-                          </td>
-                          <td className="px-2.5 py-2 font-mono font-semibold text-blue-700">{b.inNo}</td>
-                          <td className="px-2.5 py-2 text-slate-600">{formatFullDate(b.date)}</td>
-                          <td className="px-2.5 py-2 text-right font-mono text-slate-600">
-                            <span
-                              className={
-                                b.daysOld > 10
-                                  ? 'font-bold text-rose-600'
-                                  : b.daysOld >= 7
-                                    ? 'font-semibold text-amber-600'
-                                    : 'text-slate-600'
-                              }
-                            >
-                              {b.daysOld}d
-                            </span>
-                          </td>
-                          <td className="px-2.5 py-2 text-right font-mono tabular-nums text-slate-700">
-                            {formatPaiseInr(b.netPaise)}
-                          </td>
-                          <td className="px-2.5 py-2 text-right font-mono tabular-nums text-emerald-700">
-                            {formatPaiseInr(b.paidPaise)}
-                          </td>
-                          <td className="px-2.5 py-2 text-right font-mono font-bold tabular-nums text-rose-600">
-                            {formatPaiseInr(b.duePaise)}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                ))}
               </div>
-            )}
-          </div>
-        )}
+            </Field>
 
-        {/* Amount, Mode, Reference, Photo Attach */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">
-              Amount (₹) <span className="text-rose-600">*</span>
-            </label>
-            <input
-              type="text"
-              placeholder="0.00"
-              value={amountRupeesStr}
-              onChange={(e) => setAmountRupeesStr(e.target.value)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 font-mono text-sm font-bold text-slate-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-            />
-          </div>
+            {/* Kind / Type */}
+            <Field label="Payment Type">
+              <select
+                value={kind}
+                onChange={(e) => {
+                  const nextKind = e.target.value as PaymentKind
+                  setKind(nextKind)
+                  if (!KIND_OPTIONS.find((o) => o.kind === nextKind)?.allowPins) {
+                    setSelectedBillIds(new Set())
+                  }
+                }}
+                className={inputClass}
+              >
+                {KIND_OPTIONS.map((opt) => (
+                  <option key={opt.kind} value={opt.kind}>{opt.label}</option>
+                ))}
+              </select>
+            </Field>
 
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Payment Mode</label>
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as PaymentMode)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-            >
-              <option value="cash">Cash</option>
-              <option value="upi">UPI</option>
-              <option value="rtgs">RTGS</option>
-              <option value="neft">NEFT</option>
-              <option value="cheque">Cheque</option>
-              <option value="other">Other</option>
-            </select>
-          </div>
-
-          <div className="space-y-1 sm:col-span-2">
-            <label className="text-xs font-semibold text-slate-700">
-              Reference / UTR / Cheque No {isRefRequired && <span className="text-rose-600">*</span>}
-            </label>
-            <input
-              type="text"
-              placeholder={isRefRequired ? 'Required for Bank/UPI/Cheque' : 'Optional for cash'}
-              value={reference}
-              onChange={(e) => setReference(e.target.value)}
-              className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-            />
-          </div>
-        </div>
-
-        {/* Private Note & Photo Slip Attach */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Private Note (Never Printed)</label>
-            <textarea
-              rows={2}
-              placeholder="Internal notes, bank account remarks..."
-              value={privateNote}
-              onChange={(e) => setPrivateNote(e.target.value)}
-              className="w-full rounded-md border border-slate-300 bg-white p-2 text-xs text-slate-900 outline-none focus:border-emerald-400"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Attach Payment Slip / Proof</label>
-            <div className="flex items-center gap-2">
-              <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
-                <Upload size={13} />
-                <span>Upload Slips</span>
-                <input
-                  type="file"
-                  multiple
-                  accept="image/*,application/pdf"
-                  className="hidden"
-                  onChange={(e) => {
-                    const files = Array.from(e.target.files ?? [])
-                    if (files.length > 0) setPhotos((prev) => [...prev, ...files])
-                  }}
-                />
-              </label>
-              {photos.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {photos.map((f, i) => (
-                    <span
-                      key={i}
-                      className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700"
+            {/* Mode Selector */}
+            <div className="md:col-span-2">
+              <Field label="Payment Mode">
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 rounded-md border border-slate-300 bg-slate-50 p-1">
+                  {SUPPLIER_PAYMENT_MODES.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={`h-8 rounded px-1 text-xs font-semibold uppercase transition ${
+                        mode === m
+                          ? 'bg-white text-slate-950 shadow-xs ring-1 ring-slate-200'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                      onClick={() => setMode(m)}
                     >
-                      <ImageIcon size={10} /> {f.name}
-                      <button
-                        type="button"
-                        onClick={() => setPhotos((p) => p.filter((_, idx) => idx !== i))}
-                        className="text-slate-400 hover:text-rose-600"
-                      >
-                        <X size={10} />
-                      </button>
-                    </span>
+                      {m}
+                    </button>
                   ))}
                 </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Allocations & FIFO Preview (Rendered ONLY when supplier is selected) */}
-      {supplierId && (
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                Bill Matching & Allocation Preview
-              </h2>
-              <p className="text-[11px] text-slate-500">
-                Payments match bills in the same pool ({pool}) via FIFO, or you can manually pin amounts.
-              </p>
+              </Field>
             </div>
 
-            <div className="flex items-center gap-2">
-              <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={isManualPicking}
-                  onChange={(e) => setIsManualPicking(e.target.checked)}
-                  className="rounded text-emerald-600"
-                />
-                <span>Manual Bill Picking</span>
-              </label>
-            </div>
-          </div>
-
-          {!isManualPicking ? (
-            /* Default FIFO Allocation Preview */
-            <div className="space-y-3">
-              <div className="rounded-lg bg-slate-50 p-3 text-xs space-y-2">
-                <span className="font-semibold text-slate-700">FIFO Distribution Preview:</span>
-                {fifoAllocations.lines.length === 0 ? (
-                  <p className="text-slate-500 italic">
-                    {amountPaise > 0
-                      ? `No open bills in ${pool} pool — the full amount of ${formatPaiseInr(amountPaise)} will be held as advance credit.`
-                      : 'Enter an amount above to preview FIFO bill matching.'}
-                  </p>
-                ) : (
-                  <div className="space-y-1.5">
-                    {fifoAllocations.lines.map((l) => (
-                      <div
-                        key={l.billId}
-                        className="flex items-center justify-between rounded border border-slate-200 bg-white px-3 py-2 text-xs"
+            {/* Amount */}
+            <div className="md:col-span-2">
+              <Field label="Payment Amount (₹) *">
+                <div className="space-y-1.5">
+                  <PaymentAmountInput
+                    value={amountRupees}
+                    onChange={(val) => {
+                      setAmountRupees(val)
+                      setStatusText('')
+                    }}
+                    onInputChange={() => setStatusText('')}
+                    className={inputClass}
+                    inputRef={amountInputRef}
+                    onEnter={() => noteInputRef.current?.focus()}
+                  />
+                  {totalDuePaise > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                      <span className="text-[11px] text-slate-500">Quick fill:</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAmountRupees(totalDuePaise / 100)
+                        }}
+                        className="rounded bg-slate-100 hover:bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700 transition"
                       >
-                        <span className="font-medium text-slate-800">
-                          {l.isFullyCovered ? (
-                            <>Covers <strong className="text-blue-700 font-mono">{l.inNo}</strong> fully</>
-                          ) : (
-                            <>Covers <strong className="text-blue-700 font-mono">{l.inNo}</strong> partially</>
-                          )}
-                          <span className="text-slate-400 text-[11px] ml-2">
-                            (allocated {formatPaiseInr(l.allocatedPaise)} of {formatPaiseInr(l.duePaise)} due)
-                          </span>
-                        </span>
-                        <span className="font-mono font-bold text-emerald-700">
-                          {formatPaiseInr(l.allocatedPaise)}
-                        </span>
-                      </div>
-                    ))}
-                    <div className="mt-2 pt-2 border-t border-slate-200 flex justify-between font-semibold text-slate-700">
-                      <span>Advance remaining:</span>
-                      <span className="font-mono text-emerald-700">
-                        {formatPaiseInr(fifoAllocations.advancePaise)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            /* Manual Bill Picking Mode */
-            <div className="space-y-3">
-              <p className="text-xs text-slate-600">
-                Specify exact amounts to pin against each open bill. Pinned amounts cannot exceed the bill due or
-                the total payment amount.
-              </p>
-
-              {!manualAllocationSummary.validation.valid && (
-                <div className="flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-800">
-                  <AlertCircle size={15} className="shrink-0 text-rose-600" />
-                  <span>{manualAllocationSummary.validation.error}</span>
-                </div>
-              )}
-
-              <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
-                    <tr>
-                      <th className="px-3 py-2 text-left">IN No</th>
-                      <th className="px-3 py-2 text-left">Date</th>
-                      <th className="px-3 py-2 text-right">Remaining Due</th>
-                      <th className="px-3 py-2 text-right w-44">Pinned Amount (₹)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {openBills.map((b) => (
-                      <tr key={b.billId}>
-                        <td className="px-3 py-2 font-mono font-bold text-blue-700">{b.inNo}</td>
-                        <td className="px-3 py-2 text-slate-600">{formatFullDate(b.date)}</td>
-                        <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">
-                          {formatPaiseInr(b.duePaise)}
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <input
-                            type="text"
-                            placeholder="0.00"
-                            value={manualPins[b.billId] ?? ''}
-                            onChange={(e) => {
-                              const val = e.target.value
-                              setManualPins((prev) => ({ ...prev, [b.billId]: val }))
+                        Full Due ({formatPaiseInr(totalDuePaise)})
+                      </button>
+                      {selectedBillIds.size > 0 && totalSelectedPaise > 0 && totalSelectedPaise !== totalDuePaise && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAmountRupees(totalSelectedPaise / 100)
                             }}
-                            className="h-8 w-full rounded border border-slate-300 px-2 text-right font-mono text-xs text-slate-900 outline-none focus:border-emerald-400"
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                          className="rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 text-[11px] font-semibold transition"
+                        >
+                          Selected ({formatPaiseInr(totalSelectedPaise)})
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </Field>
+            </div>
+
+            {/* Reference */}
+            <Field label={isRefRequired ? 'Reference / UTR / Cheque No *' : 'Reference (optional)'}>
+              <input
+                type="text"
+                className={inputClass}
+                placeholder={isRefRequired ? 'Required for electronic transfer' : 'Reference, cheque no...'}
+                value={reference}
+                onChange={(e) => setReference(e.target.value)}
+              />
+            </Field>
+
+            {/* Payee name (if paying on behalf) */}
+            {kind === 'paid_on_behalf' ? (
+              <Field label="Payee Name *">
+                <input
+                  type="text"
+                  className={inputClass}
+                  placeholder="Transporter / Labour name..."
+                  value={payeeName}
+                  onChange={(e) => setPayeeName(e.target.value)}
+                />
+              </Field>
+            ) : (
+              <Field label="Private Note (optional)">
+                <input
+                  ref={noteInputRef}
+                  type="text"
+                  className={inputClass}
+                  placeholder="Internal remark..."
+                  value={privateNote}
+                  onChange={(e) => setPrivateNote(e.target.value)}
+                />
+              </Field>
+            )}
+          </div>
+
+          {/* Form Actions */}
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-4">
+            <span className="text-xs text-slate-500">
+              {amountPaise > 0 ? (
+                <>
+                  {kind === 'refund_received' ? 'Recording refund' : 'Applying payment'} <strong className="font-mono text-slate-800">{formatPaiseInr(amountPaise)}</strong> in the {pool.toUpperCase()} pool
+                </>
+              ) : (
+                'Enter payment amount to simulate settlement'
+              )}
+            </span>
+            <div className="flex-1" />
+            <button
+              type="button"
+              className="px-2 py-1 text-sm font-medium text-slate-600 hover:text-slate-900 transition"
+              onClick={resetForm}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center gap-1.5 rounded-md bg-slate-900 px-4 text-xs font-semibold text-white shadow-xs hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 transition"
+              onClick={() => saveMutation.mutate()}
+              disabled={saveMutation.isPending || !workflow || amountPaise <= 0}
+            >
+              <CreditCard size={14} />
+              {saveMutation.isPending ? 'Saving Payment…' : 'Save Payment (Ctrl+↵)'}
+            </button>
+          </div>
+        </section>
+
+        {/* ================= RIGHT CARD: PAYMENT IMPACT ================= */}
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-950">Payment Impact</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                {selectedSupplier ? selectedSupplier.companyName : 'Select supplier to see ledger impact'}
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+                {mode.toUpperCase()}
+              </span>
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+                {pool.toUpperCase()}
+              </span>
+            </div>
+          </div>
+
+          {supplierId && !workflow && <p role={contextQuery.isError ? 'alert' : 'status'} className={`text-sm ${contextQuery.isError ? 'text-rose-600' : 'text-slate-500'}`}>{contextMessage}</p>}
+
+          {!supplierId && (
+            <p className="text-sm text-slate-500">Select a supplier above to preview impact on dues.</p>
+          )}
+
+          {workflow && (
+            <div className="space-y-4">
+              {/* 4 Metric Cards */}
+              <div className="grid grid-cols-2 gap-3">
+                <ImpactMetric
+                  icon={<ReceiptText className="h-4 w-4" />}
+                  label="Before Payment"
+                  value={formatPaiseInr(outstandingBefore)}
+                />
+                <ImpactMetric
+                  icon={<IndianRupee className="h-4 w-4" />}
+                  label={kind === 'refund_received' ? 'Receiving Now' : kind === 'settle_off' ? 'Credit Now' : 'Paying Now'}
+                  value={formatPaiseInr(amountPaise)}
+                />
+                <ImpactMetric
+                  icon={<ArrowDownRight className="h-4 w-4" />}
+                  label="Applied to dues"
+                  value={formatPaiseInr(allocationPreview.appliedToDuesPaise)}
+                  tone="green"
+                />
+                <ImpactMetric
+                  icon={<Landmark className="h-4 w-4" />}
+                  label={advanceAfter > 0 ? 'Advance After' : 'Balance After'}
+                  value={advanceAfter > 0 ? formatPaiseInr(advanceAfter) : formatPaiseInr(outstandingAfter)}
+                  tone={outstandingAfter === 0 ? 'green' : 'slate'}
+                />
               </div>
 
-              <div className="flex justify-between rounded-lg bg-slate-50 p-2.5 text-xs font-semibold text-slate-700">
-                <span>Total Pinned: {formatPaiseInr(manualAllocationSummary.totalPinnedPaise)}</span>
-                <span>Unpinned Remainder: {formatPaiseInr(manualAllocationSummary.unallocatedPaise)}</span>
+              {/* Settlement Coverage Progress Bar */}
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3.5">
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="font-medium text-slate-700">Settlement Coverage ({pool.toUpperCase()})</span>
+                  <span className="font-mono font-bold tabular-nums text-slate-900">{Math.round(coveragePercent)}%</span>
+                </div>
+                <div className="mt-2 h-2 rounded-full bg-white ring-1 ring-slate-200 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-emerald-600 transition-all duration-300"
+                    style={{ width: `${coveragePercent}%` }}
+                  />
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  {advanceAfter > 0 ? (
+                    <>
+                      <strong className="font-mono text-slate-800">{formatPaiseInr(advanceAfter)}</strong> will remain as unallocated advance in the {pool.toUpperCase()} pool.
+                    </>
+                  ) : outstandingAfter > 0 ? (
+                    <>
+                      <strong className="font-mono text-rose-600">{formatPaiseInr(outstandingAfter)}</strong> will remain outstanding after this payment.
+                    </>
+                  ) : (
+                    <span className="font-semibold text-emerald-700">
+                      All outstanding dues in {pool.toUpperCase()} pool will be fully settled (NIL).
+                    </span>
+                  )}
+                </p>
               </div>
             </div>
           )}
         </section>
+      </div>
+
+      {/* Confirmed Save Banner */}
+      {lastSavedPayment && (
+        <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-700 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-emerald-900">Latest payment confirmed &amp; recorded</p>
+              <p className="mt-1 text-xs text-emerald-800">
+                {formatFullDate(lastSavedPayment.date)} · {formatPaiseInr(lastSavedPayment.amountPaise)} ({lastSavedPayment.mode.toUpperCase()}{lastSavedPayment.reference ? ` · ${lastSavedPayment.reference}` : ''}) recorded in {lastSavedPayment.pool.toUpperCase()} pool.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLastSavedPayment(null)}
+              className="text-xs text-emerald-700 hover:text-emerald-900 underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        </section>
       )}
+
+      {/* ================= MIDDLE CARD: BILLS AUTO ADJUSTMENT PREVIEW ================= */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-950">Where this payment goes</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              The amount and date above drive this preview. Bills are paid oldest first; pin a bill to pay it first.
+            </p>
+          </div>
+          {openBills.length > 0 && allowPins && (
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedBillIds(new Set(openBills.map((b) => b.billId)))
+                }}
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 transition"
+              >
+                Select all ({openBills.length})
+              </button>
+              {selectedBillIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedBillIds(new Set())
+                  }}
+                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100 transition"
+                >
+                  Clear pins
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {!supplierId ? (
+          <p className="text-sm text-slate-500">Select a supplier to preview open bills and allocations.</p>
+        ) : !workflow ? (
+          <p className="text-sm text-slate-500">{contextMessage}</p>
+        ) : openBills.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-xs text-slate-500">
+            No open bills in this pool. The payment may settle an opening balance or refund; any unused amount becomes an advance.
+          </div>
+        ) : (
+          <div className="overflow-x-auto no-scrollbar rounded-md border border-slate-100">
+            <table className="w-full min-w-[850px]">
+              <thead>
+                <tr className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 font-semibold border-b border-slate-100">
+                  <th className="w-10 px-3 py-2 text-center">Priority</th>
+                  <th className="px-3 py-2 text-left">Bill Ref</th>
+                  <th className="px-3 py-2 text-left">Bill Date</th>
+                  <th className="px-3 py-2 text-left">Details</th>
+                  <th className="px-3 py-2 text-right">Outstanding</th>
+                  <th className="px-3 py-2 text-right">Paid Now</th>
+                  <th className="px-3 py-2 text-right">Remaining</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {allocationPreview.lines.map((line) => {
+                  const isPinned = allowPins && selectedBillIds.has(line.billId)
+                  return (
+                    <tr
+                      key={line.billId}
+                      className={`align-top transition ${
+                        isPinned ? 'bg-blue-50/50' : line.paidNowPaise > 0 ? 'bg-emerald-50/30' : 'hover:bg-slate-50/70'
+                      }`}
+                    >
+                      <td className="px-3 py-2.5 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isPinned}
+                          disabled={!allowPins}
+                          onChange={() => toggleBill(line.billId)}
+                          className="h-4 w-4 accent-blue-600 cursor-pointer"
+                          aria-label={`Pin payment to ${line.inNo}`}
+                        />
+                      </td>
+                      <td className="px-3 py-2.5 font-mono font-bold text-blue-700 whitespace-nowrap">
+                        {line.inNo}
+                        {isPinned && <span className="ml-1.5 text-[11px] text-blue-600 font-medium font-sans">Pinned</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-600 whitespace-nowrap">
+                        {formatFullDate(line.date)}
+                        <span className="ml-1 text-[11px] text-slate-400">({line.daysOld}d)</span>
+                      </td>
+                      <td className="max-w-[360px] px-3 py-2.5">
+                        <p className="truncate text-slate-700" title={line.itemsLabel}>
+                          {line.itemsLabel}
+                        </p>
+                        <div className="mt-1.5 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-emerald-500 transition-all"
+                            style={{ width: `${line.paidPercent}%` }}
+                          />
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono font-semibold text-slate-800">
+                        {formatPaiseInr(line.duePaise)}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">
+                        {line.paidNowPaise > 0 ? `− ${formatPaiseInr(line.paidNowPaise)}` : '—'}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-slate-800">
+                        {line.remainingDuePaise === 0 ? (
+                          <span className="text-emerald-700 font-bold">NIL</span>
+                        ) : (
+                          formatPaiseInr(line.remainingDuePaise)
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* ================= BOTTOM CARD: RECENT PAYMENTS ================= */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-950">Recent Payments</h2>
+            <p className="mt-1 text-xs text-slate-500">Past payment records for this supplier.</p>
+          </div>
+          {workflow && (
+            <span className="text-xs text-slate-400">
+              {recentPayments.length} recent {recentPayments.length === 1 ? 'record' : 'records'}
+            </span>
+          )}
+        </div>
+
+        {!supplierId && <p className="text-sm text-slate-500">Select a supplier to view recent payments.</p>}
+        {supplierId && !workflow && <p className="text-sm text-slate-500">{contextMessage}</p>}
+        {workflow && recentPayments.length === 0 && (
+          <p className="text-sm text-slate-500">No payment history recorded for this supplier.</p>
+        )}
+        {recentPayments.length > 0 && (
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
+            {recentPayments.map((p) => (
+              <div
+                key={p.id}
+                className={`rounded-lg border p-3.5 transition ${
+                  p.cancelled ? 'border-slate-200 bg-slate-50/60 opacity-60' : 'border-slate-200 bg-slate-50/80 hover:bg-slate-50'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-900">{formatFullDate(p.date)}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      {p.mode.toUpperCase()} · <span className="font-semibold">{p.pool.toUpperCase()}</span>
+                      {p.reference ? ` · ${p.reference}` : ''}
+                    </p>
+                  </div>
+                  <p className="font-mono text-sm font-bold text-slate-900 tabular-nums">
+                    {formatPaiseInr(p.amountPaise)}
+                  </p>
+                </div>
+                {p.cancelled && (
+                  <span className="mt-2 inline-block rounded bg-rose-50 px-1.5 py-0.2 text-[11px] font-bold text-rose-700 uppercase">
+                    Cancelled
+                  </span>
+                )}
+                {p.payeeName && (
+                  <p className="mt-1 text-[11px] text-slate-500 italic">Paid to: {p.payeeName}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   )
 }
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-slate-600">{label}</span>
+      {children}
+    </label>
+  )
+}
+
+function ImpactMetric({
+  icon,
+  label,
+  value,
+  tone = 'slate',
+}: {
+  icon: ReactNode
+  label: string
+  value: string
+  tone?: 'slate' | 'green'
+}) {
+  const toneClass =
+    tone === 'green'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      : 'border-slate-200 bg-slate-50 text-slate-600'
+  return (
+    <div className={`rounded-lg border p-3 ${toneClass}`}>
+      <div className="flex items-center gap-1.5">
+        {icon}
+        <p className="text-xs font-medium">{label}</p>
+      </div>
+      <p className="mt-1 font-mono text-base font-bold tabular-nums text-slate-900">{value}</p>
+    </div>
+  )
+}
+
+const inputClass = `${baseInputClass} h-10 text-xs`

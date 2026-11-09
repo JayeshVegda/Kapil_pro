@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/data/pocketbase', () => {
   const collectionMock = vi.fn()
@@ -39,6 +39,8 @@ describe('Purchase Audit Log Integration', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    const storage = new Map<string, string>()
+    vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) })
 
     ;(pb.collection as unknown as ReturnType<typeof vi.fn>).mockImplementation((col: string) => {
       if (col === 'purchase_audit_log') return auditTable
@@ -50,7 +52,7 @@ describe('Purchase Audit Log Integration', () => {
         create: (payload: unknown) => batchCreateMock(col, payload),
         update: vi.fn(),
       }),
-      send: batchSendMock.mockResolvedValue(undefined),
+      send: batchSendMock.mockImplementation(async () => batchCreateMock.mock.calls.map(([, payload]) => ({ status: 200, body: payload }))),
     })
 
     mockTable.create.mockImplementation(async (payload) => ({ id: 'rec_created', ...payload }))
@@ -59,6 +61,7 @@ describe('Purchase Audit Log Integration', () => {
     mockTable.getFullList.mockResolvedValue([])
     auditTable.create.mockResolvedValue({ id: 'audit_rec_1' })
   })
+  afterEach(() => vi.unstubAllGlobals())
 
   it('records an audit entry when creating a supplier', async () => {
     await createSupplier({
@@ -149,6 +152,58 @@ describe('Purchase Audit Log Integration', () => {
     expect(batchSendMock).toHaveBeenCalled()
   })
 
+  it('saves a bill-day payment and its bill allocation in the bill batch', async () => {
+    await createPurchaseBill({
+      supplierId: 'sup_1', inNo: 'IN-101', date: '2026-04-10', pool: 'kacha', taxMode: 'none',
+      lines: [{ itemName: 'Scrap', weightG: 1000, rateMilli: 800000, amountPaise: 80000 }],
+      payment: { amountPaise: 50000, mode: 'cash' },
+    })
+
+    const payment = batchCreateMock.mock.calls.find(([collection]) => collection === 'supplier_payments')?.[1] as { id: string; amount_paise: number }
+    const allocation = batchCreateMock.mock.calls.find(([collection]) => collection === 'supplier_payment_allocations')?.[1] as { payment: string; amount_paise: number }
+    expect(payment.amount_paise).toBe(50000)
+    expect(allocation).toMatchObject({ payment: payment.id, amount_paise: 50000 })
+    expect(batchSendMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not create another bill if the save response is uncertain', async () => {
+    batchSendMock.mockRejectedValueOnce(new Error('connection lost'))
+    mockTable.getOne.mockRejectedValueOnce(new Error('connection lost'))
+    await expect(createPurchaseBill({
+      supplierId: 'sup_1', inNo: 'IN-099', date: '2026-04-10', pool: 'kacha', taxMode: 'none',
+      lines: [{ itemName: 'Scrap', weightG: 1000, rateMilli: 800000, amountPaise: 80000 }],
+    })).rejects.toThrow('Check the purchase bill list or supplier payment history before saving again')
+    expect(batchSendMock).toHaveBeenCalledTimes(1)
+    expect(batchCreateMock.mock.calls.filter(([collection]) => collection === 'purchase_bills')).toHaveLength(1)
+  })
+
+  it('does not perform a second read after a successful bill save', async () => {
+    mockTable.getOne.mockRejectedValue(new Error('connection lost'))
+    const bill = await createPurchaseBill({
+      supplierId: 'sup_1', inNo: 'IN-099', date: '2026-04-10', pool: 'kacha', taxMode: 'none',
+      lines: [{ itemName: 'Scrap', weightG: 1000, rateMilli: 800000, amountPaise: 80000 }],
+    })
+    expect(bill.inNo).toBe('IN-099')
+    expect(batchSendMock).toHaveBeenCalledTimes(1)
+    expect(mockTable.getOne).not.toHaveBeenCalled()
+  })
+
+  it('rejects an invalid purchase line before sending a batch', async () => {
+    await expect(createPurchaseBill({
+      supplierId: 'sup_1', inNo: 'IN-100', date: '2026-04-10', pool: 'kacha', taxMode: 'none',
+      lines: [{ itemName: 'Scrap', weightG: 0, rateMilli: 800000, amountPaise: 0 }],
+    })).rejects.toThrow('Weight on line 1')
+    expect(batchSendMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects payment pins that exceed the payment before sending a batch', async () => {
+    await expect(createSupplierPayment({
+      supplierId: 'sup_1', date: '2026-04-12', pool: 'kacha', kind: 'payment', amountPaise: 100,
+      allocations: [{ billId: 'bill_1', amountPaise: 101 }],
+    })).rejects.toThrow('Allocations exceed the payment amount')
+    expect(batchSendMock).not.toHaveBeenCalled()
+  })
+
   it('records an audit row when cancelling a purchase bill', async () => {
     await cancelPurchaseBill('bill_1', 'Duplicate invoice entered')
 
@@ -169,7 +224,8 @@ describe('Purchase Audit Log Integration', () => {
       pool: 'kacha',
       kind: 'payment',
       amountPaise: 5_000_000,
-      mode: 'Bank',
+      mode: 'rtgs',
+      reference: 'RTGS-TEST-1',
     })
 
     expect(batchCreateMock).toHaveBeenCalledWith(

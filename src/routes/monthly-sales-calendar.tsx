@@ -2,6 +2,11 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Activity, ChevronLeft, ChevronRight, CircleDollarSign, PackageCheck, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { useModuleSettings } from '@/lib/use-module-settings'
+import { purchaseReadModelQueryOptions } from '@/data/purchase-queries'
+import { loadCastingSessions } from '@/data/casting'
+import { Link } from '@tanstack/react-router'
 import { CalendarDaySidebar, type CalendarDaySidebarData, type CalendarSidebarBill, type CalendarSidebarPayment } from '@/components/calendar/calendar-day-sidebar'
 import { CalendarMonthOverview } from '@/components/calendar/calendar-month-overview'
 import { loadCalendarMonthData } from '@/data/calendar-month'
@@ -112,6 +117,9 @@ function formatPremium(value: number | null) {
 }
 
 function CalendarPage() {
+  const { purchaseEnabled, castingEnabled } = useModuleSettings()
+  const [showPurchase, setShowPurchase] = useState(true)
+  const [showCasting, setShowCasting] = useState(true)
   const today = useMemo(() => getLocalIsoDate(), [])
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -125,6 +133,18 @@ function CalendarPage() {
     staleTime: 5 * 60 * 1000,
     gcTime: 15 * 60 * 1000,
   })
+  const purchaseQuery = useQuery({ ...purchaseReadModelQueryOptions(), enabled: purchaseEnabled })
+  const castingQuery = useQuery({ queryKey: ['calendar-casting', monthKey], queryFn: () => loadCastingSessions({ from: `${monthKey}-01`, to: `${monthKey}-${String(new Date(Number(monthKey.slice(0, 4)), Number(monthKey.slice(5, 7)), 0).getDate()).padStart(2, '0')}` }), enabled: castingEnabled })
+  const purchaseByDay = useMemo(() => {
+    const result = new Map<string, number>()
+    for (const bill of purchaseQuery.data?.bills ?? []) if (!bill.cancelled && bill.date.startsWith(monthKey)) result.set(bill.date, (result.get(bill.date) ?? 0) + bill.netPaise)
+    return result
+  }, [purchaseQuery.data, monthKey])
+  const castingByDay = useMemo(() => {
+    const result = new Map<string, number>()
+    for (const session of castingQuery.data ?? []) result.set(session.date, (result.get(session.date) ?? 0) + session.totalWireOut)
+    return result
+  }, [castingQuery.data])
   useEffect(() => {
     setSelectedDay(null)
   }, [monthKey])
@@ -233,6 +253,7 @@ function CalendarPage() {
       <section className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
         {topCards.map((card) => <TopKpiCard key={card.label} {...card} />)}
       </section>
+      <div className="mb-3 flex flex-wrap gap-2 text-xs"><span className="rounded-md border border-slate-200 bg-white px-3 py-1.5">Sales</span>{purchaseEnabled && <button type="button" aria-pressed={showPurchase} onClick={() => setShowPurchase((value) => !value)} className={`rounded-md border px-3 py-1.5 ${showPurchase ? 'border-slate-300 bg-white' : 'border-slate-200 bg-slate-100 text-slate-500'}`}>Purchase</button>}{castingEnabled && <button type="button" aria-pressed={showCasting} onClick={() => setShowCasting((value) => !value)} className={`rounded-md border px-3 py-1.5 ${showCasting ? 'border-slate-300 bg-white' : 'border-slate-200 bg-slate-100 text-slate-500'}`}>Casting</button>}</div>
 
       {calendarQuery.isLoading ? <section className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">Loading calendar...</section> : null}
       {calendarQuery.isError ? <section className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700 shadow-sm">Unable to load calendar data.</section> : null}
@@ -246,7 +267,7 @@ function CalendarPage() {
                   <ChevronLeft size={17} />
                 </button>
                 <div className="min-w-0 px-1">
-                  <h1 className="mt-0.5 text-xl font-bold leading-tight text-slate-950">{formatMonthYear(monthKey)}</h1>
+                  <h2 className="mt-0.5 text-xl font-bold leading-tight text-slate-950">{formatMonthYear(monthKey)}</h2>
                 </div>
                 <button type="button" aria-label="Next month" className={navButtonClass} onClick={() => changeMonth(shiftMonth(monthKey, 1))}>
                   <ChevronRight size={17} />
@@ -272,6 +293,8 @@ function CalendarPage() {
                     const isToday = iso === today
                     const sales = aggregates.dailySales.get(iso) ?? 0
                     const collections = aggregates.dailyCollections.get(iso) ?? 0
+                    const purchaseAmount = showPurchase && purchaseEnabled ? purchaseByDay.get(iso) ?? 0 : 0
+                    const castingKg = showCasting && castingEnabled ? castingByDay.get(iso) ?? 0 : 0
                     const soldBags = aggregates.dailySoldBags.get(iso) ?? 0
                     const rate = aggregates.rateByDate.get(iso)
                     const gas = aggregates.dailyGasByDate.get(iso)
@@ -281,7 +304,7 @@ function CalendarPage() {
                     const bucketTag = dayBuckets.length > 1 && dominant ? (dominant === gas?.gst ? ' (GST)' : ' (non-GST)') : ''
                     const displayedMarketRate = dominant?.weightedMarketRate ?? gas?.weightedMarketRate ?? rate ?? null
                     const premium = dominant?.premiumPerKg ?? gas?.premiumPerKg ?? null
-                    const hasActivity = sales > 0 || collections > 0 || soldBags > 0 || !!rate || (gas?.kg ?? 0) > 0
+                    const hasActivity = sales > 0 || collections > 0 || soldBags > 0 || !!rate || (gas?.kg ?? 0) > 0 || purchaseAmount > 0 || castingKg > 0
                     const dotState = dayDotState(sales, collections)
                     const tint = inMonth && hasActivity ? premiumTint(premium) : ''
                     const bucketLine = (label: string, basis: NonNullable<typeof dominant>) =>
@@ -320,11 +343,13 @@ function CalendarPage() {
                           )}
                           <div className="mt-auto flex flex-wrap items-center gap-1 pt-1">
                             {collections > 0 && (
-                              <span className="rounded bg-emerald-50/90 px-1 py-px text-[10px] font-semibold text-emerald-700 tabular-nums">C {formatInrInteger(collections)}</span>
+                              <span className="rounded bg-emerald-50/90 px-1 py-px text-[11px] font-semibold text-emerald-700 tabular-nums">C {formatInrInteger(collections)}</span>
                             )}
                             {(gas?.kg ?? 0) > 0 && (
-                              <span className="rounded bg-slate-100 px-1 py-px text-[10px] font-semibold text-slate-600 tabular-nums">{formatWhole(gas?.kg ?? 0)} kg</span>
+                              <span className="rounded bg-slate-100 px-1 py-px text-[11px] font-semibold text-slate-600 tabular-nums">{formatWhole(gas?.kg ?? 0)} kg</span>
                             )}
+                            {purchaseAmount > 0 && <span className="rounded bg-amber-50 px-1 py-px text-[11px] font-semibold text-amber-700 tabular-nums">P ₹{formatWhole(purchaseAmount / 100)}</span>}
+                            {castingKg > 0 && <span className="rounded bg-slate-100 px-1 py-px text-[11px] font-semibold text-slate-700 tabular-nums">C {formatWhole(castingKg)} kg</span>}
                           </div>
                         </div>
                       </button>
@@ -337,9 +362,7 @@ function CalendarPage() {
 
           <aside className="hidden xl:block">
             <div className="sticky top-20 max-h-[calc(100dvh-6rem)] overflow-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm transition">
-              {selectedSidebarData ? (
-                <CalendarDaySidebar data={selectedSidebarData} />
-              ) : (
+              {(
                 <CalendarMonthOverview
                   monthKey={monthKey}
                   avgRate={aggregates.monthAvgMarketRate}
@@ -354,18 +377,21 @@ function CalendarPage() {
             </div>
           </aside>
 
-          {selectedSidebarData ? (
-            <div className="fixed inset-x-0 bottom-0 z-[70] max-h-[82dvh] overflow-auto rounded-t-2xl border border-slate-200 bg-white p-4 shadow-2xl xl:hidden">
-              <div className="mb-3 flex justify-end">
-                <button type="button" className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700" onClick={() => setSelectedDay(null)}>
-                  Close
-                </button>
-              </div>
-              <CalendarDaySidebar data={selectedSidebarData} />
-            </div>
-          ) : null}
         </div>
       ) : null}
+      <Dialog open={Boolean(selectedDay)} onOpenChange={(open) => { if (!open) setSelectedDay(null) }}>
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-auto">
+          <DialogTitle className="text-sm font-semibold">{selectedDay ? formatFullDate(selectedDay) : 'Day details'}</DialogTitle>
+          {selectedSidebarData && <CalendarDaySidebar data={selectedSidebarData} />}
+          {purchaseEnabled && showPurchase && <div className="border-t border-slate-100 pt-3">
+            <h3 className="text-xs font-semibold">Purchase bills</h3>
+            {(purchaseQuery.data?.bills ?? []).filter((bill) => bill.date === selectedDay && !bill.cancelled).map((bill) => <Link key={bill.id} to="/purchase-bills/$billId" params={{ billId: bill.inNo }} className="block py-1 text-xs text-blue-700 hover:underline">{bill.inNo} · {bill.supplierName} · ₹{formatWhole(bill.netPaise / 100)}</Link>)}
+            <h3 className="mt-3 text-xs font-semibold">Purchase payments</h3>
+            {(purchaseQuery.data?.payments ?? []).filter((payment) => payment.date === selectedDay && !payment.cancelled).map((payment) => <Link key={payment.id} to="/purchase-bills" search={{ view: 'payments', from: selectedDay ?? undefined, to: selectedDay ?? undefined }} className="block py-1 text-xs text-blue-700 hover:underline">{payment.supplierName} · {payment.kind} · ₹{formatWhole(payment.amountPaise / 100)}</Link>)}
+          </div>}
+          {castingEnabled && showCasting && <div className="border-t border-slate-100 pt-3"><h3 className="text-xs font-semibold">Casting sessions</h3>{(castingQuery.data ?? []).filter((session) => session.date === selectedDay).map((session) => <Link key={session.id} to="/casting/log" className="block py-1 text-xs text-blue-700 hover:underline">{session.totalWireOut.toFixed(2)} kg wire out</Link>)}</div>}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

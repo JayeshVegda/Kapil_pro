@@ -9,7 +9,7 @@ import {
 } from '@tanstack/react-table'
 import { ArrowDown, ArrowUp, ArrowUpDown, Columns3 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useNavigate } from '@tanstack/react-router'
 import { RowMenu } from '@/components/ui/row-menu'
 import { formatFullDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
@@ -52,7 +52,7 @@ export function itemsSummary(lines: Array<{ itemName: string; weightG?: number; 
 function PoolChip({ pool }: { pool: 'kacha' | 'gst' }) {
   return (
     <span
-      className={`inline-flex h-4 min-w-5 items-center justify-center rounded px-1 text-[10px] font-bold uppercase ${
+      className={`inline-flex h-4 min-w-5 items-center justify-center rounded px-1 text-[11px] font-bold uppercase ${
         pool === 'gst' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
       }`}
       title={pool === 'gst' ? 'GST pool' : 'Kacha pool'}
@@ -81,12 +81,14 @@ export function PurchaseBillsTable({
   showSupplier = true,
   actions,
   selection,
+  onRowClick,
   emptyMessage,
 }: {
   rows: BillsTableRow[]
   showSupplier?: boolean
   actions?: BillsTableActions
   selection?: { selectedIds: Set<string>; onToggle: (id: string) => void }
+  onRowClick?: (row: BillsTableRow) => void
   emptyMessage?: string
 }) {
   const [sorting, setSorting] = useState<SortingState>([{ id: 'date', desc: true }])
@@ -140,20 +142,39 @@ export function PurchaseBillsTable({
         header: 'IN No',
         size: 110,
         cell: ({ row }) => (
-          <Link
-            to="/purchase-bills/$billId"
-            params={{ billId: row.original.inNo }}
-            onClick={(e) => e.stopPropagation()}
-            className={`font-mono font-semibold text-blue-700 hover:underline ${row.original.cancelled ? 'line-through opacity-60' : ''}`}
-          >
-            {row.original.inNo || row.original.id.slice(0, 8)}
-          </Link>
+          <span className="truncate whitespace-nowrap block" title={row.original.inNo}>
+            <span
+              className={`font-mono font-semibold text-blue-700 hover:underline ${
+                row.original.cancelled ? 'line-through opacity-60' : ''
+              }`}
+            >
+              {row.original.inNo || row.original.id.slice(0, 8)}
+            </span>
+          </span>
         ),
       }),
-      col.accessor('date', { header: 'Date', size: 96, cell: ({ getValue }) => <span className="text-slate-600">{formatFullDate(getValue())}</span> }),
+      col.accessor('date', {
+        header: 'Date',
+        size: 96,
+        cell: ({ getValue }) => (
+          <span className="truncate whitespace-nowrap text-slate-600 block" title={formatFullDate(getValue())}>
+            {formatFullDate(getValue())}
+          </span>
+        ),
+      }),
     )
     if (showSupplier) {
-      defs.push(col.accessor('supplierName', { header: 'Supplier', size: 160, cell: ({ getValue }) => <span className="font-medium text-slate-800">{getValue()}</span> }))
+      defs.push(
+        col.accessor('supplierName', {
+          header: 'Supplier',
+          size: 160,
+          cell: ({ getValue }) => (
+            <span className="truncate whitespace-nowrap font-medium text-slate-800 block" title={getValue()}>
+              {getValue()}
+            </span>
+          ),
+        }),
+      )
     }
     defs.push(
       col.accessor('pool', { header: 'Pool', size: 44, cell: ({ getValue }) => <PoolChip pool={getValue()} /> }),
@@ -162,9 +183,22 @@ export function PurchaseBillsTable({
       col.accessor('netPaise', { header: () => <span className="ml-auto">Net</span>, size: 104, cell: ({ getValue }) => <span className="block text-right font-mono tabular-nums text-slate-800">{formatPaiseInr(getValue())}</span> }),
       col.accessor('paidPaise', { header: () => <span className="ml-auto">Paid</span>, size: 104, cell: ({ getValue }) => <span className="block text-right font-mono tabular-nums text-emerald-700">{formatPaiseInr(getValue())}</span> }),
       col.accessor('duePaise', { header: () => <span className="ml-auto">Due</span>, size: 104, cell: ({ getValue }) => <span className="block text-right font-mono font-semibold tabular-nums text-rose-600">{formatPaiseInr(getValue())}</span> }),
-      col.accessor('daysOld', { header: () => <span className="ml-auto">Age</span>, size: 56, cell: ({ getValue }) => <span className={`block text-right font-mono tabular-nums ${getValue() > 10 ? 'font-bold text-rose-600' : getValue() >= 7 ? 'font-semibold text-amber-600' : 'text-slate-500'}`}>{getValue()}d</span> }),
-      col.accessor('bardanPending', { header: 'Bardan', size: 74, cell: ({ getValue }) => (getValue() ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">Pending</span> : <span className="text-[10px] text-slate-400">Settled</span>) }),
-      col.accessor('status', { header: 'Status', size: 72, cell: ({ getValue }) => <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${STATUS_STYLE[getValue() as BillsTableRow['status']]}`}>{getValue()}</span> }),
+      col.accessor('daysOld', {
+        header: () => <span className="ml-auto">Age</span>,
+        size: 56,
+        cell: ({ getValue, row }) => {
+          const r = row.original
+          if (r.duePaise <= 0 || r.cancelled || r.status === 'nil') {
+            return <span className="block text-right font-mono text-slate-400">—</span>
+          }
+          const days = getValue()
+          const tone =
+            days >= 60 ? 'font-bold text-rose-600' : days >= 30 ? 'font-semibold text-amber-700' : 'text-slate-500'
+          return <span className={`block text-right font-mono tabular-nums ${tone}`}>{days}d</span>
+        },
+      }),
+      col.accessor('bardanPending', { header: 'Bardan', size: 74, cell: ({ getValue }) => (getValue() ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">Pending</span> : <span className="text-[11px] text-slate-400">Settled</span>) }),
+      col.accessor('status', { header: 'Status', size: 72, cell: ({ getValue }) => <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase ${STATUS_STYLE[getValue() as BillsTableRow['status']]}`}>{getValue()}</span> }),
       col.display({
         id: 'actions',
         header: () => null,
@@ -203,20 +237,22 @@ export function PurchaseBillsTable({
 
   return (
     <div className="min-w-0">
-      <div className="mb-1 flex justify-end">
+      {/* Table Card Toolbar */}
+      <div className="flex items-center justify-between border-b border-border bg-secondary/30 px-3 py-1.5">
+        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Purchase Bills Record</span>
         <div ref={columnMenuRef} className="relative">
           <button
             type="button"
             onClick={() => setColumnMenuOpen((v) => !v)}
-            className="inline-flex h-6 items-center gap-1 rounded border border-slate-200 bg-white px-1.5 text-[10px] font-medium text-slate-500 hover:text-slate-700"
+            className="inline-flex h-6 items-center gap-1 rounded border border-border bg-card px-2 text-[11px] font-medium text-muted-foreground hover:text-foreground transition"
             title="Toggle columns"
           >
             <Columns3 size={12} /> Columns
           </button>
           {columnMenuOpen && (
-            <div className="absolute right-0 z-40 mt-1 w-40 rounded-md border border-slate-200 bg-white py-1 shadow-lg">
+            <div className="absolute right-0 z-40 mt-1 w-40 rounded-md border border-border bg-card py-1 shadow-lg">
               {hideableColumns.map((column) => (
-                <label key={column.id} className="flex cursor-pointer items-center gap-2 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50">
+                <label key={column.id} className="flex cursor-pointer items-center gap-2 px-2.5 py-1 text-xs text-foreground hover:bg-secondary">
                   <input type="checkbox" checked={column.getIsVisible()} onChange={column.getToggleVisibilityHandler()} className="accent-blue-600" />
                   <span className="capitalize">{column.id.replace(/([A-Z])/g, ' $1').trim()}</span>
                 </label>
@@ -226,7 +262,8 @@ export function PurchaseBillsTable({
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-slate-200">
+      {/* Desktop Table View */}
+      <div className="hidden md:block overflow-x-auto">
         <table className="w-full min-w-[900px] border-collapse text-[13px]">
           <thead className="sticky top-0 z-10 bg-slate-50">
             {table.getHeaderGroups().map((group) => (
@@ -234,7 +271,7 @@ export function PurchaseBillsTable({
                 {group.headers.map((header) => (
                   <th
                     key={header.id}
-                    className={`whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 ${
+                    className={`whitespace-nowrap border-b border-slate-200 px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 ${
                       header.column.id === 'inNo' ? 'sticky left-0 z-10 bg-slate-50' : ''
                     }`}
                   >
@@ -255,7 +292,23 @@ export function PurchaseBillsTable({
             {table.getRowModel().rows.map((row) => {
               const r = row.original
               return (
-                <tr key={row.id} onClick={() => void navigate({ to: '/purchase-bills/$billId', params: { billId: r.inNo } })} className="h-[34px] cursor-pointer transition hover:bg-slate-50">
+                <tr
+                  key={row.id}
+                  onClick={() => (onRowClick ? onRowClick(r) : void navigate({ to: '/purchase-bills/$billId', params: { billId: r.inNo } }))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      if (onRowClick) onRowClick(r)
+                      else void navigate({ to: '/purchase-bills/$billId', params: { billId: r.inNo } })
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open bill ${r.inNo}`}
+                  className={`h-[34px] cursor-pointer transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${
+                    r.cancelled ? 'opacity-60 bg-slate-50/70' : ''
+                  }`}
+                >
                   {row.getVisibleCells().map((cell) => (
                     <td
                       key={cell.id}
@@ -277,21 +330,110 @@ export function PurchaseBillsTable({
               </tr>
             )}
           </tbody>
-          {rows.length > 0 && (
-            <tfoot>
-              <tr className="border-t border-slate-200 bg-slate-50/80 font-semibold text-slate-700">
-                <td colSpan={showSupplier ? 4 : 3} className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-slate-500">
-                  Totals ({rows.length})
-                </td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{rows.reduce((s, r) => s + r.totalKg, 0).toFixed(3)}</td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{formatPaiseInr(rows.reduce((s, r) => s + r.netPaise, 0))}</td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{formatPaiseInr(rows.reduce((s, r) => s + r.paidPaise, 0))}</td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{formatPaiseInr(rows.reduce((s, r) => s + r.duePaise, 0))}</td>
-                <td colSpan={4} />
-              </tr>
-            </tfoot>
-          )}
+          {rows.length > 0 && (() => {
+            const activeRows = rows.filter((r) => !r.cancelled)
+            const totalKg = activeRows.reduce((s, r) => s + r.totalKg, 0)
+            const totalNet = activeRows.reduce((s, r) => s + r.netPaise, 0)
+            const totalPaid = activeRows.reduce((s, r) => s + r.paidPaise, 0)
+            const totalDue = activeRows.reduce((s, r) => s + r.duePaise, 0)
+            return (
+              <tfoot>
+                <tr className="border-t border-slate-200 bg-slate-50/90 font-semibold text-slate-700">
+                  <td colSpan={showSupplier ? 4 : 3} className="px-2.5 py-2 text-[11px] uppercase tracking-wider text-slate-500">
+                    Totals (excl. cancelled) · {activeRows.length} bills
+                  </td>
+                  <td className="px-2 py-2 text-right font-mono tabular-nums font-bold text-slate-800">{totalKg.toFixed(3)}</td>
+                  <td className="px-2 py-2 text-right font-mono tabular-nums font-bold text-slate-900">{formatPaiseInr(totalNet)}</td>
+                  <td className="px-2 py-2 text-right font-mono tabular-nums font-bold text-emerald-700">{formatPaiseInr(totalPaid)}</td>
+                  <td className="px-2 py-2 text-right font-mono tabular-nums font-bold text-rose-600">{formatPaiseInr(totalDue)}</td>
+                  <td colSpan={4} />
+                </tr>
+              </tfoot>
+            )
+          })()}
         </table>
+      </div>
+
+      {/* Mobile Card View (< 768px) */}
+      <div className="block md:hidden divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white overflow-hidden">
+        {rows.length === 0 ? (
+          <p className="px-3 py-6 text-center text-xs italic text-slate-400">
+            {emptyMessage ?? 'No purchase bills match.'}
+          </p>
+        ) : (
+          rows.map((r) => {
+            const hasDue = r.duePaise > 0 && !r.cancelled && r.status !== 'nil'
+            const ageTone = r.daysOld >= 60 ? 'text-rose-600 font-bold' : r.daysOld >= 30 ? 'text-amber-700 font-semibold' : 'text-slate-500'
+            const eligible = !anchor || (anchor.supplierId === r.supplierId && anchor.pool === r.pool) || selection?.selectedIds.has(r.id)
+
+            return (
+              <div
+                key={r.id}
+                data-testid="mobile-bill-card"
+                onClick={() => (onRowClick ? onRowClick(r) : void navigate({ to: '/purchase-bills/$billId', params: { billId: r.inNo } }))}
+                className={`p-3 transition hover:bg-slate-50 active:bg-slate-100 cursor-pointer ${
+                  r.cancelled ? 'opacity-60 bg-slate-50/50' : ''
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {selection && (
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-blue-600 disabled:opacity-30"
+                        disabled={!eligible}
+                        checked={selection.selectedIds.has(r.id)}
+                        onChange={() => selection.onToggle(r.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label={`Select ${r.inNo}`}
+                      />
+                    )}
+                    <span className="font-mono text-xs font-bold text-blue-700 truncate">
+                      {r.inNo}
+                    </span>
+                    <PoolChip pool={r.pool} />
+                    <span className={`rounded px-1.5 py-0.2 text-[11px] font-bold uppercase ${STATUS_STYLE[r.status]}`}>
+                      {r.status}
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-muted-foreground shrink-0 font-medium">
+                    {formatFullDate(r.date)}
+                  </span>
+                </div>
+
+                <div className="mt-1.5 flex items-baseline justify-between gap-2">
+                  <p className="text-xs font-bold text-foreground truncate">{r.supplierName}</p>
+                  {hasDue && (
+                    <span className={`text-[11px] font-mono shrink-0 ${ageTone}`}>
+                      {r.daysOld}d old
+                    </span>
+                  )}
+                </div>
+
+                {r.itemsSummary && (
+                  <p className="mt-0.5 text-[11px] text-muted-foreground truncate">{r.itemsSummary}</p>
+                )}
+
+                <div className="mt-2 grid grid-cols-3 gap-1 rounded-md bg-slate-50 px-2 py-1.5 text-center">
+                  <div>
+                    <span className="block text-[8px] font-semibold uppercase text-muted-foreground">Weight</span>
+                    <span className="font-mono text-xs font-bold text-foreground">{r.totalKg.toFixed(1)} kg</span>
+                  </div>
+                  <div>
+                    <span className="block text-[8px] font-semibold uppercase text-muted-foreground">Net</span>
+                    <span className="font-mono text-xs font-bold tabular-nums text-foreground">{formatPaiseInr(r.netPaise)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[8px] font-semibold uppercase text-muted-foreground">Due</span>
+                    <span className={`font-mono text-xs font-bold ${r.duePaise > 0 ? 'text-rose-600' : 'text-foreground'}`}>
+                      {formatPaiseInr(r.duePaise)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )
+          })
+        )}
       </div>
     </div>
   )

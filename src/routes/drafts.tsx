@@ -187,12 +187,12 @@ function DraftsPage() {
   return (
     <div className="w-full space-y-4 px-3 pb-12 pt-3 sm:px-5 lg:px-7">
       <div className="flex items-center gap-2.5">
-        <span className="grid h-8 w-8 place-items-center rounded-lg bg-indigo-600 text-white shadow-sm"><Sparkles size={15} /></span>
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-blue-600 text-white shadow-sm"><Sparkles size={15} /></span>
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-slate-900">AI Drafts</h2>
           <p className="text-[11px] text-slate-500">Bills and payments staged by Muse</p>
         </div>
-        <span className={`ml-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${combinedPending ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+        <span className={`ml-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${combinedPending ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
           {combinedPending} pending
         </span>
       </div>
@@ -204,7 +204,7 @@ function DraftsPage() {
               key={status}
               type="button"
               onClick={() => { setStatusFilter(status); setPage(1) }}
-              className={`rounded-md px-3 py-1.5 capitalize transition ${statusFilter === status ? 'bg-white font-bold text-indigo-700 shadow-sm' : 'hover:text-slate-900'}`}
+              className={`rounded-md px-3 py-1.5 capitalize transition ${statusFilter === status ? 'bg-white font-bold text-blue-700 shadow-sm' : 'hover:text-slate-900'}`}
             >
               {status === 'pending' ? `Pending ${combinedPending}` : status}
             </button>
@@ -216,7 +216,7 @@ function DraftsPage() {
               key={type}
               type="button"
               onClick={() => { setTypeFilter(type); setPage(1) }}
-              className={`rounded-md px-3 py-1.5 transition ${typeFilter === type ? 'bg-white font-bold text-indigo-700 shadow-sm' : 'hover:text-slate-900'}`}
+              className={`rounded-md px-3 py-1.5 transition ${typeFilter === type ? 'bg-white font-bold text-blue-700 shadow-sm' : 'hover:text-slate-900'}`}
             >
               {type === 'bills' ? 'Bills' : type === 'payments' ? 'Payments' : 'All'}
             </button>
@@ -231,7 +231,7 @@ function DraftsPage() {
             onKeyDown={(event) => { if (event.key === 'Enter') commitSearch() }}
             onBlur={commitSearch}
             placeholder="Search party, notes, items, dictation…"
-            className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-3 text-xs text-slate-800 placeholder-slate-400 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-3 text-xs text-slate-800 placeholder-slate-400 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-400/30"
           />
         </div>
       </div>
@@ -243,7 +243,7 @@ function DraftsPage() {
         </div>
       ) : billsQuery.isLoading || paymentsQuery.isLoading ? (
         <div className="grid place-items-center rounded-xl border border-slate-200 bg-white py-14 text-slate-500">
-          <RefreshCw size={22} className="animate-spin text-indigo-600" />
+          <RefreshCw size={22} className="animate-spin text-blue-600" />
           <p className="mt-2 text-xs font-semibold">Loading drafts…</p>
         </div>
       ) : visible.length === 0 ? (
@@ -255,7 +255,7 @@ function DraftsPage() {
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/80 text-[10px] uppercase font-bold tracking-wider text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] uppercase font-bold tracking-wider text-slate-500">
                 <th className="px-3.5 py-2.5">Type</th>
                 <th className="px-2 py-2.5">Party</th>
                 <th className="px-2 py-2.5">Date</th>
@@ -272,16 +272,16 @@ function DraftsPage() {
                   return (
                     <tr key={`payment-${view.id}`} className={`transition hover:bg-slate-50/70 ${isPending ? '' : 'opacity-70'}`}>
                       <td className="px-3.5 py-2.5">
-                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-700">Payment</span>
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-bold text-slate-700">Payment</span>
                       </td>
                       <DraftPartyCell name={view.customerName} isLinked={view.isPartyLinked} avatarClass={view.isPartyLinked ? 'bg-emerald-500' : 'bg-amber-500'} secondaryText={view.rawText} />
                       <td className="whitespace-nowrap px-2 py-2.5 text-slate-600">{view.date ? formatFullDate(view.date) : '—'}</td>
                       <td className="whitespace-nowrap px-2 py-2.5 text-right font-mono font-bold tabular-nums text-sm text-emerald-800">{formatInrInteger(view.amount)}</td>
                       <td className="px-2 py-2.5">
                         <div className="flex items-center gap-2">
-                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-700">{view.mode}</span>
-                          {view.note && <span className="max-w-[160px] truncate text-[10px] italic text-slate-500">{view.note}</span>}
-                          {view.convertedPayment && <span className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">converted</span>}
+                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-bold text-slate-700">{view.mode}</span>
+                          {view.note && <span className="max-w-[160px] truncate text-[11px] italic text-slate-500">{view.note}</span>}
+                          {view.convertedPayment && <span className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-bold text-slate-600">converted</span>}
                         </div>
                         {view.isPartyLinked && !view.convertedPayment && (
                           <div className="mt-0.5"><PaymentDraftDueCell customerId={view.customerId} date={view.date} /></div>
@@ -295,7 +295,7 @@ function DraftsPage() {
                               <button type="button" onClick={() => setEditingPayment(view)} disabled={!view.isPartyLinked} title={view.isPartyLinked ? 'Accept payment' : 'Party unmatched — accept after linking in the modal'} className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"><Check size={12} /> Accept</button>
                             </>
                           ) : (
-                            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                               {view.status === 'approved' ? 'accepted' : 'rejected'}
                             </span>
                           )}
@@ -309,13 +309,13 @@ function DraftsPage() {
                 return (
                   <tr key={`bill-${view.id}`} className={`transition hover:bg-slate-50/70 ${isPending ? '' : 'opacity-70'}`}>
                     <td className="px-3.5 py-2.5">
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-700">Bill</span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-bold text-slate-700">Bill</span>
                     </td>
-                    <DraftPartyCell name={view.customerName} isLinked={view.isPartyLinked} avatarClass={view.isPartyLinked ? 'bg-indigo-500' : 'bg-amber-500'} secondaryText={view.notes} />
+                    <DraftPartyCell name={view.customerName} isLinked={view.isPartyLinked} avatarClass={view.isPartyLinked ? 'bg-blue-500' : 'bg-amber-500'} secondaryText={view.notes} />
                     <td className="whitespace-nowrap px-2 py-2.5 text-slate-600">{view.date ? formatFullDate(view.date) : '—'}</td>
                     <td className="whitespace-nowrap px-2 py-2.5 text-right font-mono font-bold tabular-nums text-sm text-slate-900">
                       {view.itemsSubtotal > 0 ? formatInrInteger(view.grandTotal) : '—'}
-                      {view.isEstimate && <span className="ml-1 rounded bg-amber-100 px-1 align-middle text-[9px] font-bold text-amber-800">est.</span>}
+                      {view.isEstimate && <span className="ml-1 rounded bg-amber-100 px-1 align-middle text-[11px] font-bold text-amber-800">est.</span>}
                     </td>
                     <td className="max-w-[260px] px-2 py-2.5">
                       {view.rows.length === 0 ? (
@@ -327,7 +327,7 @@ function DraftsPage() {
                           {view.rows.length > 1 ? ` +${view.rows.length - 1}` : ''}
                         </p>
                       )}
-                      <p className="text-[10px] text-slate-500">
+                      <p className="text-[11px] text-slate-500">
                         <span className="font-mono">
                           {view.convertedBill
                             ? 'converted'
@@ -343,8 +343,8 @@ function DraftsPage() {
                         {isPending ? (
                           <>
                             <button type="button" onClick={() => updateStatusMutation.mutate({ id: view.id, status: 'rejected' })} title="Reject" className="rounded-md border border-slate-200 p-1 text-rose-600 transition hover:bg-rose-50"><X size={13} /></button>
-                            <button type="button" onClick={() => setPreviewDraft(view)} title="Preview" className="rounded-md border border-indigo-200 bg-indigo-50 p-1 text-indigo-700 transition hover:bg-indigo-100"><Eye size={13} /></button>
-                            <button type="button" onClick={() => loadIntoBill(view)} className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1 text-[11px] font-bold text-white shadow-sm transition hover:bg-indigo-700"><Check size={12} /> Load</button>
+                            <button type="button" onClick={() => setPreviewDraft(view)} title="Preview" className="rounded-md border border-blue-200 bg-blue-50 p-1 text-blue-700 transition hover:bg-blue-100"><Eye size={13} /></button>
+                            <button type="button" onClick={() => loadIntoBill(view)} className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1 text-[11px] font-bold text-white shadow-sm transition hover:bg-blue-700"><Check size={12} /> Load</button>
                           </>
                         ) : (
                           <>
@@ -421,15 +421,15 @@ function DraftPartyCell({ name, isLinked, avatarClass, secondaryText }: { name: 
   return (
     <td className="px-2 py-2.5">
       <div className="flex items-center gap-2">
-        <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-md text-[10px] font-black text-white ${avatarClass}`}>
+        <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-md text-[11px] font-black text-white ${avatarClass}`}>
           {(name || 'P').charAt(0).toUpperCase()}
         </span>
         <div className="min-w-0">
           <p className="truncate font-semibold text-slate-900">{name || 'Unmatched Party'}</p>
           {!isLinked && (
-            <span className="mt-0.5 inline-flex rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">Party not matched</span>
+            <span className="mt-0.5 inline-flex rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">Party not matched</span>
           )}
-          {secondaryText && <p className="max-w-[220px] truncate text-[10px] italic text-slate-400">“{secondaryText}”</p>}
+          {secondaryText && <p className="max-w-[220px] truncate text-[11px] italic text-slate-400">“{secondaryText}”</p>}
         </div>
       </div>
     </td>
@@ -543,15 +543,15 @@ function DraftPreviewModal({ view, onClose, previewRef, status, setStatus, onEdi
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm font-bold text-slate-900">Draft Preview</h3>
               {view.mkt > 0 && <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-mono text-[11px] font-bold text-amber-900">MKT ₹{view.mkt}</span>}
-              {isGst && <span className="rounded-full border border-purple-200 bg-purple-100 px-2 py-0.5 text-[10px] font-bold text-purple-800">18% GST</span>}
-              {view.isEstimate && <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-800">estimate — some rates auto</span>}
+              {isGst && <span className="rounded-full border border-purple-200 bg-purple-100 px-2 py-0.5 text-[11px] font-bold text-purple-800">18% GST</span>}
+              {view.isEstimate && <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-800">estimate — some rates auto</span>}
             </div>
             <p className="mt-0.5 text-xs text-slate-500">
               {view.customerName || 'Unmatched Party'} · {view.date ? formatFullDate(view.date) : 'no date'} · {view.rows.length} item{view.rows.length === 1 ? '' : 's'}
               {view.isPartyLinked ? '' : ' · party not linked, ledger balance unavailable'}
             </p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Close draft preview" className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><X size={18} /></button>
         </div>
 
         {view.isPartyLinked && balanceQuery.isFetching && (
@@ -573,7 +573,7 @@ function DraftPreviewModal({ view, onClose, previewRef, status, setStatus, onEdi
 
         <div className="grid shrink-0 gap-3 border-t border-slate-200 bg-white px-5 py-3 md:grid-cols-[1fr_auto] md:items-center">
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={onEdit} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-bold text-indigo-700 transition hover:bg-indigo-100">Review &amp; Edit in Editor</button>
+            <button type="button" onClick={onEdit} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 transition hover:bg-blue-100">Review &amp; Edit in Editor</button>
             {isPending && (
               <button type="button" onClick={onApprove} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100">Approve Draft</button>
             )}
@@ -651,7 +651,7 @@ function PaymentAcceptModal({ view, onClose, refreshAll }: AcceptModalProps) {
             <h3 className="text-sm font-bold text-slate-900">Accept Payment Draft</h3>
             <p className="mt-0.5 text-xs text-slate-500">{view.customerName || 'Unmatched Party'} · ID {view.id.slice(0, 8)}</p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Close payment draft" className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><X size={18} /></button>
         </div>
 
         <div className="min-h-0 flex-1 space-y-3.5 overflow-auto p-5">
@@ -666,7 +666,7 @@ function PaymentAcceptModal({ view, onClose, refreshAll }: AcceptModalProps) {
                 <select
                   value={customerId}
                   onChange={(event) => setCustomerId(event.target.value)}
-                  className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-indigo-500"
+                  className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-slate-500"
                 >
                   {customers.some((customer) => customer.id === customerId) ? null : <option value={view.customerId}>{view.customerName} (from dictation)</option>}
                   {customers.map((customer) => (
@@ -677,7 +677,7 @@ function PaymentAcceptModal({ view, onClose, refreshAll }: AcceptModalProps) {
                 <select
                   value=""
                   onChange={(event) => setCustomerId(event.target.value)}
-                  className="h-9 w-full rounded-lg border border-amber-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-indigo-500"
+                  className="h-9 w-full rounded-lg border border-amber-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-slate-500"
                 >
                   <option value="">Link a party to enable Accept</option>
                   {customers.map((customer) => (
@@ -688,7 +688,7 @@ function PaymentAcceptModal({ view, onClose, refreshAll }: AcceptModalProps) {
             </div>
             <label className="flex flex-col gap-1 text-xs font-semibold text-slate-500">
               Date
-              <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-indigo-500" />
+              <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-slate-500" />
             </label>
             <label className="flex flex-col gap-1 text-xs font-semibold text-slate-500">
               Amount (₹)
@@ -696,7 +696,7 @@ function PaymentAcceptModal({ view, onClose, refreshAll }: AcceptModalProps) {
                 inputMode="decimal"
                 value={amount}
                 onChange={(event) => setAmount(event.target.value.replace(/[^0-9.]/g, ''))}
-                className={`h-9 rounded-lg border px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-indigo-500 ${parsedAmount > 0 ? 'border-slate-300 bg-white' : 'border-amber-300 bg-white'}`}
+                className={`h-9 rounded-lg border px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-slate-500 ${parsedAmount > 0 ? 'border-slate-300 bg-white' : 'border-amber-300 bg-white'}`}
               />
             </label>
             <div className="sm:col-span-2">
@@ -707,7 +707,7 @@ function PaymentAcceptModal({ view, onClose, refreshAll }: AcceptModalProps) {
                     key={option}
                     type="button"
                     onClick={() => setMode(option)}
-                    className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${mode === option ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                    className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${mode === option ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
                   >
                     {option}
                   </button>
@@ -720,9 +720,9 @@ function PaymentAcceptModal({ view, onClose, refreshAll }: AcceptModalProps) {
                 value={museNote}
                 onChange={(event) => setMuseNote(event.target.value)}
                 placeholder="Muse's note, editable"
-                className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-indigo-500"
+                className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-800 shadow-sm outline-none focus:border-slate-500"
               />
-              <span className="text-[10px] font-normal text-slate-400">Saved as “Receipt via Muse {date || 'unknown-date'}{museNote ? ` - ${museNote}` : ''}”. The dictated text stays on the draft untouched.</span>
+              <span className="text-[11px] font-normal text-slate-400">Saved as “Receipt via Muse {date || 'unknown-date'}{museNote ? ` - ${museNote}` : ''}”. The dictated text stays on the draft untouched.</span>
             </label>
           </div>
 
@@ -736,7 +736,7 @@ function PaymentAcceptModal({ view, onClose, refreshAll }: AcceptModalProps) {
                 <>
                   <span className="font-semibold text-slate-500">Amount due (as of {date ? formatFullDate(date) : '—'}): </span>
                   <span className="font-mono font-bold text-slate-900">₹{formatInrInteger(amountDue)}</span>
-                  <span className="ml-2 text-[10px] text-slate-500">{amountDue < 0 ? 'advance' : 'receivable'} · figure here wins over what Muse said</span>
+                  <span className="ml-2 text-[11px] text-slate-500">{amountDue < 0 ? 'advance' : 'receivable'} · figure here wins over what Muse said</span>
                 </>
               )}
             </div>

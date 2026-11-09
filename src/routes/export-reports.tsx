@@ -1,3 +1,4 @@
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart3, BookOpen, Download, FileArchive, FileSpreadsheet, FileText, Gauge, ReceiptText, Users, WalletCards } from 'lucide-react'
@@ -382,7 +383,7 @@ function ExportReportsPage() {
   return (
     <div className="w-full space-y-5 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {isInitialLoading && <ExportSurface><p className="text-sm text-slate-500">Preparing report options...</p></ExportSurface>}
-      {isReportError && <ExportSurface><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold text-red-800">Report data could not load.</p><p className="mt-1 text-xs text-red-600">Check the connection, then try again.</p></div><button type="button" className={secondaryButtonClass} onClick={() => { void optionsQuery.refetch(); void snapshotQuery.refetch() }}>Retry</button></div></ExportSurface>}
+      {isReportError && <ExportSurface><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold text-rose-800">Report data could not load.</p><p className="mt-1 text-xs text-rose-600">Check the connection, then try again.</p></div><button type="button" className={secondaryButtonClass} onClick={() => { void optionsQuery.refetch(); void snapshotQuery.refetch() }}>Retry</button></div></ExportSurface>}
 
       {!isInitialLoading && !isReportError && (
         <>
@@ -548,7 +549,7 @@ function DocumentStudioHeader({ reportKind, onChange }: { reportKind: ReportKind
     <section className="overflow-hidden border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 px-4 py-3.5 sm:px-5">
         <div className="flex flex-wrap items-end justify-between gap-2">
-          <div><h1 className="text-xl font-bold tracking-tight text-slate-950">Reports</h1><p className="mt-0.5 text-xs text-slate-500">Sales, gas rates, statements, and balances</p></div>
+          <div><h2 className="text-sm font-semibold text-slate-950">Reports</h2><p className="mt-0.5 text-xs text-slate-500">Sales, gas rates, statements, and balances</p></div>
           <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Kapil Products</span>
         </div>
       </div>
@@ -557,7 +558,7 @@ function DocumentStudioHeader({ reportKind, onChange }: { reportKind: ReportKind
           const active = reportKind === tab.id
           return <button key={tab.id} type="button" onClick={() => onChange(tab.id)} className={`relative flex shrink-0 items-center gap-2 px-3 py-3 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 ${active ? 'text-blue-800' : 'text-slate-500 hover:text-slate-900'}`}>
             <span className={active ? 'text-blue-700' : 'text-slate-400'}>{tab.icon}</span>
-            <span><span className="block whitespace-nowrap text-xs font-bold">{tab.label}</span><span className="hidden whitespace-nowrap text-[10px] opacity-75 lg:block">{tab.detail}</span></span>
+            <span><span className="block whitespace-nowrap text-xs font-bold">{tab.label}</span><span className="hidden whitespace-nowrap text-[11px] opacity-75 lg:block">{tab.detail}</span></span>
             {active ? <span className="absolute inset-x-2 bottom-0 h-0.5 bg-blue-700" /> : null}
           </button>
         })}
@@ -570,12 +571,12 @@ function ReportWorkspace({ eyebrow, title, subtitle, filters, actions, summary, 
   return (
     <section className="min-w-0 overflow-hidden border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-[0.08em] text-blue-700">{eyebrow}</p><h2 className="truncate text-base font-bold text-slate-950">{title}</h2><p className="text-xs text-slate-500">{subtitle}</p></div>
+          <div className="min-w-0"><p className="text-[11px] font-bold uppercase tracking-[0.08em] text-blue-700">{eyebrow}</p><h2 className="truncate text-base font-bold text-slate-950">{title}</h2><p className="text-xs text-slate-500">{subtitle}</p></div>
           <div className="flex shrink-0 flex-wrap gap-2">{actions}</div>
         </div>
         <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 sm:px-5"><div className="flex flex-wrap items-end gap-3">{filters}</div></div>
         <div className="grid grid-cols-2 gap-px bg-slate-200 md:grid-cols-4">
-          {summary.slice(0, 8).map((item) => <div key={item.label} className="bg-slate-50 px-3 py-3"><p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">{item.label}</p><p className="mt-1 truncate font-mono text-sm font-bold tabular-nums text-slate-950" title={item.value}>{item.value}</p></div>)}
+          {summary.slice(0, 8).map((item) => <div key={item.label} className="bg-slate-50 px-3 py-3"><p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">{item.label}</p><p className="mt-1 truncate font-mono text-sm font-bold tabular-nums text-slate-950" title={item.value}>{item.value}</p></div>)}
         </div>
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2 sm:px-5"><span className="inline-flex items-center gap-2 text-[11px] font-bold text-emerald-700"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Live preview</span><span className="text-[11px] text-slate-400">Updates with your filters</span></div>
         <div className="p-4 sm:p-5">{children}</div>
@@ -614,11 +615,11 @@ function SalesReportPreview({ report }: { report: SalesReportResult }) {
 
 function ComparisonMetric({ label, current, previous, format }: { label: string; current: number; previous: number; format: (value: number) => string }) {
   const delta = previous > 0 ? ((current - previous) / previous) * 100 : null
-  return <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5"><p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">{label}</p><p className="mt-1 font-mono text-base font-bold text-slate-950">{format(current)}</p><p className={`mt-1 text-[11px] font-semibold ${delta == null ? 'text-slate-400' : delta >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{delta == null ? 'No previous-month base' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}% vs previous month`}</p></div>
+  return <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5"><p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">{label}</p><p className="mt-1 font-mono text-base font-bold text-slate-950">{format(current)}</p><p className={`mt-1 text-[11px] font-semibold ${delta == null ? 'text-slate-400' : delta >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{delta == null ? 'No previous-month base' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}% vs previous month`}</p></div>
 }
 
 function ReportTable({ title, columns, rows, footer }: { title: string; columns: string[]; rows: string[][]; footer?: string }) {
-  return <section><div className="mb-2 flex items-baseline justify-between gap-3"><h3 className="text-sm font-semibold text-slate-950">{title}</h3><span className="text-[11px] text-slate-500">{rows.length} rows</span></div><div className="overflow-x-auto rounded-lg border border-slate-200"><table className="w-full min-w-[680px] border-collapse text-xs"><thead className="bg-slate-50 text-[10px] uppercase tracking-[0.05em] text-slate-500"><tr>{columns.map((column, index) => <th key={column} className={`px-3 py-2.5 font-semibold ${index === 0 ? 'text-left' : 'text-right'}`}>{column}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{rows.map((row, rowIndex) => <tr key={`${row[0]}-${rowIndex}`} className="hover:bg-blue-50/40">{row.map((cell, cellIndex) => <td key={cellIndex} className={`px-3 py-2.5 ${cellIndex === 0 ? 'text-left font-medium text-slate-800' : 'text-right font-mono tabular-nums text-slate-700'}`}>{cell}</td>)}</tr>)}</tbody></table></div>{footer ? <p className="mt-2 text-[11px] text-slate-500">{footer}</p> : null}</section>
+  return <section><div className="mb-2 flex items-baseline justify-between gap-3"><h3 className="text-sm font-semibold text-slate-950">{title}</h3><span className="text-[11px] text-slate-500">{rows.length} rows</span></div><div className="overflow-x-auto rounded-lg border border-slate-200"><table className="w-full min-w-[680px] border-collapse text-xs"><thead className="bg-slate-50 text-[11px] uppercase tracking-[0.05em] text-slate-500"><tr>{columns.map((column, index) => <th key={column} className={`px-3 py-2.5 font-semibold ${index === 0 ? 'text-left' : 'text-right'}`}>{column}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{rows.map((row, rowIndex) => <tr key={`${row[0]}-${rowIndex}`} className="hover:bg-blue-50/40">{row.map((cell, cellIndex) => <td key={cellIndex} className={`px-3 py-2.5 ${cellIndex === 0 ? 'text-left font-medium text-slate-800' : 'text-right font-mono tabular-nums text-slate-700'}`}>{cell}</td>)}</tr>)}</tbody></table></div>{footer ? <p className="mt-2 text-[11px] text-slate-500">{footer}</p> : null}</section>
 }
 
 function PreviewEmpty({ children }: { children: ReactNode }) {
@@ -1724,8 +1725,7 @@ function partyBillFilename(bill: PBRecord) {
   return `Bill_${billRef(bill).replace(/\//g, '-')}_${readableDate(datePart(bill.date))}`
 }
 
-const inputClass =
-  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
+const inputClass = `${baseInputClass} h-10`
 
 const primaryButtonClass =
   'inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60'

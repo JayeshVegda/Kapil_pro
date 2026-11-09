@@ -1,5 +1,8 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { MODULE_SETTINGS_QUERY_KEY, updateSharedModuleSettings } from '@/data/module-settings'
+import { useModules } from '@/lib/use-module-settings'
 import {
   ChevronRight,
   Command,
@@ -13,7 +16,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
-import { loadItems } from '@/data/items'
+import { loadItemOptions } from '@/data/items'
 import {
   defaultAdminControlSettings,
   getAdminControlSettings,
@@ -21,21 +24,30 @@ import {
   subscribeAdminControlSettings,
   type AdminControlSettings,
 } from '@/lib/admin-control'
-import { getModuleSettings, saveModuleSettings, subscribeModuleSettings, type ModuleSettings } from '@/lib/module-settings'
+import { saveModuleSettings, type ModuleSettings } from '@/lib/module-settings'
 
 export const Route = createFileRoute('/settings')({
   component: SettingsPage,
 })
 
 function SettingsPage() {
-  const [modules, setModules] = useState<ModuleSettings>(() => getModuleSettings())
+  const modules = useModules()
+  const queryClient = useQueryClient()
+  const updateModulesMutation = useMutation({
+    mutationFn: updateSharedModuleSettings,
+    onSuccess: (saved) => {
+      queryClient.setQueryData(MODULE_SETTINGS_QUERY_KEY, saved)
+      saveModuleSettings(saved)
+      toast.success('Module settings saved for everyone')
+    },
+    onError: () => toast.error('Could not save module settings'),
+  })
   const [admin, setAdmin] = useState<AdminControlSettings>(() => getAdminControlSettings())
 
-  useEffect(() => subscribeModuleSettings(setModules), [])
   useEffect(() => subscribeAdminControlSettings(setAdmin), [])
 
   function updateModules(next: Partial<ModuleSettings>) {
-    saveModuleSettings({ ...getModuleSettings(), ...next })
+    updateModulesMutation.mutate({ purchaseEnabled: modules.purchaseEnabled, castingEnabled: modules.castingEnabled, ...next })
   }
   function updateAdmin(next: Partial<AdminControlSettings>) {
     saveAdminControlSettings({ ...getAdminControlSettings(), ...next })
@@ -49,11 +61,19 @@ function SettingsPage() {
           Settings
         </h2>
         <p className="mt-1 max-w-prose text-xs text-slate-500">
-          Preferences save instantly on this computer. Nothing here deletes data — module switches only hide pages.
+          Module switches are shared across devices. Turning a module off hides its pages; its data stays intact.
         </p>
       </section>
 
       <SettingsCard icon={Flame} title="Modules" description="Hide or show optional parts of the app.">
+        {modules.error && <p role="alert" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">Could not load shared module settings. Both modules remain visible. Retry after checking PocketBase and its pending migration.</p>}
+        <SettingRow
+          icon={SlidersHorizontal}
+          title="Purchase"
+          description="Purchase bills, supplier payments, ledgers, items and reports."
+          enabled={modules.purchaseEnabled}
+          onChange={(next) => updateModules({ purchaseEnabled: next })}
+        />
         <SettingRow
           icon={Flame}
           title="Casting"
@@ -61,6 +81,7 @@ function SettingsPage() {
           enabled={modules.castingEnabled}
           onChange={(next) => updateModules({ castingEnabled: next })}
         />
+        {updateModulesMutation.isPending && <p className="text-xs text-slate-500">Saving for everyone…</p>}
       </SettingsCard>
 
       <BillEntryCard defaultItemName={admin.defaultBillItemName} onChange={(name) => updateAdmin({ defaultBillItemName: name })} />
@@ -91,7 +112,7 @@ function BillEntryCard({ defaultItemName, onChange }: { defaultItemName: string;
   // Same key AND queryFn as control-room: ['items-options'] caches full item
   // records, so consumers must map to names (mixing shapes here once rendered
   // an object as a React child — the infamous "object with keys" crash).
-  const itemsQuery = useQuery({ queryKey: ['items-options'], queryFn: loadItems })
+  const itemsQuery = useQuery({ queryKey: ['items-options'], queryFn: loadItemOptions })
   const known = (itemsQuery.data ?? []).map((item) => item.name).filter(Boolean)
   const options = known.includes(defaultItemName) || !defaultItemName ? known : [defaultItemName, ...known]
 

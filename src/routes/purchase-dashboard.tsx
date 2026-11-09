@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, Plus } from 'lucide-react'
+import { AlertCircle, Package, Plus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import {
   purchaseBillsQueryOptions,
@@ -355,13 +355,13 @@ function PurchaseDashboardPage() {
     <div className="flex flex-wrap items-center gap-2">
       <Link
         to="/new-purchase-bill"
-        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+        className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
       >
         <Plus size={14} /> New Purchase Bill
       </Link>
       <Link
         to="/new-supplier-payment"
-        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-700"
       >
         <Plus size={14} /> Record Payment
       </Link>
@@ -372,6 +372,9 @@ function PurchaseDashboardPage() {
     <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {/* 1. Dashboard Toolbar (Cards Rule compliant) */}
       <DashboardToolbar
+        title="Purchase Dashboard"
+        subtitle="Scrap procurement, payables & settlements"
+        icon={<Package size={15} />}
         mode={mode}
         onModeChange={setMode}
         selectedMonth={selectedMonth}
@@ -425,6 +428,7 @@ function PurchaseDashboardPage() {
           label="We Owe"
           hint="Balance now"
           value={formatCompactInr(positions.totalPayablePaise / 100)}
+          tone="blue"
           subtext={`K: ${formatCompactInr(positions.kachaPayablePaise / 100)} · G: ${formatCompactInr(positions.gstPayablePaise / 100)}`}
           href="/ledger?tab=suppliers"
         />
@@ -470,7 +474,7 @@ function PurchaseDashboardPage() {
             data={monthlyTimeline}
             xKey="month"
             series={[
-              { dataKey: 'bought', name: 'Bought', color: '#1e293b', type: 'bar' },
+              { dataKey: 'bought', name: 'Bought', color: '#2563eb', type: 'bar' },
               { dataKey: 'paid', name: 'Paid Out', color: '#059669', type: 'bar' },
             ]}
             height={240}
@@ -487,7 +491,7 @@ function PurchaseDashboardPage() {
             <Link
               to="/ledger"
               search={{ tab: 'suppliers' }}
-              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               Supplier ledger →
             </Link>
@@ -499,9 +503,9 @@ function PurchaseDashboardPage() {
               formatValue={(val) => formatCompactInr(val)}
               emptyText="No supplier payables pending."
             />
-            <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs text-slate-600">
+            <div className="rounded-lg border border-blue-100 bg-blue-50/30 p-3 text-xs text-slate-700">
               <span className="font-semibold text-slate-900">Total We Owe: </span>
-              <strong className="font-mono text-slate-900 font-bold">
+              <strong className="font-mono text-blue-700 font-bold">
                 {formatInrInteger(positions.totalPayablePaise / 100)}
               </strong>
               <span className="ml-2 text-slate-500">
@@ -525,7 +529,7 @@ function PurchaseDashboardPage() {
         >
           <RankedBars
             rows={whatWeBuyRows}
-            tone="slate"
+            tone="blue"
             emptyText="No scrap procurement recorded this period."
           />
         </SectionCard>
@@ -538,7 +542,7 @@ function PurchaseDashboardPage() {
               <select
                 value={activeRateItem}
                 onChange={(e) => setSelectedItemForRate(e.target.value)}
-                className="rounded border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-700 focus:outline-none"
+                className="rounded border border-blue-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-400/40"
               >
                 {distinctItemNames.map((name) => (
                   <option key={name} value={name}>
@@ -562,7 +566,7 @@ function PurchaseDashboardPage() {
               data={rateVsMarketTimeline}
               xKey="date"
               series={[
-                { dataKey: 'ourRate', name: 'Our Rate (₹)', color: '#1e293b', type: 'line' },
+                { dataKey: 'ourRate', name: 'Our Rate (₹)', color: '#2563eb', type: 'line' },
                 { dataKey: 'marketRate', name: 'Vilaity Mkt (₹)', color: '#94a3b8', type: 'line', dashed: true },
               ]}
               height={220}
@@ -583,7 +587,7 @@ function PurchaseDashboardPage() {
             <Link
               to="/ledger"
               search={{ tab: 'suppliers' }}
-              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               All suppliers →
             </Link>
@@ -591,7 +595,7 @@ function PurchaseDashboardPage() {
         >
           <RankedBars
             rows={payNextRows}
-            tone="slate"
+            tone="blue"
             emptyText="No supplier balance due."
           />
         </SectionCard>
@@ -623,12 +627,12 @@ function PurchaseDashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                   {bardanSummary.bills.slice(0, 5).map((b) => (
-                    <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
+                    <tr key={b.id} className="hover:bg-blue-50/40 transition-colors">
                       <td className="py-2.5 font-mono">
                         <Link
                           to="/purchase-bills/$billId"
                           params={{ billId: b.id }}
-                          className="hover:underline text-slate-900 font-semibold"
+                          className="hover:underline hover:text-blue-700 text-slate-900 font-semibold transition"
                         >
                           {b.inNo}
                         </Link>
@@ -652,7 +656,7 @@ function PurchaseDashboardPage() {
                         <Link
                           to="/purchase-bills/$billId"
                           params={{ billId: b.id }}
-                          className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                          className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
                         >
                           Add Bardan
                         </Link>
@@ -674,7 +678,7 @@ function PurchaseDashboardPage() {
           actions={
             <Link
               to="/purchase-bills"
-              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               All bills →
             </Link>
@@ -696,12 +700,12 @@ function PurchaseDashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                   {recentBills.map((b) => (
-                    <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
+                    <tr key={b.id} className="hover:bg-blue-50/40 transition-colors">
                       <td className="py-2.5 font-mono">
                         <Link
                           to="/purchase-bills/$billId"
                           params={{ billId: b.id }}
-                          className="hover:underline text-slate-900 font-semibold"
+                          className="hover:underline hover:text-blue-700 text-slate-900 font-semibold transition"
                         >
                           {b.inNo}
                         </Link>
@@ -730,7 +734,7 @@ function PurchaseDashboardPage() {
           actions={
             <Link
               to="/supplier-payments"
-              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               All payments →
             </Link>
@@ -751,7 +755,7 @@ function PurchaseDashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                   {recentPayments.map((p) => (
-                    <tr key={p.id} className="hover:bg-slate-50/80 transition-colors">
+                    <tr key={p.id} className="hover:bg-blue-50/40 transition-colors">
                       <td className="py-2.5 text-slate-500 font-mono text-[11px]">{formatFullDate(p.date)}</td>
                       <td className="py-2.5 truncate max-w-[130px] text-slate-900 font-medium" title={p.supplierName}>
                         {p.supplierName}

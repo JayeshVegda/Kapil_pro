@@ -70,13 +70,13 @@ export type TransactionsContext = {
   payments: PaymentSnapshot[]
 }
 
-export async function loadTransactionsContext(): Promise<TransactionsContext> {
+export async function loadTransactionsContext(fromDate = ''): Promise<TransactionsContext> {
   const [customersRaw, itemsRaw, billsRaw, billItemsRaw, paymentsRaw] = await Promise.all([
     pb.collection('customers').getFullList({ sort: 'company_name,name' }),
     pb.collection('items').getFullList({ sort: 'name' }),
-    pb.collection('bills').getFullList({ sort: '-date,-bill_no' }),
+    pb.collection('bills').getFullList({ sort: '-date,-bill_no', ...(fromDate ? { filter: `date >= "${fromDate}"` } : {}) }),
     pb.collection('bill_items').getFullList(),
-    pb.collection('payments').getFullList({ sort: '-date' }),
+    pb.collection('payments').getFullList({ sort: '-date', ...(fromDate ? { filter: `date >= "${fromDate}"` } : {}) }),
   ])
 
   const customerDisplayById = new Map(

@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, AlertTriangle, ArrowRight, Award, Plus } from 'lucide-react'
+import { AlertCircle, AlertTriangle, ArrowRight, Award, Flame, Plus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { pb } from '@/data/pocketbase'
 import { loadCastingSessions } from '@/data/casting'
@@ -209,7 +209,7 @@ function CastingDashboardPage() {
     <div className="flex flex-wrap items-center gap-2">
       <Link
         to="/casting/new-session"
-        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+        className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
       >
         <Plus size={14} /> New Casting Session
       </Link>
@@ -220,6 +220,9 @@ function CastingDashboardPage() {
     <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {/* 1. Dashboard Toolbar (Cards Rule compliant) */}
       <DashboardToolbar
+        title="Casting Dashboard"
+        subtitle="Foundry heats, production output & recovery"
+        icon={<Flame size={15} />}
         mode={mode}
         onModeChange={setMode}
         selectedMonth={selectedMonth}
@@ -343,7 +346,7 @@ function CastingDashboardPage() {
             xKey="month"
             height={230}
             series={[
-              { dataKey: 'wireOutKg', name: 'Wire Out (kg)', type: 'bar', color: '#0f172a' },
+              { dataKey: 'wireOutKg', name: 'Wire Out (kg)', type: 'bar', color: '#2563eb' },
               { dataKey: 'metalInKg', name: 'Metal Input (kg)', type: 'bar', color: '#059669' },
             ]}
             formatY={(v) => formatCompactKg(v)}
@@ -362,7 +365,7 @@ function CastingDashboardPage() {
             xKey="month"
             height={230}
             series={[
-              { dataKey: 'loadedCostKg', name: 'Loaded Cost (₹)', type: 'line', color: '#0f172a' },
+              { dataKey: 'loadedCostKg', name: 'Loaded Cost (₹)', type: 'line', color: '#2563eb' },
               { dataKey: 'marketRate', name: 'Vilaity Mkt (₹)', type: 'line', dashed: true, color: '#94a3b8' },
             ]}
             formatY={(v) => `₹${v}`}
@@ -485,7 +488,7 @@ function CastingDashboardPage() {
         actions={
           <Link
             to="/casting/log"
-            className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 hover:text-slate-900"
+            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 transition hover:text-blue-800"
           >
             View all in Casting Logs <ArrowRight size={13} />
           </Link>
@@ -510,7 +513,7 @@ function CastingDashboardPage() {
                 const wastage = s.totalMel || s.wastage || 0
                 const inputKg = s.totalInputKg || 0
                 return (
-                  <tr key={s.id} className="hover:bg-slate-50/60">
+                  <tr key={s.id} className="hover:bg-blue-50/40 transition-colors">
                     <td className="whitespace-nowrap px-3 py-2.5 font-medium text-slate-900">
                       {formatFullDate(s.date)}
                     </td>
@@ -532,7 +535,7 @@ function CastingDashboardPage() {
                     <td className="px-3 py-2.5 text-right">
                       <Link
                         to="/casting/log"
-                        className="font-medium text-slate-600 hover:text-slate-900 hover:underline"
+                        className="font-medium text-blue-600 transition hover:text-blue-800 hover:underline"
                       >
                         Details
                       </Link>

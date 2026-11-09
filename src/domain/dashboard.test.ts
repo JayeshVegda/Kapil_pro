@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { buildReceivableRiskRows } from '@/domain/dashboard'
+import { buildReceivableRiskRows, fiscalYearStart } from '@/domain/dashboard'
+
+describe('dashboard period', () => {
+  it('starts the fiscal year in April across the year boundary', () => {
+    expect(fiscalYearStart('2026-03')).toBe('2025-04-01')
+    expect(fiscalYearStart('2026-04')).toBe('2026-04-01')
+    expect(fiscalYearStart('2026-11')).toBe('2026-04-01')
+  })
+})
 
 describe('dashboard receivable risk', () => {
   it('sorts pending parties by oldest bill first and assigns risk levels', () => {

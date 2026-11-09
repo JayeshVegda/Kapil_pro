@@ -1,10 +1,11 @@
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, Command, Database, Lock, RefreshCw, RotateCcw, Save, Shield, Unlock, Upload } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { pb } from '@/data/pocketbase'
 import { loadDataHealthIssues } from '@/data/data-health'
-import { loadItems } from '@/data/items'
+import { loadItemOptions } from '@/data/items'
 import {
   defaultAdminControlSettings,
   getAdminControlSettings,
@@ -42,8 +43,7 @@ const routeOptions = [
   { label: 'Print Bill', path: '/print-bill' },
 ]
 
-const inputClass =
-  'h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100'
+const inputClass = `${baseInputClass} h-10`
 
 function ControlRoomPage() {
   const queryClient = useQueryClient()
@@ -55,7 +55,7 @@ function ControlRoomPage() {
   const [commandInput, setCommandInput] = useState('b mukesh 1')
   const [commandContext, setCommandContext] = useState<CommandRouteContext>('neutral')
 
-  const itemsQuery = useQuery({ queryKey: ['items-options'], queryFn: loadItems })
+  const itemsQuery = useQuery({ queryKey: ['items-options'], queryFn: loadItemOptions })
   const customersQuery = useQuery({
     queryKey: ['control-room-customers'],
     queryFn: async () => {
@@ -234,7 +234,7 @@ function ControlRoomPage() {
                 <input className={inputClass} value={commandInput} onChange={(event) => setCommandInput(event.target.value)} />
               </Field>
             </div>
-            <pre className={`mt-3 max-h-64 overflow-auto rounded-md p-3 text-xs ${commandPreview.ok ? 'bg-emerald-50 text-emerald-900' : 'bg-red-50 text-red-800'}`}>
+            <pre className={`mt-3 max-h-64 overflow-auto rounded-md p-3 text-xs ${commandPreview.ok ? 'bg-emerald-50 text-emerald-900' : 'bg-rose-50 text-rose-800'}`}>
               {JSON.stringify(commandPreview, null, 2)}
             </pre>
           </div>
@@ -308,7 +308,7 @@ function ControlRoomPage() {
 
       <Panel title="System Snapshot" icon={<CheckCircle2 size={16} />}>
         {systemQuery.isLoading && <p className="text-sm text-slate-500">Loading system snapshot...</p>}
-        {systemQuery.isError && <p className="text-sm text-red-600">Unable to load system snapshot.</p>}
+        {systemQuery.isError && <p className="text-sm text-rose-600">Unable to load system snapshot.</p>}
         {systemQuery.data && (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <SnapshotBlock title="Collections" lines={[
@@ -396,13 +396,13 @@ function Metric({ label, value, tone = 'slate' }: { label: string; value: string
     tone === 'green'
       ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
       : tone === 'red'
-        ? 'border-red-200 bg-red-50 text-red-800'
+        ? 'border-rose-200 bg-rose-50 text-rose-800'
         : tone === 'amber'
           ? 'border-amber-200 bg-amber-50 text-amber-800'
           : 'border-slate-200 bg-white text-slate-800'
   return (
     <div className={`rounded-md border px-3 py-2 ${toneClass}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] opacity-70">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] opacity-70">{label}</p>
       <p className="mt-1 font-mono text-lg font-semibold">{value}</p>
     </div>
   )

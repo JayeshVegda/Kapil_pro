@@ -15,10 +15,9 @@ import {
 import { useMemo, useRef, useState } from 'react'
 import {
   BillChitty,
-  type BillChittyData,
-  type ChittyPaymentRow,
-  type ChittyStatus,
+  BillChittyKpiBox,
 } from '@/components/suppliers/bill-chitty'
+import { buildPurchaseBillPresentation } from '@/components/suppliers/purchase-bill-presentation'
 import {
   AddBardanModal,
   CancelBillModal,
@@ -27,16 +26,13 @@ import {
 } from '@/components/suppliers/bill-modals'
 import { pb } from '@/data/pocketbase'
 import {
-  bundleToSettlementInput,
-  loadPurchaseBill,
   loadPurchaseBillIdByInNo,
-  loadSupplierBundle,
   loadVilaityHistory,
 } from '@/data/suppliers'
-import { CREDIT_KINDS, computeSupplierSettlement, type SupplierSettlementBillRow } from '@/domain/supplier-settlement'
-import { extractUserNote, parseBagsAtReceiptKg } from '@/domain/supplier-purchases'
+import { purchaseBillQueryOptions, supplierContextQueryOptions } from '@/data/purchase-queries'
 import { milliToRateText } from '@/domain/supplier-units'
 import { formatFullDate } from '@/lib/date'
+import { toUserMessage } from '@/app/errors'
 import { exportNodeAsJpg } from '@/lib/image-export'
 
 export const Route = createFileRoute('/purchase-bills/$billId')({
@@ -67,29 +63,22 @@ function PurchaseBillChittyPage() {
   })
   const billId = idQuery.data
 
-  const billQuery = useQuery({
-    queryKey: ['purchase-bill', billId],
-    queryFn: () => loadPurchaseBill(billId!),
-    enabled: Boolean(billId),
-  })
+  const billQuery = useQuery(purchaseBillQueryOptions(billId ?? ''))
   const billDetail = billQuery.data
   const bill = billDetail?.bill
   const supplierId = bill?.supplierId ?? ''
 
-  const bundleQuery = useQuery({
-    queryKey: ['supplier-bundle', supplierId],
-    queryFn: () => loadSupplierBundle(supplierId),
-    enabled: Boolean(supplierId),
-  })
+  const bundleQuery = useQuery(supplierContextQueryOptions(supplierId))
   const vilaityQuery = useQuery({ queryKey: ['vilaity-history'], queryFn: loadVilaityHistory })
 
-  const bundle = bundleQuery.data
+  const bundle = bundleQuery.data?.bundle
 
-  const settlementBillRow = useMemo<SupplierSettlementBillRow | null>(() => {
-    if (!bundle) return null
-    const settlement = computeSupplierSettlement(bundleToSettlementInput(bundle))
-    return [...settlement.pools.kacha.bills, ...settlement.pools.gst.bills].find((row) => row.billId === billId) ?? null
-  }, [bundle, billId])
+  const presentation = useMemo(
+    () => buildPurchaseBillPresentation(billDetail, bundleQuery.data),
+    [billDetail, bundleQuery.data],
+  )
+  const settlementBillRow = presentation?.settlementBillRow
+  const chittyData = presentation?.chitty
 
   const orderedBills = useMemo(() => {
     if (!bundle) return []
@@ -103,54 +92,6 @@ function PurchaseBillChittyPage() {
       nextBill: index >= 0 && index < orderedBills.length - 1 ? orderedBills[index + 1] : null,
     }
   }, [orderedBills, billId])
-
-  const paidRows = useMemo<ChittyPaymentRow[]>(() => {
-    if (!bundle || !billDetail) return []
-    const paidPaise = settlementBillRow?.paidPaise ?? 0
-    const paymentsById = new Map(bundle.payments.map((p) => [p.id, p]))
-    const rows: ChittyPaymentRow[] = []
-    let pinSum = 0
-    for (const pin of billDetail.allocations) {
-      if (pin.amountPaise <= 0) continue
-      const payment = paymentsById.get(pin.paymentId)
-      if (payment?.cancelled) continue
-      rows.push({ date: payment?.date ?? '', mode: payment?.mode ?? '', reference: payment?.reference ?? '', amountPaise: pin.amountPaise, pinned: true })
-      pinSum += pin.amountPaise
-    }
-    let remaining = Math.max(0, paidPaise - pinSum)
-    const credits = bundle.payments
-      .filter((p) => CREDIT_KINDS.has(p.kind) && !p.cancelled)
-      .sort((a, b) => `${a.date}|${a.created}|${a.id}`.localeCompare(`${b.date}|${b.created}|${b.id}`))
-    for (const payment of credits) {
-      if (remaining <= 0) break
-      const applied = Math.min(payment.amountPaise, remaining)
-      if (applied <= 0) continue
-      rows.push({ date: payment.date, mode: payment.mode, reference: payment.reference, amountPaise: applied, pinned: false })
-      remaining -= applied
-    }
-    return rows
-  }, [bundle, billDetail, settlementBillRow])
-
-  const chittyData = useMemo<BillChittyData | null>(() => {
-    if (!billDetail || !bundle) return null
-    return {
-      inNo: billDetail.bill.inNo,
-      date: billDetail.bill.date,
-      supplierName: bundle.supplier.companyName,
-      pool: billDetail.bill.pool,
-      taxMode: billDetail.bill.taxMode,
-      gstRateBp: billDetail.bill.gstRateBp,
-      supplierBillNo: billDetail.bill.supplierBillNo,
-      vehicleNo: billDetail.bill.vehicleNo,
-      lines: billDetail.lines.map((l) => ({ itemName: l.itemName, weightG: l.weightG, rateMilli: l.rateMilli, amountPaise: l.amountPaise })),
-      adjustments: billDetail.adjustments.map((a) => ({ type: a.type, amountPaise: a.amountPaise, note: a.note })),
-      bardan: billDetail.bardan.map((b) => ({ bardanG: b.bardanG, rateMilli: b.rateMilli, method: b.method, creditPaise: b.creditPaise, cashAmountPaise: b.cashAmountPaise, date: b.date, note: b.note })),
-      paidRows,
-      cancelled: billDetail.bill.cancelled,
-      cancelReason: billDetail.bill.cancelReason,
-      statusOverride: (settlementBillRow?.status as ChittyStatus | undefined) ?? undefined,
-    }
-  }, [billDetail, bundle, paidRows, settlementBillRow])
 
   const vilaityMatch = bill ? findVilaityForDate(vilaityQuery.data ?? [], bill.date) : null
   const duePaise = settlementBillRow?.duePaise ?? 0
@@ -174,12 +115,15 @@ function PurchaseBillChittyPage() {
   if (idQuery.isError || (idQuery.data === null && !idQuery.isLoading)) {
     return (
       <div className="p-6">
-        <p className="text-sm text-rose-600">No purchase bill found for IN no “{inNo}”.</p>
+        <p className="text-sm text-rose-600">{idQuery.isError ? toUserMessage(idQuery.error) : `No purchase bill found for IN no “${inNo}”.`}</p>
         <Link to="/purchase-bills" className="mt-2 inline-flex items-center gap-1 text-sm text-blue-700 underline">
           <ArrowLeft size={14} /> Back to purchase bills
         </Link>
       </div>
     )
+  }
+  if (billQuery.isError || bundleQuery.isError) {
+    return <div className="p-6 text-sm text-rose-600" role="alert">{toUserMessage(billQuery.error ?? bundleQuery.error)}<button type="button" className="ml-3 underline" onClick={() => { void billQuery.refetch(); void bundleQuery.refetch() }}>Retry</button></div>
   }
   if (!billDetail || !chittyData || !bill) {
     return (
@@ -187,8 +131,8 @@ function PurchaseBillChittyPage() {
     )
   }
 
-  const bagNote = parseBagsAtReceiptKg(bill.privateNote)
-  const userNote = extractUserNote(bill.privateNote)
+  const bagNote = presentation?.bagsAtReceiptKg
+  const userNote = presentation?.userNote
 
   return (
     <div className="min-h-full pb-10">
@@ -229,25 +173,28 @@ function PurchaseBillChittyPage() {
           </>
         )}
         <span className="ml-auto inline-flex items-center gap-1.5">
-          <ActionButton icon={<Download size={13} />} label={isExporting ? 'Exporting…' : 'JPG'} onClick={() => void handleExportJpg()} />
+          <ActionButton icon={<Download size={13} />} label={isExporting ? 'Exporting...' : 'JPG'} onClick={() => void handleExportJpg()} />
           <ActionButton icon={<Printer size={13} />} label="Print" onClick={() => window.print()} />
         </span>
       </div>
 
-      <div className="px-3 pt-3">
+      <div className="px-3 pt-3 space-y-3 max-w-4xl mx-auto">
+        {/* Dedicated Standalone Intelligence & KPI Card */}
+        <BillChittyKpiBox data={chittyData} duePaise={duePaise} />
+
         {/* Chitty — the only exported/printed region */}
         <div ref={exportRef} className="rounded-xl bg-slate-100/60 p-2 sm:p-4">
           <BillChitty data={chittyData} mode="view" />
         </div>
 
         {/* Internal-only strip — never printed or exported */}
-        <div className="mx-auto mt-3 w-full max-w-[840px] rounded-lg border border-amber-200/70 bg-amber-50/50 px-4 py-2.5 text-xs text-amber-900">
+        <div className="mx-auto mt-3 w-full max-w-[560px] rounded-lg border border-amber-200/70 bg-amber-50/50 px-4 py-2.5 text-xs text-amber-900">
           <p className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-amber-800">
             <Lock size={12} /> Internal only (not printed)
           </p>
           <div className="mt-1.5 grid grid-cols-1 gap-2 sm:grid-cols-3">
             <div>
-              <p className="text-[10px] font-semibold uppercase text-amber-700/80">Premium vs Vilaity</p>
+              <p className="text-[11px] font-semibold uppercase text-amber-700/80">Premium vs Vilaity</p>
               {vilaityMatch ? (
                 <div className="mt-0.5 space-y-0.5 font-mono">
                   {chittyData.lines.map((line, index) => {
@@ -261,21 +208,21 @@ function PurchaseBillChittyPage() {
                       </p>
                     )
                   })}
-                  <p className="text-[10px] text-amber-600">vilaity ₹{milliToRateText(vilaityMatch.vilaityMilli)}/kg · {formatFullDate(vilaityMatch.date)}</p>
+                  <p className="text-[11px] text-amber-600">vilaity ₹{milliToRateText(vilaityMatch.vilaityMilli)}/kg · {formatFullDate(vilaityMatch.date)}</p>
                 </div>
               ) : (
                 <p className="mt-0.5 text-amber-700">No vilaity rate on record.</p>
               )}
             </div>
             <div>
-              <p className="text-[10px] font-semibold uppercase text-amber-700/80">Private Note</p>
+              <p className="text-[11px] font-semibold uppercase text-amber-700/80">Private Note</p>
               <p className="mt-0.5 whitespace-pre-wrap text-amber-900">{userNote || <span className="italic text-amber-700/70">None</span>}</p>
               {bagNote != null && (
-                <p className="mt-1 text-[10px] text-blue-800">Receipt bags memo: <span className="font-mono font-bold">{bagNote} kg</span></p>
+                <p className="mt-1 text-[11px] text-blue-800">Receipt bags memo: <span className="font-mono font-bold">{bagNote} kg</span></p>
               )}
             </div>
             <div>
-              <p className="text-[10px] font-semibold uppercase text-amber-700/80">Photos</p>
+              <p className="text-[11px] font-semibold uppercase text-amber-700/80">Photos</p>
               {bill.photos.length > 0 ? (
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   {bill.photos.slice(0, 6).map((photo) => {
@@ -285,7 +232,7 @@ function PurchaseBillChittyPage() {
                     )
                     return (
                       <a key={photo} href={url} target="_blank" rel="noopener noreferrer" className="block h-14 w-14 overflow-hidden rounded border border-amber-200 bg-white">
-                        <img src={url} alt="Bill attachment" className="h-full w-full object-cover" />
+                        <img src={url} alt="Bill attachment" width={56} height={56} className="h-full w-full object-cover" />
                       </a>
                     )
                   })}
@@ -342,6 +289,7 @@ function ActionButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
+      aria-label={label}
       className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
         danger
           ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'

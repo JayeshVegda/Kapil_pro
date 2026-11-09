@@ -1,10 +1,17 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
+import { createFileRoute, redirect, Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp, Edit3, Phone, Plus, Search, X } from 'lucide-react'
+import { Phone } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { DateInput } from '@/components/ui/date-input'
+import {
+  PartyManagerShell,
+  type PartyManagerColumn,
+  type PartyManagerFilterGroup,
+  type PartyManagerSort,
+} from '@/components/ledger/party-manager-shell'
 import { createCustomer, loadCustomersWithLedgerContext, toggleCustomerActive, updateCustomer } from '@/data/customers'
 import type { CustomerLedgerSummary } from '@/domain/customers'
 import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
@@ -13,10 +20,8 @@ import { formatFullDate } from '@/lib/date'
 import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/customers')({
-  component: CustomersPage,
+  beforeLoad: () => { throw redirect({ to: '/ledger', search: { tab: 'customers' } }) },
 })
-
-const CUSTOMER_QUERY_KEY = ['customers-ledger'] as const
 
 const customerSchema = z.object({
   companyName: z.string().trim().min(1, 'Company name is required'),
@@ -62,25 +67,123 @@ const defaultCustomerFormState = (): CustomerFormState => ({
   custType: '',
 })
 
-type BalanceFilter = 'all' | 'due' | 'advance' | 'inactive'
-type TypeFilter = 'all' | 'unset' | 'gas' | 'electronic' | 'both'
-type SortKey = 'name' | 'outstanding' | 'billed' | 'activity'
+const CUSTOMER_QUERY_KEY = ['customers-ledger'] as const
 
-const FILTER_LABEL: Record<BalanceFilter, string> = {
-  all: 'All',
-  due: 'With due',
-  advance: 'Advance',
-  inactive: 'Inactive',
+function lastActivityOf(row: CustomerLedgerSummary) {
+  return row.lastBillDate > row.lastPaymentDate ? row.lastBillDate : row.lastPaymentDate
 }
 
-function CustomersPage() {
+// Adapter data for PartyManagerShell: sales floats, sorted name-ascending
+// first-highlight by overdue money. Adapters only shape display; the shell
+// owns no financial logic.
+const CUSTOMER_SORTS: Array<PartyManagerSort<CustomerLedgerSummary>> = [
+  { key: 'outstanding', label: 'Highest outstanding', compare: (a, b) => b.netBalance - a.netBalance },
+  { key: 'name', label: 'Name A-Z', compare: (a, b) => formatCustomerDisplayName(a.customer.companyName, a.customer.name).localeCompare(formatCustomerDisplayName(b.customer.companyName, b.customer.name)) },
+  { key: 'billed', label: 'Highest billed', compare: (a, b) => b.billedTotal - a.billedTotal },
+  { key: 'activity', label: 'Recent activity', compare: (a, b) => lastActivityOf(b).localeCompare(lastActivityOf(a)) },
+]
+
+const CUSTOMER_FILTER_GROUPS: Array<PartyManagerFilterGroup<CustomerLedgerSummary>> = [
+  {
+    key: 'balance',
+    ariaLabel: 'Balance filter',
+    options: [
+      { key: 'all', label: 'All', matches: () => true },
+      { key: 'due', label: 'With due', matches: (row) => row.dueAmount > 0 },
+      { key: 'advance', label: 'Advance', matches: (row) => row.advanceAmount > 0 },
+    ],
+  },
+  {
+    key: 'type',
+    ariaLabel: 'Customer type filter',
+    options: [
+      { key: 'all', label: 'All types', matches: () => true },
+      { key: 'unset', label: 'Type not set', matches: (row) => (row.customer.custType ?? '') === '' },
+      { key: 'gas', label: 'Gas parts', matches: (row) => (row.customer.custType ?? '') === 'gas' },
+      { key: 'electronic', label: 'Electronic parts', matches: (row) => (row.customer.custType ?? '') === 'electronic' },
+      { key: 'both', label: 'Both', matches: (row) => (row.customer.custType ?? '') === 'both' },
+    ],
+  },
+]
+
+const CUSTOMER_COLUMNS: Array<PartyManagerColumn<CustomerLedgerSummary>> = [
+  {
+    key: 'party',
+    header: 'Party',
+    render: (row) => (
+      <div>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/ledger"
+            search={{ customerId: row.customer.id, focus: '' }}
+            className="font-medium text-blue-700 hover:text-blue-800 hover:underline"
+          >
+            {formatCustomerDisplayName(row.customer.companyName, row.customer.name)}
+          </Link>
+          {row.customer.custType && (
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-slate-500">
+              {formatCustomerTypeLabel(row.customer.custType)}
+            </span>
+          )}
+        </div>
+        <p className="mt-0.5 text-xs text-slate-500">
+          {row.customer.name}
+          {!row.customer.active && <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-slate-500">Inactive</span>}
+        </p>
+      </div>
+    ),
+  },
+  {
+    key: 'contact',
+    header: 'Contact',
+    render: (row) =>
+      row.customer.phone ? (
+        <a href={`tel:${row.customer.phone}`} className="inline-flex items-center gap-1 text-xs text-slate-600 hover:text-blue-700">
+          <Phone size={11} /> {row.customer.phone}
+        </a>
+      ) : (
+        <span className="text-xs text-slate-300">—</span>
+      ),
+  },
+  {
+    key: 'billed',
+    header: 'Billed',
+    align: 'right',
+    render: (row) => <span className="font-mono tabular-nums text-slate-700">{formatInrInteger(row.billedTotal)}</span>,
+  },
+  {
+    key: 'paid',
+    header: 'Paid',
+    align: 'right',
+    render: (row) => <span className="font-mono tabular-nums text-slate-700">{formatInrInteger(row.paidTotal)}</span>,
+  },
+  {
+    key: 'outstanding',
+    header: 'Outstanding',
+    align: 'right',
+    render: (row) =>
+      row.dueAmount > 0 ? (
+        <span className="font-mono font-semibold tabular-nums text-rose-600">{formatInrInteger(row.dueAmount)}</span>
+      ) : row.advanceAmount > 0 ? (
+        <span className="font-mono font-semibold tabular-nums text-emerald-600">-{formatInrInteger(row.advanceAmount)}</span>
+      ) : (
+        <span className="text-xs font-medium text-slate-400">Clear</span>
+      ),
+  },
+  {
+    key: 'activity',
+    header: 'Last activity',
+    align: 'right',
+    render: (row) => {
+      const lastActivity = lastActivityOf(row)
+      return <span className="text-xs text-slate-500">{lastActivity ? formatFullDate(lastActivity) : '—'}</span>
+    },
+  },
+]
+
+export function CustomersPage() {
   const queryClient = useQueryClient()
   const [statusText, setStatusText] = useState('')
-  const [query, setQuery] = useState('')
-  const [balanceFilter, setBalanceFilter] = useState<BalanceFilter>('all')
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
-  const [sortKey, setSortKey] = useState<SortKey>('outstanding')
-  const [sortDesc, setSortDesc] = useState(true)
   const [dialogState, setDialogState] = useState<CustomerFormState | null>(null)
 
   const customersQuery = useQuery({
@@ -99,34 +202,6 @@ function CustomersPage() {
       totalDue: withDue.reduce((sum, row) => sum + row.dueAmount, 0),
     }
   }, [allRows])
-
-  const visibleRows = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    let rows = allRows
-    if (needle) {
-      rows = rows.filter((row) =>
-        `${row.customer.companyName} ${row.customer.name} ${row.customer.phone}`.toLowerCase().includes(needle),
-      )
-    }
-    if (balanceFilter === 'due') rows = rows.filter((row) => row.dueAmount > 0)
-    else if (balanceFilter === 'advance') rows = rows.filter((row) => row.advanceAmount > 0)
-    else if (balanceFilter === 'inactive') rows = rows.filter((row) => !row.customer.active)
-    if (typeFilter !== 'all') {
-      rows = rows.filter((row) => (row.customer.custType ?? '') === (typeFilter === 'unset' ? '' : typeFilter))
-    }
-
-    const direction = sortDesc ? -1 : 1
-    const lastActivity = (row: CustomerLedgerSummary) =>
-      row.lastBillDate > row.lastPaymentDate ? row.lastBillDate : row.lastPaymentDate
-    return [...rows].sort((a, b) => {
-      if (sortKey === 'name') {
-        return direction * formatCustomerDisplayName(a.customer.companyName, a.customer.name).localeCompare(formatCustomerDisplayName(b.customer.companyName, b.customer.name))
-      }
-      if (sortKey === 'billed') return direction * (a.billedTotal - b.billedTotal)
-      if (sortKey === 'activity') return direction * lastActivity(a).localeCompare(lastActivity(b))
-      return direction * (a.netBalance - b.netBalance)
-    })
-  }, [allRows, balanceFilter, typeFilter, query, sortDesc, sortKey])
 
   const createOrUpdateMutation = useMutation({
     mutationFn: async (formState: CustomerFormState) => {
@@ -156,12 +231,12 @@ function CustomersPage() {
       return formState.id
     },
     onSuccess: async (updatedId) => {
-      setStatusText(updatedId ? 'Customer updated.' : 'Customer created.')
       setDialogState(null)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: CUSTOMER_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
       ])
+      setStatusText(updatedId ? 'Customer updated.' : 'Customer created.')
     },
     onError: (error) => setStatusText(toUserMessage(error)),
   })
@@ -171,6 +246,7 @@ function CustomersPage() {
       await toggleCustomerActive(id, nextActive)
     },
     onSuccess: async () => {
+      setStatusText('')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: CUSTOMER_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY }),
@@ -196,189 +272,40 @@ function CustomersPage() {
     })
   }
 
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) {
-      setSortDesc((current) => !current)
-    } else {
-      setSortKey(key)
-      setSortDesc(key !== 'name')
-    }
-  }
-
   return (
-    <div className="w-full space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
-      {/* Toolbar: KPIs, search, filters, add */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-sm font-semibold text-slate-900">Customers</h2>
-            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">{kpis.total}</span>
-            <span className="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-rose-100">
-              {kpis.withDue} owe {formatInrInteger(kpis.totalDue)}
-            </span>
-          </div>
-          <button
-            type="button"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
-            onClick={() => setDialogState(defaultCustomerFormState())}
-          >
-            <Plus size={14} /> Add Customer
-          </button>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <div className="relative w-full sm:w-72">
-            <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="search"
-              placeholder="Search name, company, or phone..."
-              className="h-9 w-full rounded-md border border-slate-300 bg-white pl-8 pr-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
-          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
-            {(Object.keys(FILTER_LABEL) as BalanceFilter[]).map((key) => (
-              <button
-                key={key}
-                type="button"
-                className={`rounded-md px-3 py-1.5 transition ${balanceFilter === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                onClick={() => setBalanceFilter(key)}
-              >
-                {FILTER_LABEL[key]}
-              </button>
-            ))}
-          </div>
-          <select
-            aria-label="Filter by customer type"
-            className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            value={typeFilter}
-            onChange={(event) => setTypeFilter(event.target.value as TypeFilter)}
-          >
-            <option value="all">All types</option>
-            <option value="unset">Not set</option>
-            <option value="gas">Gas Parts</option>
-            <option value="electronic">Electronic Parts</option>
-            <option value="both">Both</option>
-          </select>
-          {statusText && <p className="text-xs text-slate-500" role="status" aria-live="polite">{statusText}</p>}
-        </div>
-      </section>
-
-      {/* Customer table */}
-      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        {customersQuery.isLoading && <p className="p-5 text-sm text-slate-500">Loading customers...</p>}
-        {customersQuery.isError && <p className="p-5 text-sm text-red-600">Unable to load customers.</p>}
-        {!customersQuery.isLoading && !customersQuery.isError && (
-          <div className="overflow-x-auto no-scrollbar">
-            <table className="w-full min-w-[880px] text-sm">
-              <thead className="bg-slate-50">
-                <tr className="text-left text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
-                  <SortableTh label="Party" active={sortKey === 'name'} desc={sortDesc} onClick={() => toggleSort('name')} />
-                  <th className="px-3 py-2.5">Contact</th>
-                  <SortableTh label="Billed" active={sortKey === 'billed'} desc={sortDesc} onClick={() => toggleSort('billed')} align="right" />
-                  <th className="px-3 py-2.5 text-right">Paid</th>
-                  <SortableTh label="Outstanding" active={sortKey === 'outstanding'} desc={sortDesc} onClick={() => toggleSort('outstanding')} align="right" />
-                  <SortableTh label="Last activity" active={sortKey === 'activity'} desc={sortDesc} onClick={() => toggleSort('activity')} align="right" />
-                  <th className="px-3 py-2.5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {visibleRows.length === 0 && (
-                  <tr>
-                    <td className="px-3 py-10 text-center text-sm text-slate-500" colSpan={7}>
-                      {allRows.length === 0 ? (
-                        <>
-                          <p className="font-medium text-slate-700">No customers yet.</p>
-                          <button
-                            type="button"
-                            className="mt-3 inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                            onClick={() => setDialogState(defaultCustomerFormState())}
-                          >
-                            <Plus size={14} /> Add your first customer
-                          </button>
-                        </>
-                      ) : (
-                        <>No customer matches this search or filter.</>
-                      )}
-                    </td>
-                  </tr>
-                )}
-                {visibleRows.map((row) => {
-                  const lastActivity = row.lastBillDate > row.lastPaymentDate ? row.lastBillDate : row.lastPaymentDate
-                  return (
-                    <tr key={row.customer.id} className={`transition hover:bg-slate-50/60 ${row.customer.active ? '' : 'opacity-60'}`}>
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <Link
-                            to="/ledger"
-                            search={{ customerId: row.customer.id, focus: '' }}
-                            className="font-medium text-blue-700 hover:text-blue-800 hover:underline"
-                          >
-                            {formatCustomerDisplayName(row.customer.companyName, row.customer.name)}
-                          </Link>
-                          {row.customer.custType && (
-                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">
-                              {formatCustomerTypeLabel(row.customer.custType)}
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-0.5 text-xs text-slate-500">
-                          {row.customer.name}
-                          {!row.customer.active && <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">Inactive</span>}
-                        </p>
-                      </td>
-                      <td className="px-3 py-2.5 text-xs text-slate-600">
-                        {row.customer.phone ? (
-                          <a href={`tel:${row.customer.phone}`} className="inline-flex items-center gap-1 hover:text-blue-700">
-                            <Phone size={11} /> {row.customer.phone}
-                          </a>
-                        ) : (
-                          <span className="text-slate-300">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-700">{formatInrInteger(row.billedTotal)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-700">{formatInrInteger(row.paidTotal)}</td>
-                      <td className="px-3 py-2.5 text-right">
-                        {row.dueAmount > 0 ? (
-                          <span className="font-mono font-semibold tabular-nums text-rose-600">{formatInrInteger(row.dueAmount)}</span>
-                        ) : row.advanceAmount > 0 ? (
-                          <span className="font-mono font-semibold tabular-nums text-emerald-600">-{formatInrInteger(row.advanceAmount)}</span>
-                        ) : (
-                          <span className="text-xs font-medium text-slate-400">Clear</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-right text-xs text-slate-500">{lastActivity ? formatFullDate(lastActivity) : '—'}</td>
-                      <td className="px-3 py-2.5 text-right">
-                        <div className="inline-flex gap-1.5">
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                            onClick={() => openEditDialog(row)}
-                          >
-                            <Edit3 size={12} /> Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                            onClick={() => void toggleMutation.mutateAsync({ id: row.customer.id, nextActive: !row.customer.active })}
-                          >
-                            {row.customer.active ? 'Deactivate' : 'Activate'}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
-          Showing {visibleRows.length} of {allRows.length} customers
-        </p>
-      </section>
-
+    <>
+      <PartyManagerShell
+        objectLabel="customer"
+      pluralLabel="customers"
+      heading="Customers"
+      rows={allRows}
+      isLoading={customersQuery.isLoading}
+      isError={customersQuery.isError}
+      getRowId={(row) => row.customer.id}
+      searchText={(row) => `${row.customer.companyName} ${row.customer.name} ${row.customer.phone}`}
+      isActive={(row) => row.customer.active}
+      sorts={CUSTOMER_SORTS}
+      filterGroups={CUSTOMER_FILTER_GROUPS}
+      columns={CUSTOMER_COLUMNS}
+      createLabel="Add customer"
+      onCreateClick={() => setDialogState(defaultCustomerFormState())}
+      onEdit={openEditDialog}
+      onToggleActive={(row, nextActive) => {
+        toggleMutation.mutate({ id: row.customer.id, nextActive })
+      }}
+      togglePending={toggleMutation.isPending}
+      tableMinWidth="880px"
+      headingBadges={
+        <>
+          <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">{kpis.total}</span>
+          <span className="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-rose-100">
+            {kpis.withDue} owe {formatInrInteger(kpis.totalDue)}
+          </span>
+        </>
+      }
+      statusLine={statusText ? <p role="status" aria-live="polite" className="text-xs text-slate-500">{statusText}</p> : null}
+      emptyHint="No customers yet. Use “Add customer” above to create the first one."
+      />
       {dialogState && (
         <CustomerDialog
           formState={dialogState}
@@ -388,34 +315,7 @@ function CustomersPage() {
           onSave={() => void createOrUpdateMutation.mutateAsync(dialogState)}
         />
       )}
-    </div>
-  )
-}
-
-function SortableTh({
-  label,
-  active,
-  desc,
-  onClick,
-  align = 'left',
-}: {
-  label: string
-  active: boolean
-  desc: boolean
-  onClick: () => void
-  align?: 'left' | 'right'
-}) {
-  return (
-    <th className={`px-3 py-2.5 ${align === 'right' ? 'text-right' : 'text-left'}`} aria-sort={active ? (desc ? 'descending' : 'ascending') : 'none'}>
-      <button
-        type="button"
-        className={`inline-flex items-center gap-1 uppercase tracking-[0.06em] transition hover:text-slate-800 ${active ? 'text-slate-900' : ''}`}
-        onClick={onClick}
-      >
-        {label}
-        {active && (desc ? <ArrowDown size={11} /> : <ArrowUp size={11} />)}
-      </button>
-    </th>
+    </>
   )
 }
 
@@ -446,7 +346,7 @@ function CustomerDialog({
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
           <h3 className="text-base font-semibold text-slate-900">{formState.id ? 'Edit Customer' : 'Add Customer'}</h3>
           <button type="button" aria-label="Close" className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100" onClick={onClose}>
-            <X size={16} />
+            ✕
           </button>
         </div>
 
@@ -523,5 +423,4 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-const inputClass =
-  'h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100'
+const inputClass = `${baseInputClass} h-10`

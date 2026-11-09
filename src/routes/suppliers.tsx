@@ -1,65 +1,52 @@
+import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { Truck } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { invalidateAfterSupplierPurchaseWrite } from '@/app/query-invalidation'
-import { SupplierFormModal, type SupplierFormState } from '@/components/suppliers/supplier-form-modal'
-import { PurchasesShell } from '@/components/suppliers/purchases-shell'
-import { RowMenu } from '@/components/ui/row-menu'
+import { SupplierLedgerDetail } from '@/routes/supplier-ledger.$supplierId'
 import {
-  deactivateSupplier,
-  createSupplier,
-  loadSuppliersSummary,
-  reactivateSupplier,
-  updateSupplier,
-  type SupplierSummary,
-  type SupplierUpsertInput,
-} from '@/data/suppliers'
+  SupplierFormModal,
+  emptySupplierFormState,
+  type SupplierFormState,
+} from '@/components/suppliers/supplier-form-modal'
+import { SupplierListPanel } from '@/components/suppliers/supplier-list-panel'
+import { SupplierPartiesManager } from '@/components/suppliers/supplier-parties-manager'
+import { EmptyState } from '@/components/ui/empty-state'
+import { createSupplier, type SupplierUpsertInput } from '@/data/suppliers'
+import { suppliersSummaryQueryOptions } from '@/data/purchase-queries'
 import { rupeesToPaise } from '@/domain/supplier-units'
-import { formatPaiseInr } from '@/lib/inr-format'
 
 const searchSchema = z.object({
+  supplierId: z.string().optional(),
+  // Legacy param written by other purchase pages' rail; treated as an alias.
   supplier: z.string().optional(),
+  tab: z.enum(['ledger', 'bills', 'payments']).optional(),
+  focus: z.string().optional(),
 })
 
 export const Route = createFileRoute('/suppliers')({
   validateSearch: searchSchema,
-  component: SuppliersRoute,
+  beforeLoad: ({ search }) => { throw redirect({ to: '/ledger', search: { tab: 'suppliers', supplierId: search.supplierId || search.supplier, focus: search.focus, supplierSection: search.tab } }) },
 })
 
-function SuppliersRoute() {
-  return (
-    <PurchasesShell>
-      <SuppliersPage />
-    </PurchasesShell>
-  )
-}
-
-function SuppliersPage() {
+/**
+ * Supplier hub in the Party Ledger pattern: master list on the left
+ * (scannable dues), full supplier account on the right, selection driven by
+ * the `?supplierId=` URL param so deep links keep working.
+ */
+export function SuppliersPage({ search, manageOpen }: { search: { supplierId?: string; supplier?: string; supplierSection?: 'ledger' | 'bills' | 'payments'; highlightBill?: string; focus?: string }; manageOpen?: boolean }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { supplier: supplierFilter } = Route.useSearch()
-  const [dialogState, setDialogState] = useState<SupplierFormState | null>(null)
-  const [errorText, setErrorText] = useState('')
-  const [statusText, setStatusText] = useState('')
+  const [newSupplierOpen, setNewSupplierOpen] = useState(false)
+  const [newSupplierFormState, setNewSupplierFormState] = useState<SupplierFormState>(emptySupplierFormState)
+  const [newSupplierError, setNewSupplierError] = useState('')
 
-  const suppliersQuery = useQuery({ queryKey: ['suppliers'], queryFn: loadSuppliersSummary })
-  const allRows = suppliersQuery.data ?? []
-  const rows = supplierFilter ? allRows.filter((r) => r.supplier.id === supplierFilter) : allRows
+  const suppliersQuery = useQuery(suppliersSummaryQueryOptions())
+  const rows = suppliersQuery.data ?? []
 
-  const totals = rows.reduce(
-    (acc, r) => ({
-      kachaDuePaise: acc.kachaDuePaise + r.kachaDuePaise,
-      gstDuePaise: acc.gstDuePaise + r.gstDuePaise,
-      advancePaise: acc.advancePaise + r.advancePaise,
-      outstandingPaise: acc.outstandingPaise + r.outstandingPaise,
-      bardanPending: acc.bardanPending + r.bardanPendingCount,
-    }),
-    { kachaDuePaise: 0, gstDuePaise: 0, advancePaise: 0, outstandingPaise: 0, bardanPending: 0 },
-  )
-
-  const createOrUpdateMutation = useMutation({
+  const createSupplierMutation = useMutation({
     mutationFn: async (formState: SupplierFormState) => {
       const kachaSign = formState.openingKachaDirection === 'we_owe' ? 1 : -1
       const gstSign = formState.openingGstDirection === 'we_owe' ? 1 : -1
@@ -75,155 +62,94 @@ function SuppliersPage() {
         openingBalanceDate: formState.openingBalanceDate,
         active: formState.active,
       }
-      if (formState.id) await updateSupplier(formState.id, payload)
-      else await createSupplier(payload)
-      return formState.id
+      return (await createSupplier(payload)).id
     },
-    onSuccess: async (id) => {
-      setDialogState(null)
-      setStatusText(id ? 'Supplier saved.' : 'Supplier saved.')
-      await invalidateAfterSupplierPurchaseWrite(queryClient, id ?? undefined)
+    onSuccess: async (createdId) => {
+      setNewSupplierOpen(false)
+      await invalidateAfterSupplierPurchaseWrite(queryClient)
+      if (createdId) selectSupplier(createdId)
     },
-    onError: (error) => setErrorText(toUserMessage(error)),
+    onError: (error) => setNewSupplierError(toUserMessage(error)),
   })
 
-  const toggleActiveMutation = useMutation({
-    mutationFn: async ({ id, active }: { id: string; active: boolean }) => {
-      if (active) await reactivateSupplier(id)
-      else await deactivateSupplier(id)
-      return id
-    },
-    onSuccess: async (id) => {
-      setStatusText('Supplier status updated.')
-      await invalidateAfterSupplierPurchaseWrite(queryClient, id)
-    },
-    onError: (error) => setStatusText(toUserMessage(error)),
-  })
+  // `supplierId` is canonical; historic links may still carry `?supplier=` (and
+  // the ledger master list honors `focus=overdue` by picking the largest due).
+  const requestedId = search.supplierId || search.supplier || ''
+  const selectedId = useMemo(() => {
+    if (requestedId && rows.some((row) => row.supplier.id === requestedId)) return requestedId
+    if (!requestedId && search.focus === 'overdue') {
+      const mostOverdue = [...rows]
+        .filter((row) => row.supplier.active && row.outstandingPaise > 0)
+        .sort((a, b) => b.outstandingPaise - a.outstandingPaise)[0]
+      return mostOverdue?.supplier.id ?? ''
+    }
+    return requestedId
+  }, [requestedId, rows, search.focus])
 
-  function openEditDialog(row: SupplierSummary) {
-    const s = row.supplier
-    setDialogState({
-      id: s.id,
-      companyName: s.companyName,
-      contactName: s.contactName ?? '',
-      phone: s.phone ?? '',
-      gstNo: s.gstNo ?? '',
-      city: s.city ?? '',
-      notes: s.notes ?? '',
-      openingKachaRupees: Math.abs(s.openingKachaPaise) / 100,
-      openingKachaDirection: s.openingKachaPaise >= 0 ? 'we_owe' : 'they_owe',
-      openingGstRupees: Math.abs(s.openingGstPaise) / 100,
-      openingGstDirection: s.openingGstPaise >= 0 ? 'we_owe' : 'they_owe',
-      openingBalanceDate: s.openingBalanceDate ?? '',
-      active: s.active,
+  useEffect(() => {
+    if (!requestedId) return
+    if (rows.length > 0 && !rows.some((row) => row.supplier.id === requestedId)) {
+      // Stale id after a delete/merge — drop it instead of rendering a blank detail.
+      void navigate({ to: '/ledger', search: { tab: 'suppliers' } })
+    }
+  }, [requestedId, rows, navigate])
+
+  const selectSupplier = (supplierId: string) => {
+    void navigate({
+      to: '/ledger',
+      search: { tab: 'suppliers', supplierId },
     })
   }
 
+  const changeTab = (tab: 'ledger' | 'bills' | 'payments') => {
+    void navigate({
+      to: '/ledger',
+      search: { tab: 'suppliers', supplierId: selectedId || undefined, supplierSection: tab === 'ledger' ? undefined : tab },
+    })
+  }
+
+  // Shared party manager mode: the LedgerPage toolbar toggles supplier
+  // management just like the customers tab, replacing the rail/workspace view.
+  if (manageOpen) return <SupplierPartiesManager />
+
   return (
-    <div className="min-w-0 px-3 pb-10 pt-2 sm:px-4">
-      {/* Slim totals strip (top bar owns the title) */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-        <span>
-          <span className="font-semibold text-slate-700">{rows.length}</span> supplier{rows.length === 1 ? '' : 's'}
-          {' · '}Total owed <span className="font-semibold text-rose-600">{formatPaiseInr(totals.outstandingPaise)}</span>
-          {totals.bardanPending > 0 && (
-            <>
-              {' · '}Bardan pending <span className="font-semibold text-amber-600">{totals.bardanPending}</span>
-            </>
-          )}
-        </span>
-        {statusText && <span className="text-slate-400">{statusText}</span>}
-      </div>
+    <div className="grid grid-cols-1 gap-3 px-3 pb-6 pt-3 sm:px-4 lg:px-6 xl:grid-cols-[290px_minmax(0,1fr)] xl:gap-4">
+      <SupplierListPanel rows={rows} selectedId={selectedId} onSelect={selectSupplier} onCreateClick={() => {
+        setNewSupplierError('')
+        setNewSupplierFormState(emptySupplierFormState)
+        setNewSupplierOpen(true)
+      }} />
 
-      {/* Dense table */}
-      <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200">
-        <table className="w-full min-w-[880px] border-collapse text-[13px]">
-          <thead className="sticky top-0 z-10 bg-slate-50">
-            <tr className="text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-              <th className="sticky left-0 z-10 bg-slate-50 px-2 py-1.5">Company</th>
-              <th className="px-2 py-1.5">City / Contact</th>
-              <th className="px-2 py-1.5 text-right">Kacha</th>
-              <th className="px-2 py-1.5 text-right">GST</th>
-              <th className="px-2 py-1.5 text-right">Advance</th>
-              <th className="px-2 py-1.5 text-right">Net Owed</th>
-              <th className="px-2 py-1.5 text-right">Last Activity</th>
-              <th className="w-8 px-2 py-1.5" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.map((row) => {
-              const s = row.supplier
-              return (
-                <tr
-                  key={s.id}
-                  onClick={() => void navigate({ to: '/supplier-ledger/$supplierId', params: { supplierId: s.id } })}
-                  className={`h-[34px] cursor-pointer transition hover:bg-slate-50 ${s.active ? '' : 'opacity-60'}`}
-                >
-                  <td className="sticky left-0 z-10 bg-white px-2 py-0 shadow-[1px_0_0_0_#e2e8f0]">
-                    <span className="flex items-center gap-1.5">
-                      {row.bardanPendingCount > 0 && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />}
-                      <span className="font-medium text-slate-800">{s.companyName}</span>
-                      {!s.active && <span className="rounded bg-slate-100 px-1 py-0.5 text-[9px] font-semibold uppercase text-slate-500">Inactive</span>}
-                    </span>
-                  </td>
-                  <td className="px-2 py-0 text-slate-600">
-                    {s.city || '—'}
-                    {s.phone ? <span className="text-slate-400"> · {s.phone}</span> : null}
-                  </td>
-                  <td className="px-2 py-0 text-right font-mono tabular-nums text-amber-700">{row.kachaDuePaise > 0 ? formatPaiseInr(row.kachaDuePaise) : <span className="text-slate-300">—</span>}</td>
-                  <td className="px-2 py-0 text-right font-mono tabular-nums text-blue-700">{row.gstDuePaise > 0 ? formatPaiseInr(row.gstDuePaise) : <span className="text-slate-300">—</span>}</td>
-                  <td className="px-2 py-0 text-right font-mono tabular-nums text-emerald-700">{row.advancePaise > 0 ? formatPaiseInr(row.advancePaise) : <span className="text-slate-300">—</span>}</td>
-                  <td className="px-2 py-0 text-right font-mono font-semibold tabular-nums text-rose-600">{row.outstandingPaise > 0 ? formatPaiseInr(row.outstandingPaise) : <span className="font-normal text-slate-400">Nil</span>}</td>
-                  <td className="px-2 py-0 text-right font-mono text-xs tabular-nums text-slate-500">{row.lastActivityDate ? row.lastActivityDate.slice(5) : '—'}</td>
-                  <td className="px-2 py-0 text-right" onClick={(e) => e.stopPropagation()}>
-                    <RowMenu
-                      label="Supplier actions"
-                      items={[
-                        { label: 'Edit', onSelect: () => openEditDialog(row) },
-                        {
-                          label: s.active ? 'Deactivate' : 'Reactivate',
-                          danger: s.active,
-                          onSelect: () => toggleActiveMutation.mutate({ id: s.id, active: !s.active }),
-                        },
-                      ]}
-                    />
-                  </td>
-                </tr>
-              )
-            })}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-xs italic text-slate-400">
-                  {suppliersQuery.isLoading ? 'Loading…' : supplierFilter ? 'This supplier is filtered out — clear it in the rail.' : 'No suppliers yet. Add one from the rail.'}
-                </td>
-              </tr>
-            )}
-          </tbody>
-          {rows.length > 0 && (
-            <tfoot>
-              <tr className="border-t border-slate-200 bg-slate-50/80 font-semibold text-slate-700">
-                <td className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-slate-500" colSpan={2}>Totals ({rows.length})</td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{formatPaiseInr(totals.kachaDuePaise)}</td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{formatPaiseInr(totals.gstDuePaise)}</td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{formatPaiseInr(totals.advancePaise)}</td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{formatPaiseInr(totals.outstandingPaise)}</td>
-                <td colSpan={2} />
-              </tr>
-            </tfoot>
-          )}
-        </table>
-      </div>
+      {selectedId ? (
+        <div className="min-w-0">
+          <SupplierLedgerDetail
+            supplierId={selectedId}
+            tab={search.supplierSection}
+            highlightBill={search.highlightBill}
+            showBack={false}
+            onTabChange={changeTab}
+          />
+        </div>
+      ) : (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6">
+          <EmptyState
+            icon={Truck}
+            title="Select a supplier"
+            hint="Pick a supplier from the list to see its ledger, bills, payments, and bardan. The list sorts by highest due first."
+          />
+        </div>
+      )}
 
-      {dialogState && (
+      {newSupplierOpen && (
         <SupplierFormModal
-          formState={dialogState}
-          isSaving={createOrUpdateMutation.isPending}
-          errorText={errorText}
-          onChange={setDialogState}
-          onClose={() => setDialogState(null)}
+          formState={newSupplierFormState}
+          isSaving={createSupplierMutation.isPending}
+          errorText={newSupplierError}
+          onChange={setNewSupplierFormState}
+          onClose={() => setNewSupplierOpen(false)}
           onSave={() => {
-            setErrorText('')
-            createOrUpdateMutation.mutate(dialogState)
+            setNewSupplierError('')
+            createSupplierMutation.mutate(newSupplierFormState)
           }}
         />
       )}

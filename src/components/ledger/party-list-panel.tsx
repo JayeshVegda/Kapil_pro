@@ -46,11 +46,11 @@ export function PartyListPanel({
         {kpis && (
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-lg bg-slate-50 px-2.5 py-2 ring-1 ring-slate-200">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Receivable</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Receivable</p>
               <p className="mt-0.5 truncate font-mono text-sm font-bold text-slate-900">{formatInrInteger(kpis.totalDue)}</p>
             </div>
             <div className="rounded-lg bg-rose-50 px-2.5 py-2 ring-1 ring-rose-100">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-rose-500">Overdue</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-rose-500">Overdue</p>
               <p className="mt-0.5 font-mono text-sm font-bold text-rose-700">{kpis.overdueParties} parties</p>
             </div>
           </div>
@@ -60,7 +60,7 @@ export function PartyListPanel({
           <input
             type="search"
             placeholder="Search party..."
-            className="h-9 w-full rounded-md border border-slate-300 bg-white pl-8 pr-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            className="h-9 w-full rounded-md border border-slate-300 bg-white pl-8 pr-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -97,7 +97,7 @@ export function PartyListPanel({
                   {row.customerName}
                 </span>
                 {isOverdue && (
-                  <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold text-rose-600">
+                  <span className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-semibold text-rose-600">
                     <AlertTriangle size={10} /> {row.overdueDays}d overdue
                   </span>
                 )}

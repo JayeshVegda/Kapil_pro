@@ -1,4 +1,5 @@
 import { applyBasisPoints, sumPaise } from './supplier-units'
+import { removePurchaseLineMemoMetadata } from './purchase-receipt-memos'
 
 /**
  * Purchase bill net computation. PURE — no DB access.
@@ -92,7 +93,7 @@ export function parseBagsAtReceiptKg(rawNote?: string): number | null {
 
 export function extractUserNote(rawNote?: string): string {
   if (!rawNote) return ''
-  return rawNote.replace(/\[bags_at_receipt:[\d.]+\]\n?/, '').trim()
+  return removePurchaseLineMemoMetadata(rawNote).replace(/\[bags_at_receipt:[\d.]+\]\n?/g, '').trim()
 }
 
 export type BillLineInput = { amountPaise: number }

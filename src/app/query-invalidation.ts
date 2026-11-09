@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { DASHBOARD_QUERY_KEY } from '@/domain/dashboard'
+import { PURCHASE_READ_MODEL_QUERY_KEY } from '@/data/purchase-queries'
 
 export async function invalidateAfterPaymentWrite(queryClient: QueryClient, customerId: string) {
   await Promise.all([
@@ -18,16 +19,17 @@ export async function invalidateAfterPaymentWrite(queryClient: QueryClient, cust
 
 export async function invalidateAfterSupplierPurchaseWrite(queryClient: QueryClient, supplierId?: string) {
   const promises: Promise<unknown>[] = [
+    queryClient.invalidateQueries({ queryKey: PURCHASE_READ_MODEL_QUERY_KEY }),
     queryClient.invalidateQueries({ queryKey: ['suppliers'] }),
     queryClient.invalidateQueries({ queryKey: ['suppliers-list'] }),
     queryClient.invalidateQueries({ queryKey: ['purchase-items'] }),
     queryClient.invalidateQueries({ queryKey: ['purchase-bills'] }),
     queryClient.invalidateQueries({ queryKey: ['supplier-payments'] }),
     queryClient.invalidateQueries({ queryKey: ['purchase-bill'] }),
-    // The new-bill screen keys its side panel and edit prefill separately from
-    // ['supplier-bundle', id]; both must be dropped or stale dues leak into them.
+    // Keep legacy keys fresh for callers outside the shared purchase snapshot.
     queryClient.invalidateQueries({ queryKey: ['supplier-bundle-context'] }),
     queryClient.invalidateQueries({ queryKey: ['purchase-bill-edit'] }),
+    queryClient.invalidateQueries({ queryKey: ['purchase-logs-audit'] }),
   ]
   if (supplierId) {
     promises.push(queryClient.invalidateQueries({ queryKey: ['supplier-bundle', supplierId] }))

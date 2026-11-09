@@ -19,6 +19,7 @@ type Props = {
   maxResults?: number
   autoFocus?: boolean
   onSelectionComplete?: () => void
+  inputId?: string
 }
 
 export function SearchableCombobox({
@@ -32,6 +33,7 @@ export function SearchableCombobox({
   maxResults = 25,
   autoFocus = false,
   onSelectionComplete,
+  inputId,
 }: Props) {
   const pickerRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -96,7 +98,8 @@ export function SearchableCombobox({
   return (
     <div ref={pickerRef} className="relative">
       <input
-        ref={inputRef}
+        id={inputId}
+      ref={inputRef}
         className={inputClassName}
         value={query}
         onChange={(event) => {
@@ -165,7 +168,7 @@ export function SearchableCombobox({
               <span className="flex items-center justify-between gap-2">
                 <span className="min-w-0 truncate">{option.name}</span>
                 {option.suffix && (
-                  <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-500">{option.suffix}</span>
+                  <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-slate-500">{option.suffix}</span>
                 )}
               </span>
             </button>

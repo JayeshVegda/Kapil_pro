@@ -20,7 +20,7 @@ export function GasSellingStrip({ items }: { items: Array<GasSalesGroup> }) {
   return (
     <div className="border-b border-slate-200 bg-slate-50/60 px-3 py-2 sm:px-4" data-testid="gas-selling-strip">
       <div className="flex flex-nowrap items-center gap-2 overflow-x-auto">
-        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-400">Gas selling</span>
+        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-400">Gas selling</span>
         {items.map((item) => <ItemChip key={item.key} item={item} />)}
       </div>
     </div>

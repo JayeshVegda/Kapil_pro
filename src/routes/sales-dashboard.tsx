@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, FileSpreadsheet, Plus } from 'lucide-react'
+import { AlertCircle, FileSpreadsheet, Plus, TrendingUp } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useDashboardData } from '@/domain/dashboard'
 import { loadPartyDashboard } from '@/data/ledger'
@@ -297,19 +297,19 @@ export function SalesDashboardPage() {
     <div className="flex flex-wrap items-center gap-2">
       <Link
         to="/new-bill"
-        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+        className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
       >
         <Plus size={14} /> New Sale Bill
       </Link>
       <Link
         to="/new-payment"
-        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-700"
       >
         <Plus size={14} /> Record Payment
       </Link>
       <Link
         to="/export-reports"
-        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-700"
       >
         <FileSpreadsheet size={14} /> Export Statements
       </Link>
@@ -320,6 +320,9 @@ export function SalesDashboardPage() {
     <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {/* 1. Dashboard Toolbar (Cards Rule compliant) */}
       <DashboardToolbar
+        title="Sales Dashboard"
+        subtitle="Revenue, receivables & sales performance"
+        icon={<TrendingUp size={15} />}
         mode={mode}
         onModeChange={setMode}
         selectedMonth={selectedMonth}
@@ -391,7 +394,7 @@ export function SalesDashboardPage() {
           label="Still to Receive"
           hint="Balance now"
           value={formatCompactInr(salesData.kpis.outstanding)}
-          tone={salesData.actionRequired.highRiskParties > 0 ? 'warning' : 'neutral'}
+          tone={salesData.actionRequired.highRiskParties > 0 ? 'warning' : 'blue'}
           subtext={`${salesData.actionRequired.pendingParties} customer balances`}
           href="/ledger?tab=customers"
         />
@@ -410,7 +413,7 @@ export function SalesDashboardPage() {
             data={monthlyTimeline}
             xKey="month"
             series={[
-              { dataKey: 'sales', name: 'Billed', color: '#1e293b', type: 'bar' },
+              { dataKey: 'sales', name: 'Billed', color: '#2563eb', type: 'bar' },
               { dataKey: 'collections', name: 'Collected', color: '#059669', type: 'bar' },
             ]}
             height={240}
@@ -427,7 +430,7 @@ export function SalesDashboardPage() {
             <Link
               to="/ledger"
               search={{ tab: 'customers' }}
-              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               Customer ledger →
             </Link>
@@ -439,12 +442,12 @@ export function SalesDashboardPage() {
               formatValue={(val) => formatCompactInr(val)}
               emptyText="No customer receivables pending."
             />
-            <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs text-slate-600">
+            <div className="rounded-lg border border-blue-100 bg-blue-50/30 p-3 text-xs text-slate-700">
               <span className="font-semibold text-slate-900">Total Outstanding: </span>
-              <strong className="font-mono text-slate-900 font-bold">
+              <strong className="font-mono text-blue-700 font-bold">
                 {formatInrInteger(ageing.totalAmount)}
               </strong>
-              <span className="ml-1 text-slate-400">
+              <span className="ml-1 text-slate-500">
                 across {salesData.actionRequired.pendingParties} parties
               </span>
             </div>
@@ -489,7 +492,7 @@ export function SalesDashboardPage() {
         >
           <RankedBars
             rows={topItemsRows}
-            tone="slate"
+            tone="blue"
             emptyText="No item shipments recorded."
           />
         </SectionCard>
@@ -502,7 +505,7 @@ export function SalesDashboardPage() {
           <Link
             to="/ledger"
             search={{ tab: 'customers' }}
-            className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+            className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
           >
             All debtors →
           </Link>
@@ -510,7 +513,7 @@ export function SalesDashboardPage() {
       >
         <RankedBars
           rows={topCustomersRows}
-          tone="slate"
+          tone="blue"
           emptyText="All customer balances are clear."
         />
       </SectionCard>
@@ -524,7 +527,7 @@ export function SalesDashboardPage() {
             <Link
               to="/transactions"
               search={{ focusKind: '', focusId: '' }}
-              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               All bills →
             </Link>
@@ -545,12 +548,12 @@ export function SalesDashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                   {recentBills.map((b) => (
-                    <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
+                    <tr key={b.id} className="hover:bg-blue-50/40 transition-colors">
                       <td className="py-2.5 font-mono">
                         <Link
                           to="/print-bill"
                           search={{ billId: b.id, billRef: '' }}
-                          className="hover:underline text-slate-900 font-semibold"
+                          className="hover:underline hover:text-blue-700 text-slate-900 font-semibold transition"
                         >
                           #{b.billNo}
                         </Link>
@@ -577,7 +580,7 @@ export function SalesDashboardPage() {
             <Link
               to="/transactions"
               search={{ focusKind: '', focusId: '' }}
-              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
             >
               All receipts →
             </Link>
@@ -598,7 +601,7 @@ export function SalesDashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                   {recentPayments.map((p) => (
-                    <tr key={p.id} className="hover:bg-slate-50/80 transition-colors">
+                    <tr key={p.id} className="hover:bg-blue-50/40 transition-colors">
                       <td className="py-2.5 text-slate-500 font-mono text-[11px]">{formatFullDate(p.businessDate)}</td>
                       <td className="py-2.5 truncate max-w-[140px] text-slate-900 font-medium" title={p.customerName}>
                         {p.customerName}
