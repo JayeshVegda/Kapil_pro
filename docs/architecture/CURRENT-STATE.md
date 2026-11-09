@@ -10,7 +10,7 @@
 
 ### Navigation Rail Layout
 - **Top Level:**
-  - `/`: Main Business Dashboard (month & FY selector, flow KPI summary, latest bills).
+  - `/`: Main Business Dashboard (DashboardToolbar period tabs, Needs Attention operational exception strip, Sales/Purchase/Casting pulse cards side by side, Who to Receive/Pay ranked bars, latest bills).
   - `/drafts`: AI Drafts inbox (review and approve `bill_drafts` and `payment_drafts` staged by Muse).
   - `/ledger`: Unified Party Ledger (two tabs: `Customers` with sales statements and PDF/XLSX export, and `Suppliers` with dual Kacha/GST running balance and JPG export).
 - **Sales Module:**

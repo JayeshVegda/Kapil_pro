@@ -147,6 +147,34 @@ describe('Chart Kit Visuals & Cards Rule', () => {
       expect(result.violations).toHaveLength(0)
     })
 
+    it('validates the Main Dashboard (Step 2) layout complies strictly with the Cards Rule', () => {
+      const mainDashboardLayout = (
+        <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+          <DashboardToolbar mode="month" onModeChange={() => {}} />
+          <SectionCard title="Needs Attention">
+            <span>Nothing needs attention</span>
+          </SectionCard>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <SectionCard title="Sales">Sales content</SectionCard>
+            <SectionCard title="Purchase">Purchase content</SectionCard>
+            <SectionCard title="Casting">Casting content</SectionCard>
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionCard title="Who to Receive From">List</SectionCard>
+            <SectionCard title="Who to Pay Next">List</SectionCard>
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionCard title="Latest Sale Bills">Table</SectionCard>
+            <SectionCard title="Latest Purchase Bills">Table</SectionCard>
+          </div>
+        </div>
+      )
+
+      const result = validateCardsRule(mainDashboardLayout)
+      expect(result.valid).toBe(true)
+      expect(result.violations).toHaveLength(0)
+    })
+
     it('fails the Cards Rule when bare floating elements sit directly on the background', () => {
       const nonConformingDashboard = (
         <div id="dashboard-container" className="space-y-4">

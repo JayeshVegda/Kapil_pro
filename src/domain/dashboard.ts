@@ -36,6 +36,13 @@ export type ThisMonthItemBagsRow = {
   kg: number
 }
 
+export type ThisMonthItemReportRow = {
+  itemName: string
+  quantity: number
+  unit: string
+  amount: number
+}
+
 export type ReceivableRiskRow = {
   customerId: string
   customerName: string
@@ -48,6 +55,9 @@ export type ReceivableRiskRow = {
 export type DashboardData = {
   /** Bill lines in the current calendar month: bags primary, kg for context. */
   thisMonthItemBags: ThisMonthItemBagsRow[]
+  /** All Sale item types, using the quantities and amounts stored on bill lines. */
+  thisMonthItemReport: ThisMonthItemReportRow[]
+  fiscalYearSummary: { sales: number; collection: number }
   itemComparisons: MonthlyItemComparisons
   kpis: {
     outstanding: number
@@ -96,6 +106,23 @@ export type DashboardData = {
   }
   recentBills: DashboardBill[]
   recentPayments: DashboardPayment[]
+  allBills: Array<{
+    id: string
+    date: string
+    customerId: string
+    customerName: string
+    total: number
+    bookNo: number
+    billNo: number
+  }>
+  allPayments: Array<{
+    id: string
+    date: string
+    customerId: string
+    customerName: string
+    amount: number
+    mode: string
+  }>
   actionRequired: {
     pendingAmount: number
     pendingParties: number
@@ -122,6 +149,10 @@ const normalizeBillStatus = (value: unknown): DashboardBill['status'] => {
   return 'Pending'
 }
 const monthKey = (d: string) => toMonthKey(d)
+export function fiscalYearStart(month: string): string {
+  const [year, monthNumber] = month.split('-').map(Number)
+  return `${monthNumber >= 4 ? year : year - 1}-04-01`
+}
 const shiftMonthKey = (key: string, delta: number) => {
   const [yearRaw, monthRaw] = key.split('-').map(Number)
   const date = new Date(yearRaw, monthRaw - 1 + delta, 1)
@@ -162,9 +193,8 @@ export function buildReceivableRiskRows({
     .sort((a, b) => b.dueDays - a.dueDays || b.amount - a.amount || a.customerName.localeCompare(b.customerName))
 }
 
-export async function fetchDashboardData(): Promise<DashboardData> {
+export async function fetchDashboardData(asOfDate = getLocalIsoDate()): Promise<DashboardData> {
   const { billsRaw, billItemsRaw, paymentsRaw, customersRaw, itemsRaw } = await loadDashboardCollections()
-  const asOfDate = getLocalIsoDate()
 
   const itemSumByBill = new Map<string, number>()
   for (const row of billItemsRaw) {
@@ -218,7 +248,12 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     }),
   )
 
-  const nowMonth = monthKey(getLocalIsoDate())
+  const nowMonth = monthKey(asOfDate)
+  const fiscalStart = fiscalYearStart(nowMonth)
+  const fiscalYearSummary = {
+    sales: bills.filter((bill) => bill.businessDate >= fiscalStart).reduce((sum, bill) => sum + bill.total, 0),
+    collection: payments.filter((payment) => payment.businessDate >= fiscalStart).reduce((sum, payment) => sum + payment.amount, 0),
+  }
   const prevMonth = shiftMonthKey(nowMonth, -1)
   const billDateById = new Map<string, string>()
   for (const row of billsRaw) {
@@ -226,6 +261,7 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     if (d <= asOfDate) billDateById.set(String(row.id), d)
   }
   const thisMonthItemAgg = new Map<string, { bags: number; kg: number }>()
+  const thisMonthAllItemAgg = new Map<string, ThisMonthItemReportRow>()
   let allTimeSpindleBags = 0
   let allTimeSpindleKg = 0
   let allTimeTapperPlugBags = 0
@@ -240,6 +276,13 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     const bags = isGas ? num(row.bags) : 0
     const kg = isGas ? num(row.qty) : 0
     const nameLower = name.toLowerCase()
+    if (monthKey(billDate) === nowMonth) {
+      const unit = String(itemMeta?.unit ?? '') || (isGas ? 'kg' : 'piece')
+      const current = thisMonthAllItemAgg.get(name) ?? { itemName: name, quantity: 0, unit, amount: 0 }
+      current.quantity += num(row.qty)
+      current.amount += num(row.amount)
+      thisMonthAllItemAgg.set(name, current)
+    }
     if (nameLower.includes('spindle')) {
       allTimeSpindleBags += bags
       allTimeSpindleKg += kg
@@ -257,6 +300,8 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     .map(([itemName, v]) => ({ itemName, bags: v.bags, kg: v.kg }))
     .sort((a, b) => b.bags - a.bags || b.kg - a.kg)
     .slice(0, 12)
+  const thisMonthItemReport = [...thisMonthAllItemAgg.values()]
+    .sort((a, b) => b.amount - a.amount || a.itemName.localeCompare(b.itemName))
 
   const itemComparisons = buildMonthlyItemComparisons({
     currentBills: billsRaw,
@@ -381,6 +426,8 @@ export async function fetchDashboardData(): Promise<DashboardData> {
 
   return {
     thisMonthItemBags,
+    thisMonthItemReport,
+    fiscalYearSummary,
     itemComparisons,
     kpis: {
       outstanding,
@@ -418,15 +465,32 @@ export async function fetchDashboardData(): Promise<DashboardData> {
     },
     recentBills: bills.sort(compareBusinessDateThenCreatedDesc).slice(0, 8),
     recentPayments: payments.sort(compareBusinessDateThenCreatedDesc).slice(0, 8),
+    allBills: bills.map((b) => ({
+      id: b.id,
+      date: b.businessDate,
+      customerId: b.customerId,
+      customerName: b.customerName,
+      total: b.total,
+      bookNo: b.bookNo,
+      billNo: b.billNo,
+    })),
+    allPayments: payments.map((p) => ({
+      id: p.id,
+      date: p.businessDate,
+      customerId: p.customerId,
+      customerName: p.customerName,
+      amount: p.amount,
+      mode: p.mode,
+    })),
     actionRequired: { pendingAmount, pendingParties, highRiskParties, highestPending: riskRows[0] ?? null, riskRows },
     monthlyTrend,
   }
 }
 
-export function useDashboardData() {
+export function useDashboardData(asOfDate = getLocalIsoDate()) {
   return useQuery({
-    queryKey: DASHBOARD_QUERY_KEY,
-    queryFn: fetchDashboardData,
+    queryKey: [...DASHBOARD_QUERY_KEY, asOfDate],
+    queryFn: () => fetchDashboardData(asOfDate),
     staleTime: 60_000,
     // Disable polling to avoid automatic UI refresh loops.
     refetchInterval: false,

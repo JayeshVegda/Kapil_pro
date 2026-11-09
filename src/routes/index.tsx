@@ -1,587 +1,819 @@
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Activity,
-  Flame,
-  IndianRupee,
-  Receipt,
-  TrendingUp,
-  Users,
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
+  Plus,
 } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
-import { loadCastingSessions } from '@/data/casting'
-import { purchaseBillsQueryOptions, supplierPaymentsQueryOptions, suppliersSummaryQueryOptions } from '@/data/purchase-queries'
-import { buildPurchaseDashboard } from '@/domain/purchase-dashboard'
+import { useMemo, useState } from 'react'
 import { useModuleSettings } from '@/lib/use-module-settings'
-import { fiscalYearStart, useDashboardData } from '@/domain/dashboard'
+import { useDashboardData } from '@/domain/dashboard'
+import { loadCastingSessions } from '@/data/casting'
+import {
+  purchaseBillsQueryOptions,
+  supplierPaymentsQueryOptions,
+  suppliersSummaryQueryOptions,
+} from '@/data/purchase-queries'
+import { computeSupplierPositions } from '@/domain/supplier-settlement'
+import {
+  summarizeCastingSessions,
+  buildMonthlyCastingTrend,
+} from '@/domain/casting-calculations'
+import {
+  buildPeriodRange,
+  previousPeriod,
+  deltaPct,
+  diffDays,
+  type PeriodMode,
+} from '@/domain/period-helpers'
+import { buildAttentionItems } from '@/domain/attention-rules'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
-import { formatInrInteger } from '@/lib/inr-format'
-import { computeAgeingBuckets } from '@/domain/records'
-import { RankedBarList, StatusPill } from '@/components/ui/business-dashboard'
-import { SalesCollectionTrendChart } from '@/components/reports/company-charts'
+import { formatCompactInr, formatCompactKg, formatInrInteger } from '@/lib/inr-format'
+import { DashboardToolbar } from '@/components/ui/dashboard-toolbar'
+import { SectionCard } from '@/components/ui/business-kit'
+import { Panel } from '@/components/ui/panel'
+import { DeltaChip } from '@/components/charts/delta-chip'
+import { Sparkline } from '@/components/charts/sparkline'
+import { RankedBars, type RankedBarRow } from '@/components/charts/ranked-bars'
+import { countPendingDrafts } from '@/data/bill-drafts'
+import { countPendingPaymentDrafts } from '@/data/payment-drafts'
+import { pb } from '@/data/pocketbase'
+import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/')({
   component: DashboardPage,
 })
 
-function DashboardPage() {
-  const navigate = useNavigate()
+export function DashboardPage() {
   const today = useMemo(() => getLocalIsoDate(), [])
-  const [selectedMonth, setSelectedMonth] = useState(today.slice(0, 7))
-  const [period, setPeriod] = useState<'month' | 'fy'>('month')
-  const asOfDate = useMemo(() => selectedMonth === today.slice(0, 7) ? today : `${selectedMonth}-${String(new Date(Number(selectedMonth.slice(0, 4)), Number(selectedMonth.slice(5, 7)), 0).getDate()).padStart(2, '0')}`, [selectedMonth, today])
-  const previousMonth = useMemo(() => { const [year, month] = selectedMonth.split('-').map(Number); const date = new Date(year, month - 2, 1); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` }, [selectedMonth])
-  const fiscalStart = useMemo(() => fiscalYearStart(selectedMonth), [selectedMonth])
-  const periodFrom = period === 'fy' ? fiscalStart : `${selectedMonth}-01`
-  const { data, isPending, isError, error } = useDashboardData(asOfDate)
+  const [mode, setMode] = useState<PeriodMode>('month')
+  const [selectedMonth, setSelectedMonth] = useState<string>(today.slice(0, 7))
 
-  const { castingEnabled, purchaseEnabled } = useModuleSettings()
-  const purchaseBillsQuery = useQuery({ ...purchaseBillsQueryOptions(), enabled: purchaseEnabled })
-  const purchasePaymentsQuery = useQuery({ ...supplierPaymentsQueryOptions(), enabled: purchaseEnabled })
-  const supplierSummariesQuery = useQuery({ ...suppliersSummaryQueryOptions(), enabled: purchaseEnabled })
-  const purchaseStats = useMemo(() => buildPurchaseDashboard({
-    bills: (purchaseBillsQuery.data ?? []).filter((bill) => bill.date >= periodFrom && bill.date <= asOfDate),
-    payments: (purchasePaymentsQuery.data ?? []).filter((payment) => payment.date >= periodFrom && payment.date <= asOfDate),
-    summaries: supplierSummariesQuery.data ?? [], today: asOfDate,
-  }), [purchaseBillsQuery.data, purchasePaymentsQuery.data, supplierSummariesQuery.data, periodFrom, asOfDate])
-  const previousPurchaseStats = useMemo(() => buildPurchaseDashboard({
-    bills: (purchaseBillsQuery.data ?? []).filter((bill) => bill.date.startsWith(previousMonth)),
-    payments: (purchasePaymentsQuery.data ?? []).filter((payment) => payment.date.startsWith(previousMonth)),
-    summaries: [], today: asOfDate,
-  }), [purchaseBillsQuery.data, purchasePaymentsQuery.data, previousMonth, asOfDate])
-  const payNext = useMemo(() => [...(supplierSummariesQuery.data ?? [])]
-    .filter((row) => row.outstandingPaise > 0)
-    .sort((a, b) => b.outstandingPaise - a.outstandingPaise)
-    .slice(0, 4), [supplierSummariesQuery.data])
-  const latestPurchaseBills = useMemo(() => [...(purchaseBillsQuery.data ?? [])]
-    .filter((bill) => bill.date <= asOfDate && !bill.cancelled)
-    .sort((a, b) => `${b.date}|${b.created}|${b.id}`.localeCompare(`${a.date}|${a.created}|${a.id}`))
-    .slice(0, 5), [purchaseBillsQuery.data, asOfDate])
+  // 1. Period ranges (fair comparison rule: same days)
+  const currentRange = useMemo(
+    () => buildPeriodRange(mode, selectedMonth, today),
+    [mode, selectedMonth, today],
+  )
+  const prevRange = useMemo(() => previousPeriod(currentRange), [currentRange])
 
+  // 2. Module settings
+  const { purchaseEnabled, castingEnabled } = useModuleSettings()
+
+  // 3. Sales full history & queries
+  const salesQuery = useDashboardData(today)
+
+  // 4. Purchase queries
+  const purchaseBillsQuery = useQuery({
+    ...purchaseBillsQueryOptions(),
+    enabled: purchaseEnabled,
+  })
+  const purchasePaymentsQuery = useQuery({
+    ...supplierPaymentsQueryOptions(),
+    enabled: purchaseEnabled,
+  })
+  const supplierSummariesQuery = useQuery({
+    ...suppliersSummaryQueryOptions(),
+    enabled: purchaseEnabled,
+  })
+
+  // 5. Casting queries
   const castingSessionsQuery = useQuery({
-    queryKey: ['casting-sessions', periodFrom, previousMonth, asOfDate],
-    queryFn: () => loadCastingSessions({ from: `${previousMonth}-01` < periodFrom ? `${previousMonth}-01` : periodFrom, to: asOfDate }),
-    // Skipping the query when casting is off also saves a PocketBase round trip.
+    queryKey: ['casting-sessions-all', today],
+    queryFn: () => loadCastingSessions(),
     enabled: castingEnabled,
   })
 
-  const castingStats = useMemo(() => {
-    const list = castingSessionsQuery.data ?? []
-    let previousWireOut = 0
-    let previousInputKg = 0
-
-    let monthInputKg = 0
-    let monthWireOut = 0
-    let monthInputCost = 0
-    let monthOutputCost = 0
-    let monthSessions = 0
-    let latestCost = 0
-    let latestDate = ''
-
-    for (const session of list) {
-      if (session.date >= periodFrom && session.date <= asOfDate) {
-        monthInputKg += session.totalInputKg
-        monthWireOut += session.totalWireOut
-        monthInputCost += session.totalInputCost
-        monthOutputCost += session.finalProductCostPerKg * session.totalWireOut
-        monthSessions++
+  // 6. Drafts & Rates for Attention rules
+  const billDraftsCountQuery = useQuery({
+    queryKey: ['bill-drafts-count'],
+    queryFn: countPendingDrafts,
+    staleTime: 60_000,
+  })
+  const paymentDraftsCountQuery = useQuery({
+    queryKey: ['payment-drafts-count'],
+    queryFn: countPendingPaymentDrafts,
+    staleTime: 60_000,
+  })
+  const brassRateQuery = useQuery({
+    queryKey: ['latest-brass-rate-date'],
+    queryFn: async () => {
+      try {
+        const page = await pb.collection('brass_rates').getList(1, 1, {
+          sort: '-date',
+          fields: 'date',
+        })
+        return page.items[0]?.date ? String(page.items[0].date).slice(0, 10) : null
+      } catch {
+        return null
       }
-      if (session.date.startsWith(previousMonth)) { previousWireOut += session.totalWireOut; previousInputKg += session.totalInputKg }
-      if (session.date >= periodFrom && (!latestDate || session.date > latestDate)) {
-        latestDate = session.date
-        latestCost = session.metalCostPerKg
-      }
+    },
+    staleTime: 60_000,
+  })
+
+  // ---------------- Computations ----------------
+
+  // A. Sales Period Metrics
+  const salesData = salesQuery.data
+  const salesPeriodBills = useMemo(() => {
+    if (!salesData?.allBills) return []
+    return salesData.allBills.filter(
+      (b) => b.date >= currentRange.from && b.date <= currentRange.to,
+    )
+  }, [salesData?.allBills, currentRange.from, currentRange.to])
+
+  const salesPrevPeriodBills = useMemo(() => {
+    if (!salesData?.allBills) return []
+    return salesData.allBills.filter(
+      (b) => b.date >= prevRange.from && b.date <= prevRange.to,
+    )
+  }, [salesData?.allBills, prevRange.from, prevRange.to])
+
+  const salesPeriodPayments = useMemo(() => {
+    if (!salesData?.allPayments) return []
+    return salesData.allPayments.filter(
+      (p) => p.date >= currentRange.from && p.date <= currentRange.to,
+    )
+  }, [salesData?.allPayments, currentRange.from, currentRange.to])
+
+  const periodSales = useMemo(
+    () => salesPeriodBills.reduce((sum, b) => sum + b.total, 0),
+    [salesPeriodBills],
+  )
+  const prevPeriodSales = useMemo(
+    () => salesPrevPeriodBills.reduce((sum, b) => sum + b.total, 0),
+    [salesPrevPeriodBills],
+  )
+  const salesDeltaPct = useMemo(
+    () => deltaPct(periodSales, prevPeriodSales),
+    [periodSales, prevPeriodSales],
+  )
+
+  const periodCollected = useMemo(
+    () => salesPeriodPayments.reduce((sum, p) => sum + p.amount, 0),
+    [salesPeriodPayments],
+  )
+
+  const salesTrend6M = useMemo(
+    () => (salesData?.monthlyTrend ?? []).map((r) => r.sales),
+    [salesData?.monthlyTrend],
+  )
+
+  // B. Purchase Period Metrics & Supplier Positions
+  const purchaseBills = purchaseBillsQuery.data ?? []
+  const purchasePayments = purchasePaymentsQuery.data ?? []
+  const supplierSummaries = supplierSummariesQuery.data ?? []
+
+  const activePurchaseBills = useMemo(
+    () => purchaseBills.filter((b) => !b.cancelled),
+    [purchaseBills],
+  )
+
+  const periodPurchaseBills = useMemo(
+    () =>
+      activePurchaseBills.filter(
+        (b) => b.date >= currentRange.from && b.date <= currentRange.to,
+      ),
+    [activePurchaseBills, currentRange.from, currentRange.to],
+  )
+
+  const prevPeriodPurchaseBills = useMemo(
+    () =>
+      activePurchaseBills.filter(
+        (b) => b.date >= prevRange.from && b.date <= prevRange.to,
+      ),
+    [activePurchaseBills, prevRange.from, prevRange.to],
+  )
+
+  const periodBoughtKg = useMemo(
+    () => periodPurchaseBills.reduce((sum, b) => sum + b.totalKg, 0),
+    [periodPurchaseBills],
+  )
+  const prevPeriodBoughtKg = useMemo(
+    () => prevPeriodPurchaseBills.reduce((sum, b) => sum + b.totalKg, 0),
+    [prevPeriodPurchaseBills],
+  )
+  const boughtKgDeltaPct = useMemo(
+    () => deltaPct(periodBoughtKg, prevPeriodBoughtKg),
+    [periodBoughtKg, prevPeriodBoughtKg],
+  )
+
+  const periodBoughtPaise = useMemo(
+    () => periodPurchaseBills.reduce((sum, b) => sum + b.netPaise, 0),
+    [periodPurchaseBills],
+  )
+
+  const periodPurchasePaidPaise = useMemo(
+    () =>
+      purchasePayments
+        .filter(
+          (p) =>
+            !p.cancelled &&
+            p.kind !== 'refund_received' &&
+            p.date >= currentRange.from &&
+            p.date <= currentRange.to,
+        )
+        .reduce((sum, p) => sum + p.amountPaise, 0),
+    [purchasePayments, currentRange.from, currentRange.to],
+  )
+
+  const purchasePositions = useMemo(
+    () => computeSupplierPositions(supplierSummaries),
+    [supplierSummaries],
+  )
+
+  const purchaseTrend6M = useMemo(() => {
+    const monthlyMap = new Map<string, number>()
+    for (const b of activePurchaseBills) {
+      const m = b.date.slice(0, 7)
+      monthlyMap.set(m, (monthlyMap.get(m) ?? 0) + b.netPaise / 100)
     }
+    return [...monthlyMap.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([, val]) => val)
+  }, [activePurchaseBills])
 
-    const avgMetalCost = monthInputKg > 0 ? monthInputCost / monthInputKg : 0
+  // C. Casting Period Metrics
+  const castingSessions = castingSessionsQuery.data ?? []
 
-    return {
-      inputKg: monthInputKg,
-      wireOut: monthWireOut,
-      avgMetalCost,
-      wastagePct: monthInputKg > 0 ? Math.max(0, (monthInputKg - monthWireOut) / monthInputKg * 100) : 0,
-      outputCostPerKg: monthWireOut > 0 ? monthOutputCost / monthWireOut : 0,
-      sessions: monthSessions,
-      wireOutDelta: monthWireOut - previousWireOut,
-      inputDelta: monthInputKg - previousInputKg,
-      latestCost,
-      latestDate,
-    }
-  }, [castingSessionsQuery.data, periodFrom, asOfDate, previousMonth])
+  const periodCastingSessions = useMemo(
+    () =>
+      castingSessions.filter(
+        (s) => s.date && s.date >= currentRange.from && s.date <= currentRange.to,
+      ),
+    [castingSessions, currentRange.from, currentRange.to],
+  )
 
-  if (isPending) {
+  const prevPeriodCastingSessions = useMemo(
+    () =>
+      castingSessions.filter(
+        (s) => s.date && s.date >= prevRange.from && s.date <= prevRange.to,
+      ),
+    [castingSessions, prevRange.from, prevRange.to],
+  )
+
+  const periodCasting = useMemo(
+    () => summarizeCastingSessions(periodCastingSessions),
+    [periodCastingSessions],
+  )
+  const prevPeriodCasting = useMemo(
+    () => summarizeCastingSessions(prevPeriodCastingSessions),
+    [prevPeriodCastingSessions],
+  )
+  const wireOutDeltaPct = useMemo(
+    () => deltaPct(periodCasting.wire, prevPeriodCasting.wire),
+    [periodCasting.wire, prevPeriodCasting.wire],
+  )
+
+  const castingTrend6M = useMemo(() => {
+    const trend = buildMonthlyCastingTrend(castingSessions, 6)
+    return trend.map((r) => r.wire)
+  }, [castingSessions])
+
+  // D. Needs Attention Items
+  const bardanPendingBills = useMemo(() => {
+    return activePurchaseBills
+      .filter((b) => b.bardanPending)
+      .map((b) => ({
+        id: b.id,
+        inNo: b.inNo,
+        supplierName: b.supplierName,
+        daysOld: diffDays(b.date, today),
+      }))
+  }, [activePurchaseBills, today])
+
+  const totalPendingDrafts = (billDraftsCountQuery.data ?? 0) + (paymentDraftsCountQuery.data ?? 0)
+
+  const attentionSummary = useMemo(() => {
+    const customersForAttention = (salesData?.actionRequired?.riskRows ?? []).map((r) => ({
+      id: r.customerId,
+      name: r.customerName,
+      dueDays: r.dueDays,
+      dueAmount: r.amount,
+    }))
+
+    const suppliersForAttention = supplierSummaries.map((s) => ({
+      id: s.supplier.id,
+      name: s.supplier.companyName,
+      oldestDueDays: s.oldestDueDays,
+      duePaise: s.kachaDuePaise + s.gstDuePaise,
+    }))
+
+    return buildAttentionItems({
+      customers: customersForAttention,
+      suppliers: purchaseEnabled ? suppliersForAttention : [],
+      bardanPendingBills: purchaseEnabled ? bardanPendingBills : [],
+      pendingDraftsCount: totalPendingDrafts,
+      latestBrassRateDate: brassRateQuery.data,
+      asOfDate: today,
+    })
+  }, [
+    salesData?.actionRequired?.riskRows,
+    supplierSummaries,
+    purchaseEnabled,
+    bardanPendingBills,
+    totalPendingDrafts,
+    brassRateQuery.data,
+    today,
+  ])
+
+  // E. Who to Receive From (Top 4 debtors)
+  const whoToReceiveRows: RankedBarRow[] = useMemo(() => {
+    return (salesData?.actionRequired?.riskRows ?? []).slice(0, 4).map((r) => ({
+      id: r.customerId,
+      label: r.customerName,
+      value: r.amount,
+      formattedValue: formatInrInteger(r.amount),
+      subLabel: r.dueDays > 0 ? `${r.dueDays} days since last bill` : 'Current bill',
+      ageDays: r.dueDays,
+      ageLevel: r.dueDays > 60 ? 'overdue' : r.dueDays > 30 ? 'due' : 'watch',
+      actionLabel: 'Collect',
+      href: `/new-payment?customerId=${r.customerId}`,
+    }))
+  }, [salesData?.actionRequired?.riskRows])
+
+  // F. Who to Pay Next (Top 4 suppliers)
+  const whoToPayRows: RankedBarRow[] = useMemo(() => {
+    return supplierSummaries
+      .filter((s) => s.kachaDuePaise + s.gstDuePaise > 0)
+      .sort((a, b) => b.kachaDuePaise + b.gstDuePaise - (a.kachaDuePaise + a.gstDuePaise))
+      .slice(0, 4)
+      .map((s) => {
+        const duePaise = s.kachaDuePaise + s.gstDuePaise
+        return {
+          id: s.supplier.id,
+          label: s.supplier.companyName,
+          value: duePaise / 100,
+          formattedValue: formatInrInteger(duePaise / 100),
+          subLabel: s.oldestDueDays != null ? `${s.oldestDueDays} days oldest due` : 'Current due',
+          ageDays: s.oldestDueDays,
+          ageLevel: s.oldestDueDays != null && s.oldestDueDays > 30 ? 'due' : 'watch',
+          actionLabel: 'Pay',
+          href: `/new-supplier-payment?supplierId=${s.supplier.id}`,
+        }
+      })
+  }, [supplierSummaries])
+
+  // G. Latest Sale Bills (5 rows)
+  const latestSaleBills = useMemo(() => {
+    return (salesData?.recentBills ?? []).slice(0, 5)
+  }, [salesData?.recentBills])
+
+  // H. Latest Purchase Bills (5 rows)
+  const latestPurchaseBills = useMemo(() => {
+    return activePurchaseBills
+      .sort((a, b) => `${b.date}|${b.created}|${b.id}`.localeCompare(`${a.date}|${a.created}|${a.id}`))
+      .slice(0, 5)
+  }, [activePurchaseBills])
+
+  // ---------------- Loading / Error States ----------------
+  if (salesQuery.isLoading) {
     return (
-      <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
-        <section className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, idx) => (
-            <div key={idx} className="h-32 animate-pulse rounded-lg border border-slate-200 bg-white" />
-          ))}
-        </section>
-        <div className="h-[24rem] animate-pulse rounded-lg border border-slate-200 bg-white" />
+      <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+        <div data-card="true" className="h-14 animate-pulse rounded-xl border border-slate-200 bg-white" />
+        <div data-card="true" className="h-20 animate-pulse rounded-xl border border-slate-200 bg-white" />
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div data-card="true" className="h-48 animate-pulse rounded-xl border border-slate-200 bg-white" />
+          <div data-card="true" className="h-48 animate-pulse rounded-xl border border-slate-200 bg-white" />
+          <div data-card="true" className="h-48 animate-pulse rounded-xl border border-slate-200 bg-white" />
+        </div>
       </div>
     )
   }
 
-  if (isError) {
+  if (salesQuery.isError || !salesData) {
     return (
-      <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
-        <section className="rounded-lg border border-rose-200 bg-rose-50 p-6">
-          <h2 className="text-base font-semibold text-rose-700">Unable to load dashboard</h2>
-          <p className="mt-2 text-sm text-rose-600">{error instanceof Error ? error.message : 'Unknown error'}</p>
-        </section>
+      <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+        <Panel className="rounded-xl border-rose-200 bg-rose-50 p-6 text-center">
+          <AlertCircle className="mx-auto mb-2 text-rose-600" size={24} />
+          <h2 className="text-sm font-semibold text-rose-800">Unable to load dashboard</h2>
+          <p className="mt-1 text-xs text-rose-600">
+            {salesQuery.error instanceof Error ? salesQuery.error.message : 'Unknown error'}
+          </p>
+        </Panel>
       </div>
     )
   }
 
-  if (!data) return null
-
-  const collectionGap = data.thisMonthSummary.sales - data.thisMonthSummary.collection
-  const totalSoldBags = data.itemComparisons.spindle.bags + data.itemComparisons.tapperPlug.bags
-  const totalSoldKg = data.itemComparisons.spindle.kg + data.itemComparisons.tapperPlug.kg
-  const topSoldRows = data.thisMonthItemBags.slice(0, 5).map((row) => ({
-    id: row.itemName,
-    label: row.itemName,
-    value: row.bags,
-    subLabel: `${formatWhole(row.kg)} kg sold this month`,
-  }))
-
-  const agingBuckets = buildAgingBuckets(data.actionRequired.riskRows)
-  const trendData = data.monthlyTrend.map((row) => ({ month: row.month, sales: row.sales, collections: row.collection }))
-
-  return (
-    <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
-      <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
-        <label htmlFor="dashboard-period" className="text-xs font-medium text-slate-600">Period</label>
-        <select id="dashboard-period" value={period} onChange={(event) => setPeriod(event.target.value as 'month' | 'fy')} className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-900"><option value="month">Month</option><option value="fy">FY to date</option></select>
-        <label htmlFor="dashboard-month" className="text-xs font-medium text-slate-600">Ending month</label>
-        <input id="dashboard-month" type="month" max={today.slice(0, 7)} value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value || today.slice(0, 7))} className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-900" />
-      </div>
-      {purchaseEnabled && <section className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-slate-900">Purchase</h2><p className="text-xs text-slate-500">Bought and paid {period === 'fy' ? `since ${formatFullDate(fiscalStart)}` : `in ${selectedMonth}`}; payable is the current balance</p></div><Link to="/purchase-dashboard" className="text-xs font-semibold text-blue-700">Open Purchase</Link></div>
-        {purchaseBillsQuery.isLoading || purchasePaymentsQuery.isLoading || supplierSummariesQuery.isLoading ? <div className="h-20 animate-pulse rounded-lg bg-slate-100" /> : purchaseBillsQuery.isError || purchasePaymentsQuery.isError || supplierSummariesQuery.isError ? <p role="alert" className="text-xs text-rose-700">Purchase data could not load.</p> : <div className="grid gap-3 sm:grid-cols-4">
-          <InfoMetric label="Bought" value={`${formatWhole(purchaseStats.snapshot.totalProcuredKg)} kg`} delta={period === 'month' ? `${signedNumber(purchaseStats.snapshot.totalProcuredKg - previousPurchaseStats.snapshot.totalProcuredKg, 'kg')} vs last month` : undefined} />
-          <InfoMetric label="Purchase amount" value={formatInrInteger(purchaseStats.snapshot.totalProcuredPaise / 100)} delta={period === 'month' ? `${signedMoney((purchaseStats.snapshot.totalProcuredPaise - previousPurchaseStats.snapshot.totalProcuredPaise) / 100)} vs last month` : undefined} />
-          <InfoMetric label="Paid out" value={formatInrInteger(purchaseStats.snapshot.totalPaidPaise / 100)} delta={period === 'month' ? `${signedMoney((purchaseStats.snapshot.totalPaidPaise - previousPurchaseStats.snapshot.totalPaidPaise) / 100)} vs last month` : undefined} />
-          <InfoMetric label="Still to pay" value={formatInrInteger(purchaseStats.snapshot.totalWeOwePaise / 100)} />
-        </div>}
-      </section>}
-      {purchaseEnabled && <section className="mb-4 grid gap-4 xl:grid-cols-2">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold text-slate-950">Pay Next</h2><Link to="/ledger" search={{ tab: 'suppliers' }} className="text-xs font-semibold text-blue-700">Supplier ledger</Link></div>
-          {supplierSummariesQuery.isLoading ? <p className="text-xs text-slate-500">Loading suppliers…</p> : supplierSummariesQuery.isError ? <p role="alert" className="text-xs text-rose-700">Suppliers could not load.</p> : payNext.length === 0 ? <p className="text-xs text-slate-500">No supplier balance due.</p> : <div className="divide-y divide-slate-100">{payNext.map((row) => <div key={row.supplier.id} className="flex items-center justify-between gap-3 py-2"><div className="min-w-0"><p className="truncate text-xs font-medium text-slate-900">{row.supplier.companyName}</p><p className="text-[11px] text-slate-500">{row.oldestDueDays == null ? 'No dated due' : `${row.oldestDueDays} days oldest due`}</p></div><div className="flex shrink-0 items-center gap-3"><span className="font-mono text-xs font-semibold tabular-nums text-slate-900">{formatInrInteger(row.outstandingPaise / 100)}</span><Link to="/new-supplier-payment" search={{ supplierId: row.supplier.id }} className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-800">Pay</Link></div></div>)}</div>}
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold text-slate-950">Latest Purchase Bills</h2><Link to="/purchase-bills" className="text-xs font-semibold text-blue-700">All bills</Link></div>
-          {purchaseBillsQuery.isLoading ? <p className="text-xs text-slate-500">Loading bills…</p> : purchaseBillsQuery.isError ? <p role="alert" className="text-xs text-rose-700">Bills could not load.</p> : latestPurchaseBills.length === 0 ? <p className="text-xs text-slate-500">No purchase bills yet.</p> : <div className="divide-y divide-slate-100">{latestPurchaseBills.map((bill) => <Link key={bill.id} to="/purchase-bills" search={{ billId: bill.id }} className="flex items-center justify-between gap-3 py-2 text-xs hover:bg-slate-50"><span className="min-w-0"><span className="block font-mono font-semibold text-slate-900">{bill.inNo}</span><span className="block truncate text-slate-500">{formatFullDate(bill.date)} · {bill.supplierName}</span></span><span className="shrink-0 font-mono font-semibold tabular-nums text-slate-900">{formatInrInteger(bill.netPaise / 100)}</span></Link>)}</div>}
-        </div>
-      </section>}
-      {/* Receivables overview — the number that runs the business, split by age */}
-      <section className="mb-4 rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="grid grid-cols-1 divide-y divide-slate-100 lg:grid-cols-[1.25fr_1fr] lg:divide-x lg:divide-y-0">
-          <div className="p-5">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Total Receivables</p>
-            <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-mono text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-                {formatInrInteger(data.kpis.outstanding)}
-              </span>
-              <span className="text-sm text-slate-500">
-                from {data.actionRequired.pendingParties} parties
-              </span>
-            </div>
-            <AgingBar buckets={agingBuckets} />
-          </div>
-
-          <div className="p-5">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{period === 'fy' ? 'FY to Date' : 'This Month'}</p>
-            <div className="mt-3 grid grid-cols-3 gap-3">
-              <MonthStat label="Sales" value={fmtMoneyCompact(period === 'fy' ? data.fiscalYearSummary.sales : data.thisMonthSummary.sales)} delta={period === 'month' ? data.kpis.salesVsLastMonth : undefined} />
-              <MonthStat label="Collections" value={fmtMoneyCompact(period === 'fy' ? data.fiscalYearSummary.collection : data.thisMonthSummary.collection)} delta={period === 'month' ? data.kpis.collectionVsLastMonth : undefined} />
-              <MonthStat
-                label="Net"
-                value={`${(period === 'fy' ? data.fiscalYearSummary.sales - data.fiscalYearSummary.collection : data.kpis.thisMonthNet) >= 0 ? '+' : '-'}${fmtMoneyCompact(Math.abs(period === 'fy' ? data.fiscalYearSummary.sales - data.fiscalYearSummary.collection : data.kpis.thisMonthNet))}`}
-                tone={(period === 'fy' ? data.fiscalYearSummary.sales - data.fiscalYearSummary.collection : data.kpis.thisMonthNet) >= 0 ? 'emerald' : 'rose'}
-              />
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-3 border-t border-slate-100 pt-3">
-              <MonthStat label="All bills" value={formatWhole(data.kpis.totalBills)} muted />
-              <MonthStat label="Avg bill (all)" value={fmtMoneyCompact(data.kpis.averageBillValue)} muted />
-              <MonthStat label="Sold this month" value={`${formatWhole(totalSoldBags)} bags`} muted />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Trend + collections worklist */}
-      <section className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_1fr]">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-950">Sales vs Collections</h2>
-              <p className="text-xs text-slate-500">Last 6 months · hover for exact amounts</p>
-            </div>
-            <StatusPill tone={collectionGap > 0 ? 'amber' : 'emerald'}>
-              {collectionGap > 0 ? `${fmtMoneyCompact(collectionGap)} gap this month` : 'collections covered'}
-            </StatusPill>
-          </div>
-          <SalesCollectionTrendChart data={trendData} />
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-950">Collect Next</h2>
-              <p className="text-xs text-slate-500">Pending balances, ranked by latest bill age</p>
-            </div>
-            <StatusPill tone={data.actionRequired.highRiskParties > 0 ? 'amber' : 'emerald'}>
-              {data.actionRequired.highRiskParties > 0 ? `${data.actionRequired.highRiskParties} high` : 'on track'}
-            </StatusPill>
-          </div>
-          {data.actionRequired.riskRows.length === 0 ? (
-            <p className="py-6 text-center text-xs text-slate-400">Nothing pending — all parties are clear.</p>
-          ) : (
-            <div className="space-y-1.5">
-              {data.actionRequired.riskRows.slice(0, 4).map((row) => (
-                <button
-                  key={row.customerId}
-                  type="button"
-                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2 text-left transition hover:border-blue-200 hover:bg-blue-50/50"
-                  onClick={() => navigate({ to: '/ledger', search: { customerId: row.customerId, focus: '' } })}
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate text-[13px] font-medium text-slate-800">{row.customerName}</span>
-                    <span className={`text-[11px] font-semibold ${row.level === 'overdue' ? 'text-rose-600' : row.level === 'due' ? 'text-amber-600' : 'text-slate-500'}`}>
-                      {row.dueDays}d since latest bill
-                    </span>
-                  </span>
-                  <span className="shrink-0 font-mono text-sm font-bold tabular-nums text-slate-900">{fmtMoneyCompact(row.amount)}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Movement + operations */}
-      <section className={`mb-4 grid grid-cols-1 gap-4 ${castingEnabled ? 'xl:grid-cols-3' : 'xl:grid-cols-2'}`}>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-950">Sold This Month</h2>
-              <p className="text-xs text-slate-500">Bags by item · {formatWhole(totalSoldKg)} kg total</p>
-            </div>
-          </div>
-          <RankedBarList
-            rows={topSoldRows}
-            valueLabel={(value) => `${formatWhole(value)} bags`}
-            emptyText="No sold item rows this month."
-            tone="emerald"
-          />
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-950">Latest Activity</h2>
-          <div className="mt-3 space-y-3">
-            <SmallActivity
-              title="Last bill"
-              value={data.thisMonthSummary.lastSale ? fmtMoneyCompact(data.thisMonthSummary.lastSale.amount) : '—'}
-              detail={data.thisMonthSummary.lastSale ? `${formatFullDate(data.thisMonthSummary.lastSale.date)} · ${data.thisMonthSummary.lastSale.customerName}` : 'No bill this month'}
-              icon={<IndianRupee size={15} />}
-            />
-            <SmallActivity
-              title="Last payment"
-              value={data.thisMonthSummary.lastCollection ? fmtMoneyCompact(data.thisMonthSummary.lastCollection.amount) : '—'}
-              detail={data.thisMonthSummary.lastCollection ? `${formatFullDate(data.thisMonthSummary.lastCollection.date)} · ${data.thisMonthSummary.lastCollection.customerName}` : 'No payment this month'}
-              icon={<Receipt size={15} />}
-            />
-            <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-3">
-              <InfoMetric label="Active parties" value={formatWhole(data.kpis.activeCustomers)} />
-              <InfoMetric label="Collection rate" value={`${Math.round(data.kpis.collectionRate)}%`} />
-            </div>
-          </div>
-        </div>
-
-        {castingEnabled && (
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-950">Casting Cost Signal</h2>
-              <p className="text-xs text-slate-500">{period === 'fy' ? 'FY to date' : selectedMonth} · metal-cost view for pricing decisions</p>
-            </div>
-            <Link to="/casting" className="text-xs font-semibold text-blue-700 hover:text-blue-800">
-              Casting
-            </Link>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <CostMetric label="Metal Intake" value={`${formatWhole(castingStats.inputKg)} kg`} delta={period === 'month' ? `${signedNumber(castingStats.inputDelta, 'kg')} vs last month` : undefined} icon={<Flame size={15} />} />
-            <CostMetric label="Wire Out" value={`${formatWhole(castingStats.wireOut)} kg`} delta={period === 'month' ? `${signedNumber(castingStats.wireOutDelta, 'kg')} vs last month` : undefined} icon={<Activity size={15} />} />
-            <CostMetric label="Wastage" value={`${castingStats.wastagePct.toFixed(1)}%`} icon={<IndianRupee size={15} />} />
-            <CostMetric label="Output Cost" value={castingStats.outputCostPerKg > 0 ? `₹${castingStats.outputCostPerKg.toFixed(2)}/kg` : '—'} icon={<IndianRupee size={15} />} />
-            <CostMetric label="Runs" value={`${castingStats.sessions}`} icon={<TrendingUp size={15} />} />
-          </div>
-          <div className="mt-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-semibold text-slate-600">Latest casting cost</span>
-              <span className="font-mono text-sm font-bold text-slate-950">
-                {castingStats.latestCost > 0 ? `₹${castingStats.latestCost.toFixed(2)}/kg` : '—'}
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-slate-500">
-              {castingStats.latestDate ? `Last session ${formatFullDate(castingStats.latestDate)}.` : 'No casting session logged yet.'}
-            </p>
-          </div>
-        </div>
-        )}
-      </section>
-
-      <section className="grid min-h-[42vh] grid-cols-1 gap-4 xl:grid-cols-2">
-        <RecentBillsTable rows={data.recentBills.slice(0, 5)} onOpen={(customerId) => navigate({ to: '/ledger', search: { customerId, focus: '' } })} />
-        <RecentPaymentsTable rows={data.recentPayments} onOpen={(customerId) => navigate({ to: '/ledger', search: { customerId, focus: '' } })} />
-      </section>
-    </div>
-  )
-}
-
-type AgingBucketRow = { label: string; amount: number; color: string; text: string }
-
-function buildAgingBuckets(rows: Array<{ amount: number; dueDays: number }>): AgingBucketRow[] {
-  const summary = computeAgeingBuckets(rows)
-  return [
-    { label: '0–30d', amount: summary.bucket0to30, color: 'bg-slate-400', text: 'text-slate-700' },
-    { label: '31–60d', amount: summary.bucket31to60, color: 'bg-amber-400', text: 'text-amber-700' },
-    { label: '60d+', amount: summary.bucket60plus, color: 'bg-rose-500', text: 'text-rose-700' },
-  ]
-}
-
-function AgingBar({ buckets }: { buckets: AgingBucketRow[] }) {
-  const total = buckets.reduce((sum, bucket) => sum + bucket.amount, 0)
-  if (total <= 0) {
-    return <p className="mt-4 text-xs text-slate-400">No pending receivables — everything is collected.</p>
-  }
-  return (
-    <div className="mt-4">
-      <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100">
-        {buckets.map((bucket) =>
-          bucket.amount > 0 ? (
-            <div
-              key={bucket.label}
-              className={bucket.color}
-              style={{ width: `${(bucket.amount / total) * 100}%` }}
-              title={`${bucket.label}: ${formatInrInteger(bucket.amount)}`}
-            />
-          ) : null,
-        )}
-      </div>
-      <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1">
-        {buckets.map((bucket) => (
-          <span key={bucket.label} className="inline-flex items-center gap-1.5 text-xs">
-            <span className={`h-2 w-2 rounded-full ${bucket.color}`} />
-            <span className="text-slate-500">{bucket.label}</span>
-            <span className={`font-mono font-semibold tabular-nums ${bucket.amount > 0 ? bucket.text : 'text-slate-300'}`}>
-              {bucket.amount > 0 ? fmtMoneyCompact(bucket.amount) : '—'}
-            </span>
-          </span>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function MonthStat({ label, value, delta, tone, muted = false }: { label: string; value: string; delta?: number; tone?: 'emerald' | 'rose'; muted?: boolean }) {
-  return (
-    <div className="min-w-0">
-      <p className="text-[11px] font-medium text-slate-500">{label}</p>
-      <p className={`mt-0.5 truncate font-mono text-base font-bold tabular-nums ${muted ? 'text-slate-700' : tone === 'emerald' ? 'text-emerald-600' : tone === 'rose' ? 'text-rose-600' : 'text-slate-900'}`}>
-        {value}
-      </p>
-      {delta !== undefined && delta !== 0 && (
-        <p className={`text-[11px] font-semibold ${delta > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-          {delta > 0 ? '+' : '-'}
-          {fmtMoneyCompact(Math.abs(delta))} vs last month
-        </p>
+  // Quick Action Buttons for DashboardToolbar
+  const toolbarActions = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Link
+        to="/new-bill"
+        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+      >
+        <Plus size={14} /> New Sale Bill
+      </Link>
+      <Link
+        to="/new-payment"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+      >
+        <Plus size={14} /> Record Payment
+      </Link>
+      {purchaseEnabled && (
+        <Link
+          to="/new-purchase-bill"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+        >
+          <Plus size={14} /> New Purchase Bill
+        </Link>
+      )}
+      {castingEnabled && (
+        <Link
+          to="/casting/new-session"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+        >
+          <Plus size={14} /> New Casting Heat
+        </Link>
       )}
     </div>
   )
-}
 
+  const moduleGridCols =
+    purchaseEnabled && castingEnabled
+      ? 'lg:grid-cols-3'
+      : purchaseEnabled || castingEnabled
+        ? 'lg:grid-cols-2'
+        : 'max-w-xl'
 
-function signedNumber(value: number, unit: string) { return `${value >= 0 ? '+' : '-'}${formatWhole(Math.abs(value))} ${unit}` }
-function signedMoney(value: number) { return `${value >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(value))}` }
-
-function InfoMetric({ label, value, delta }: { label: string; value: string; delta?: string }) {
   return (
-    <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-      <p className="text-[11px] font-semibold uppercase text-slate-500">{label}</p>
-      <p className="mt-1 font-mono text-xl font-bold leading-tight text-slate-950">{value}</p>
-      {delta && <p className="mt-1 text-[11px] text-slate-500">{delta}</p>}
-    </div>
-  )
-}
+    <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+      {/* 1. Dashboard Toolbar (Cards Rule compliant) */}
+      <DashboardToolbar
+        mode={mode}
+        onModeChange={setMode}
+        selectedMonth={selectedMonth}
+        onMonthChange={setSelectedMonth}
+        comparisonNote={prevRange.comparisonNote}
+        actions={toolbarActions}
+      />
 
-function SmallActivity({ title, value, detail, icon }: { title: string; value: string; detail: string; icon: ReactNode }) {
-  return (
-    <div className="rounded-lg border border-slate-100 bg-white p-3">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase text-slate-500">
-        {icon}
-        <span>{title}</span>
-      </div>
-      <p className="mt-1 font-mono text-lg font-bold leading-tight text-slate-950">{value}</p>
-      <p className="mt-1 line-clamp-1 text-xs text-slate-500">{detail}</p>
-    </div>
-  )
-}
-
-function CostMetric({ label, value, icon, delta }: { label: string; value: string; icon: ReactNode; delta?: string }) {
-  return (
-    <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase text-slate-500">
-        {icon}
-        <span>{label}</span>
-      </div>
-      <p className="mt-2 font-mono text-lg font-bold leading-tight text-slate-950">{value}</p>
-      {delta && <p className="mt-1 text-[11px] text-slate-500">{delta}</p>}
-    </div>
-  )
-}
-
-
-
-function RecentBillsTable({
-  rows,
-  onOpen,
-}: {
-  rows: Array<{
-    id: string
-    businessDate: string
-    date?: string
-    customerId: string
-    customerName: string
-    bookNo?: number
-    billNo?: number
-    status: string
-    total: number
-  }>
-  onOpen: (customerId: string) => void
-}) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-        <h2 className="text-sm font-semibold text-slate-950">Recent Bills</h2>
-        <span className="text-xs text-slate-500">Last 5</span>
-      </div>
-      <div className="overflow-x-auto no-scrollbar">
-        <table className="w-full min-w-[640px]">
-          <thead>
-            <tr className="bg-slate-50">
-              <TableHead>Date</TableHead>
-              <TableHead>Party</TableHead>
-              <TableHead>Bill</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead align="right">Amount</TableHead>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((bill) => (
-              <ClickableRow key={bill.id} label={`Open bill ${bill.bookNo}/${bill.billNo}`} onOpen={() => onOpen(bill.customerId)}>
-                <td className="px-4 py-2.5 text-sm text-slate-600">{formatFullDate(bill.businessDate ?? bill.date ?? '')}</td>
-                <td className="px-4 py-2.5 text-sm font-medium text-slate-800">{bill.customerName}</td>
-                <td className="px-4 py-2.5 text-sm text-slate-600">{bill.bookNo}/{bill.billNo}</td>
-                <td className="px-4 py-2.5"><StatusBadge status={bill.status} /></td>
-                <td className="px-4 py-2.5 text-right text-sm font-semibold text-slate-950">{fmtMoney(bill.total ?? 0)}</td>
-              </ClickableRow>
+      {/* 2. Needs Attention Card (ExceptionList) */}
+      <SectionCard
+        title="Needs Attention"
+        subtitle="Operational exceptions requiring operator review"
+      >
+        {attentionSummary.allClear ? (
+          <div className="flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2.5 text-xs font-medium text-emerald-800">
+            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+            <span>Nothing needs attention. All debtor balances, supplier dues, bardan, and drafts are within normal limits.</span>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            {attentionSummary.items.map((item) => (
+              <Link
+                key={item.id}
+                to={item.href}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors',
+                  item.tone === 'rose'
+                    ? 'border border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100'
+                    : 'border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100',
+                )}
+                title={item.detail}
+              >
+                <span
+                  className={cn(
+                    'h-1.5 w-1.5 rounded-full',
+                    item.tone === 'rose' ? 'bg-rose-500' : 'bg-amber-500',
+                  )}
+                />
+                {item.label}
+              </Link>
             ))}
-          </tbody>
-        </table>
+          </div>
+        )}
+      </SectionCard>
+
+      {/* 3. Three Module Overview Cards Side by Side */}
+      <div className={cn('grid grid-cols-1 gap-4', moduleGridCols)}>
+        {/* Sales Module Card */}
+        <SectionCard
+          title="Sales"
+          subtitle="Volume and receivables position"
+          actions={
+            <Link
+              to="/sales-dashboard"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900"
+            >
+              Open <ArrowRight size={12} />
+            </Link>
+          }
+        >
+          {/* Hero: Billed */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <span>Billed <span className="text-[11px] font-mono text-slate-400">({currentRange.label})</span></span>
+              <Sparkline values={salesTrend6M} color="#0f172a" width={80} height={24} />
+            </div>
+            <div className="flex items-baseline justify-between gap-2">
+              <strong
+                className="font-mono text-2xl font-bold tracking-tight text-slate-900 tabular-nums sm:text-3xl"
+                title={`Exact: ₹${periodSales.toLocaleString('en-IN')}`}
+              >
+                {formatCompactInr(periodSales)}
+              </strong>
+              <DeltaChip delta={salesDeltaPct} goodDirection="up" />
+            </div>
+          </div>
+
+          {/* Supporting Metrics */}
+          <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
+            <div>
+              <p className="text-[11px] font-medium text-slate-500">Collected</p>
+              <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-slate-900">
+                {formatCompactInr(periodCollected)}
+              </p>
+              <p className="text-[10px] text-slate-400">This period</p>
+            </div>
+            <div>
+              <p className="text-[11px] font-medium text-slate-500">Still to receive</p>
+              <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-slate-900">
+                {formatCompactInr(salesData.kpis.outstanding)}
+              </p>
+              <p className="text-[10px] text-slate-400">Balance now ({salesData.actionRequired.pendingParties} parties)</p>
+            </div>
+          </div>
+        </SectionCard>
+
+        {/* Purchase Module Card */}
+        {purchaseEnabled && (
+          <SectionCard
+            title="Purchase"
+            subtitle="Scrap procurement and payables"
+            actions={
+              <Link
+                to="/purchase-dashboard"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900"
+              >
+                Open <ArrowRight size={12} />
+              </Link>
+            }
+          >
+            {/* Hero: Bought */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs text-slate-500">
+                <span>Bought <span className="text-[11px] font-mono text-slate-400">({currentRange.label})</span></span>
+                <Sparkline values={purchaseTrend6M} color="#0f172a" width={80} height={24} />
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <div>
+                  <strong
+                    className="font-mono text-2xl font-bold tracking-tight text-slate-900 tabular-nums sm:text-3xl"
+                    title={`Exact: ${periodBoughtKg.toLocaleString('en-IN')} kg`}
+                  >
+                    {formatCompactKg(periodBoughtKg)}
+                  </strong>
+                  <span className="ml-2 font-mono text-sm text-slate-600">
+                    · {formatCompactInr(periodBoughtPaise / 100)}
+                  </span>
+                </div>
+                <DeltaChip delta={boughtKgDeltaPct} goodDirection="up" />
+              </div>
+            </div>
+
+            {/* Supporting Metrics */}
+            <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
+              <div>
+                <p className="text-[11px] font-medium text-slate-500">Paid out</p>
+                <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-slate-900">
+                  {formatCompactInr(periodPurchasePaidPaise / 100)}
+                </p>
+                <p className="text-[10px] text-slate-400">This period</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-medium text-slate-500">We owe</p>
+                <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-slate-900">
+                  {formatCompactInr(purchasePositions.totalPayablePaise / 100)}
+                </p>
+                <p className="text-[10px] text-slate-400">
+                  Kacha: {formatCompactInr(purchasePositions.kachaPayablePaise / 100)} · GST: {formatCompactInr(purchasePositions.gstPayablePaise / 100)}
+                </p>
+                {purchasePositions.totalAdvancePaise > 0 && (
+                  <p className="text-[10px] font-medium text-emerald-700">
+                    Advance held: {formatCompactInr(purchasePositions.totalAdvancePaise / 100)}
+                  </p>
+                )}
+              </div>
+            </div>
+          </SectionCard>
+        )}
+
+        {/* Casting Module Card */}
+        {castingEnabled && (
+          <SectionCard
+            title="Casting"
+            subtitle="Foundry heats and loaded cost"
+            actions={
+              <Link
+                to="/casting"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900"
+              >
+                Open <ArrowRight size={12} />
+              </Link>
+            }
+          >
+            {/* Hero: Wire out kg */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs text-slate-500">
+                <span>Wire out <span className="text-[11px] font-mono text-slate-400">({currentRange.label})</span></span>
+                <Sparkline values={castingTrend6M} color="#0f172a" width={80} height={24} />
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <strong
+                  className="font-mono text-2xl font-bold tracking-tight text-slate-900 tabular-nums sm:text-3xl"
+                  title={`Exact: ${periodCasting.wire.toLocaleString('en-IN')} kg`}
+                >
+                  {formatCompactKg(periodCasting.wire)}
+                </strong>
+                <DeltaChip delta={wireOutDeltaPct} goodDirection="up" />
+              </div>
+            </div>
+
+            {/* Supporting Metrics */}
+            <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
+              <div>
+                <p className="text-[11px] font-medium text-slate-500">Loaded cost / kg</p>
+                <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-slate-900">
+                  {periodCasting.avgLoadedCostKg > 0 ? `₹${Math.round(periodCasting.avgLoadedCostKg)}` : '—'}
+                </p>
+                <p className="text-[10px] text-slate-400">This period</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-medium text-slate-500">Active heats</p>
+                <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-slate-900">
+                  {periodCasting.count} heats
+                </p>
+                <p className="text-[10px] text-slate-400">{periodCasting.daysRunning} foundry days</p>
+              </div>
+            </div>
+          </SectionCard>
+        )}
+      </div>
+
+      {/* 4. Who to Receive & Who to Pay (Side by Side) */}
+      <div className={cn('grid grid-cols-1 gap-4', purchaseEnabled ? 'xl:grid-cols-2' : '')}>
+        {/* Who to Receive From */}
+        <SectionCard
+          title="Who to Receive From"
+          subtitle="Top customer balances requiring collection"
+          actions={
+            <Link
+              to="/ledger"
+              search={{ tab: 'customers' }}
+              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+            >
+              Customer ledger →
+            </Link>
+          }
+        >
+          <RankedBars
+            rows={whoToReceiveRows}
+            tone="slate"
+            emptyText="No customer balance overdue."
+          />
+        </SectionCard>
+
+        {/* Who to Pay Next */}
+        {purchaseEnabled && (
+          <SectionCard
+            title="Who to Pay Next"
+            subtitle="Top supplier balances awaiting payment"
+            actions={
+              <Link
+                to="/ledger"
+                search={{ tab: 'suppliers' }}
+                className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              >
+                Supplier ledger →
+              </Link>
+            }
+          >
+            <RankedBars
+              rows={whoToPayRows}
+              tone="slate"
+              emptyText="No supplier balance due."
+            />
+          </SectionCard>
+        )}
+      </div>
+
+      {/* 5. Latest Sale Bills & Latest Purchase Bills (Side by Side) */}
+      <div className={cn('grid grid-cols-1 gap-4', purchaseEnabled ? 'xl:grid-cols-2' : '')}>
+        {/* Latest Sale Bills */}
+        <SectionCard
+          title="Latest Sale Bills"
+          subtitle="Recent customer sales"
+          actions={
+            <Link
+              to="/transactions"
+              search={{ focusKind: '', focusId: '' }}
+              className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+            >
+              All transactions →
+            </Link>
+          }
+        >
+          {latestSaleBills.length === 0 ? (
+            <p className="py-6 text-center text-xs text-slate-400">No sale bills recorded yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-medium">
+                    <th className="pb-2 font-normal">Bill No</th>
+                    <th className="pb-2 font-normal">Date</th>
+                    <th className="pb-2 font-normal">Customer</th>
+                    <th className="pb-2 text-right font-normal">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                  {latestSaleBills.map((b) => (
+                    <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-2.5 font-mono">
+                        <Link
+                          to="/print-bill"
+                          search={{ billId: b.id, billRef: '' }}
+                          className="hover:underline text-slate-900 font-semibold"
+                        >
+                          #{b.billNo}
+                        </Link>
+                      </td>
+                      <td className="py-2.5 text-slate-500 font-mono text-[11px]">{formatFullDate(b.businessDate)}</td>
+                      <td className="py-2.5 truncate max-w-[140px] text-slate-900" title={b.customerName}>
+                        {b.customerName}
+                      </td>
+                      <td className="py-2.5 text-right font-mono tabular-nums text-slate-900 font-semibold">
+                        {formatInrInteger(b.total)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </SectionCard>
+
+        {/* Latest Purchase Bills */}
+        {purchaseEnabled && (
+          <SectionCard
+            title="Latest Purchase Bills"
+            subtitle="Recent inward scrap lots"
+            actions={
+              <Link
+                to="/purchase-bills"
+                className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+              >
+                All purchase bills →
+              </Link>
+            }
+          >
+            {latestPurchaseBills.length === 0 ? (
+              <p className="py-6 text-center text-xs text-slate-400">No purchase bills recorded yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-slate-400 font-medium">
+                      <th className="pb-2 font-normal">IN No</th>
+                      <th className="pb-2 font-normal">Date</th>
+                      <th className="pb-2 font-normal">Supplier</th>
+                      <th className="pb-2 text-right font-normal">Weight</th>
+                      <th className="pb-2 text-right font-normal">Net Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                    {latestPurchaseBills.map((b) => (
+                      <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-2.5 font-mono">
+                          <Link
+                            to="/purchase-bills/$billId"
+                            params={{ billId: b.id }}
+                            className="hover:underline text-slate-900 font-semibold"
+                          >
+                            {b.inNo}
+                          </Link>
+                        </td>
+                        <td className="py-2.5 text-slate-500 font-mono text-[11px]">{formatFullDate(b.date)}</td>
+                        <td className="py-2.5 truncate max-w-[140px] text-slate-900" title={b.supplierName}>
+                          {b.supplierName}
+                        </td>
+                        <td className="py-2.5 text-right font-mono tabular-nums text-slate-600">
+                          {b.totalKg.toLocaleString('en-IN', { maximumFractionDigits: 1 })} kg
+                        </td>
+                        <td className="py-2.5 text-right font-mono tabular-nums text-slate-900 font-semibold">
+                          {formatInrInteger(b.netPaise / 100)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </SectionCard>
+        )}
       </div>
     </div>
   )
 }
-
-function RecentPaymentsTable({
-  rows,
-  onOpen,
-}: {
-  rows: Array<{
-    id: string
-    businessDate: string
-    date?: string
-    customerId: string
-    customerName: string
-    mode?: string
-    status: string
-    amount: number
-  }>
-  onOpen: (customerId: string) => void
-}) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-        <h2 className="text-sm font-semibold text-slate-950">Recent Payments</h2>
-        <span className="inline-flex items-center gap-1 text-xs text-slate-500"><Users size={13} /> Party-wise</span>
-      </div>
-      <div className="overflow-x-auto no-scrollbar">
-        <table className="w-full min-w-[640px]">
-          <thead>
-            <tr className="bg-slate-50">
-              <TableHead>Date</TableHead>
-              <TableHead>Party</TableHead>
-              <TableHead>Mode</TableHead>
-              <TableHead align="right">Amount</TableHead>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((payment) => (
-              <ClickableRow key={payment.id} label={`Open payment from ${payment.customerName}`} onOpen={() => onOpen(payment.customerId)}>
-                <td className="px-4 py-2.5 text-sm text-slate-600">{formatFullDate(payment.businessDate ?? payment.date ?? '')}</td>
-                <td className="px-4 py-2.5 text-sm font-medium text-slate-800">{payment.customerName}</td>
-                <td className="px-4 py-2.5 text-sm text-slate-600"><span className="mr-2">{payment.mode}</span><StatusBadge status={payment.status} /></td>
-                <td className="px-4 py-2.5 text-right text-sm font-semibold text-slate-950">{fmtMoney(payment.amount)}</td>
-              </ClickableRow>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function ClickableRow({ children, label, onOpen }: { children: ReactNode; label: string; onOpen: () => void }) {
-  return (
-    <tr
-      className="cursor-pointer border-t border-slate-100 transition hover:bg-blue-50/40"
-      onClick={onOpen}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          onOpen()
-        }
-      }}
-      role="button"
-      tabIndex={0}
-      aria-label={label}
-    >
-      {children}
-    </tr>
-  )
-}
-
-function TableHead({ children, align = 'left' }: { children: ReactNode; align?: 'left' | 'right' }) {
-  return (
-    <th className={`px-4 py-2 text-xs font-semibold uppercase text-slate-500 ${align === 'right' ? 'text-right' : 'text-left'}`}>
-      {children}
-    </th>
-  )
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const styles =
-    status === 'Pending'
-      ? 'bg-amber-100 text-amber-700'
-      : status === 'Partial'
-        ? 'bg-blue-100 text-blue-700'
-        : 'bg-emerald-100 text-emerald-700'
-  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles}`}>{status}</span>
-}
-
-const fmtMoney = (v: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v)
-const fmtMoneyCompact = (v: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', notation: 'compact', maximumFractionDigits: 1 }).format(v)
-const formatWhole = (v: number) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(v))
