@@ -71,3 +71,70 @@ export function computeCustomerOutstanding(params: {
     advanceAmount: netBalance < 0 ? Math.abs(netBalance) : 0,
   }
 }
+
+export type AgeingBucketKey = '0_30' | '31_60' | '60_plus'
+
+export type AgeingBucketItem = {
+  key: AgeingBucketKey
+  label: string
+  amount: number
+  count: number
+}
+
+export type AgeingSummary = {
+  bucket0to30: number
+  bucket31to60: number
+  bucket60plus: number
+  count0to30: number
+  count31to60: number
+  count60plus: number
+  totalAmount: number
+  buckets: AgeingBucketItem[]
+}
+
+/**
+ * Canonical 3-bucket ageing calculation (0-30, 31-60, 60+ days).
+ * Strict boundary rules:
+ * - 0-30 days: dueDays <= 30
+ * - 31-60 days: dueDays > 30 && dueDays <= 60
+ * - 60+ days: dueDays > 60
+ */
+export function computeAgeingBuckets(rows: Array<{ amount: number; dueDays: number }>): AgeingSummary {
+  let bucket0to30 = 0
+  let bucket31to60 = 0
+  let bucket60plus = 0
+  let count0to30 = 0
+  let count31to60 = 0
+  let count60plus = 0
+
+  for (const row of rows) {
+    if (row.amount <= 0) continue
+    if (row.dueDays <= 30) {
+      bucket0to30 += row.amount
+      count0to30 += 1
+    } else if (row.dueDays <= 60) {
+      bucket31to60 += row.amount
+      count31to60 += 1
+    } else {
+      bucket60plus += row.amount
+      count60plus += 1
+    }
+  }
+
+  const totalAmount = bucket0to30 + bucket31to60 + bucket60plus
+  return {
+    bucket0to30,
+    bucket31to60,
+    bucket60plus,
+    count0to30,
+    count31to60,
+    count60plus,
+    totalAmount,
+    buckets: [
+      { key: '0_30', label: '0–30 days', amount: bucket0to30, count: count0to30 },
+      { key: '31_60', label: '31–60 days', amount: bucket31to60, count: count31to60 },
+      { key: '60_plus', label: '60+ days', amount: bucket60plus, count: count60plus },
+    ],
+  }
+}
+

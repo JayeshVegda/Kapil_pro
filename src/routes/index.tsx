@@ -8,12 +8,15 @@ import {
   TrendingUp,
   Users,
 } from 'lucide-react'
-import { useMemo, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { loadCastingSessions } from '@/data/casting'
+import { purchaseBillsQueryOptions, supplierPaymentsQueryOptions, suppliersSummaryQueryOptions } from '@/data/purchase-queries'
+import { buildPurchaseDashboard } from '@/domain/purchase-dashboard'
 import { useModuleSettings } from '@/lib/use-module-settings'
-import { useDashboardData } from '@/domain/dashboard'
+import { fiscalYearStart, useDashboardData } from '@/domain/dashboard'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
+import { computeAgeingBuckets } from '@/domain/records'
 import { RankedBarList, StatusPill } from '@/components/ui/business-dashboard'
 import { SalesCollectionTrendChart } from '@/components/reports/company-charts'
 
@@ -22,38 +25,69 @@ export const Route = createFileRoute('/')({
 })
 
 function DashboardPage() {
-  const { data, isPending, isError, error } = useDashboardData()
   const navigate = useNavigate()
   const today = useMemo(() => getLocalIsoDate(), [])
+  const [selectedMonth, setSelectedMonth] = useState(today.slice(0, 7))
+  const [period, setPeriod] = useState<'month' | 'fy'>('month')
+  const asOfDate = useMemo(() => selectedMonth === today.slice(0, 7) ? today : `${selectedMonth}-${String(new Date(Number(selectedMonth.slice(0, 4)), Number(selectedMonth.slice(5, 7)), 0).getDate()).padStart(2, '0')}`, [selectedMonth, today])
+  const previousMonth = useMemo(() => { const [year, month] = selectedMonth.split('-').map(Number); const date = new Date(year, month - 2, 1); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` }, [selectedMonth])
+  const fiscalStart = useMemo(() => fiscalYearStart(selectedMonth), [selectedMonth])
+  const periodFrom = period === 'fy' ? fiscalStart : `${selectedMonth}-01`
+  const { data, isPending, isError, error } = useDashboardData(asOfDate)
 
-  const { castingEnabled } = useModuleSettings()
+  const { castingEnabled, purchaseEnabled } = useModuleSettings()
+  const purchaseBillsQuery = useQuery({ ...purchaseBillsQueryOptions(), enabled: purchaseEnabled })
+  const purchasePaymentsQuery = useQuery({ ...supplierPaymentsQueryOptions(), enabled: purchaseEnabled })
+  const supplierSummariesQuery = useQuery({ ...suppliersSummaryQueryOptions(), enabled: purchaseEnabled })
+  const purchaseStats = useMemo(() => buildPurchaseDashboard({
+    bills: (purchaseBillsQuery.data ?? []).filter((bill) => bill.date >= periodFrom && bill.date <= asOfDate),
+    payments: (purchasePaymentsQuery.data ?? []).filter((payment) => payment.date >= periodFrom && payment.date <= asOfDate),
+    summaries: supplierSummariesQuery.data ?? [], today: asOfDate,
+  }), [purchaseBillsQuery.data, purchasePaymentsQuery.data, supplierSummariesQuery.data, periodFrom, asOfDate])
+  const previousPurchaseStats = useMemo(() => buildPurchaseDashboard({
+    bills: (purchaseBillsQuery.data ?? []).filter((bill) => bill.date.startsWith(previousMonth)),
+    payments: (purchasePaymentsQuery.data ?? []).filter((payment) => payment.date.startsWith(previousMonth)),
+    summaries: [], today: asOfDate,
+  }), [purchaseBillsQuery.data, purchasePaymentsQuery.data, previousMonth, asOfDate])
+  const payNext = useMemo(() => [...(supplierSummariesQuery.data ?? [])]
+    .filter((row) => row.outstandingPaise > 0)
+    .sort((a, b) => b.outstandingPaise - a.outstandingPaise)
+    .slice(0, 4), [supplierSummariesQuery.data])
+  const latestPurchaseBills = useMemo(() => [...(purchaseBillsQuery.data ?? [])]
+    .filter((bill) => bill.date <= asOfDate && !bill.cancelled)
+    .sort((a, b) => `${b.date}|${b.created}|${b.id}`.localeCompare(`${a.date}|${a.created}|${a.id}`))
+    .slice(0, 5), [purchaseBillsQuery.data, asOfDate])
 
   const castingSessionsQuery = useQuery({
-    queryKey: ['casting-sessions', today.slice(0, 4) + '-01-01', today],
-    queryFn: () => loadCastingSessions({ from: today.slice(0, 4) + '-01-01', to: today }),
+    queryKey: ['casting-sessions', periodFrom, previousMonth, asOfDate],
+    queryFn: () => loadCastingSessions({ from: `${previousMonth}-01` < periodFrom ? `${previousMonth}-01` : periodFrom, to: asOfDate }),
     // Skipping the query when casting is off also saves a PocketBase round trip.
     enabled: castingEnabled,
   })
 
   const castingStats = useMemo(() => {
     const list = castingSessionsQuery.data ?? []
-    const currentMonthPrefix = today.slice(0, 7)
+    let previousWireOut = 0
+    let previousInputKg = 0
 
     let monthInputKg = 0
     let monthWireOut = 0
     let monthInputCost = 0
+    let monthOutputCost = 0
     let monthSessions = 0
     let latestCost = 0
     let latestDate = ''
 
     for (const session of list) {
-      if (session.date.startsWith(currentMonthPrefix)) {
+      if (session.date >= periodFrom && session.date <= asOfDate) {
         monthInputKg += session.totalInputKg
         monthWireOut += session.totalWireOut
         monthInputCost += session.totalInputCost
+        monthOutputCost += session.finalProductCostPerKg * session.totalWireOut
         monthSessions++
       }
-      if (!latestDate || session.date > latestDate) {
+      if (session.date.startsWith(previousMonth)) { previousWireOut += session.totalWireOut; previousInputKg += session.totalInputKg }
+      if (session.date >= periodFrom && (!latestDate || session.date > latestDate)) {
         latestDate = session.date
         latestCost = session.metalCostPerKg
       }
@@ -65,11 +99,15 @@ function DashboardPage() {
       inputKg: monthInputKg,
       wireOut: monthWireOut,
       avgMetalCost,
+      wastagePct: monthInputKg > 0 ? Math.max(0, (monthInputKg - monthWireOut) / monthInputKg * 100) : 0,
+      outputCostPerKg: monthWireOut > 0 ? monthOutputCost / monthWireOut : 0,
       sessions: monthSessions,
+      wireOutDelta: monthWireOut - previousWireOut,
+      inputDelta: monthInputKg - previousInputKg,
       latestCost,
       latestDate,
     }
-  }, [castingSessionsQuery.data, today])
+  }, [castingSessionsQuery.data, periodFrom, asOfDate, previousMonth])
 
   if (isPending) {
     return (
@@ -87,9 +125,9 @@ function DashboardPage() {
   if (isError) {
     return (
       <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
-        <section className="rounded-lg border border-red-200 bg-red-50 p-6">
-          <h2 className="text-base font-semibold text-red-700">Unable to load dashboard</h2>
-          <p className="mt-2 text-sm text-red-600">{error instanceof Error ? error.message : 'Unknown error'}</p>
+        <section className="rounded-lg border border-rose-200 bg-rose-50 p-6">
+          <h2 className="text-base font-semibold text-rose-700">Unable to load dashboard</h2>
+          <p className="mt-2 text-sm text-rose-600">{error instanceof Error ? error.message : 'Unknown error'}</p>
         </section>
       </div>
     )
@@ -112,6 +150,31 @@ function DashboardPage() {
 
   return (
     <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
+      <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
+        <label htmlFor="dashboard-period" className="text-xs font-medium text-slate-600">Period</label>
+        <select id="dashboard-period" value={period} onChange={(event) => setPeriod(event.target.value as 'month' | 'fy')} className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-900"><option value="month">Month</option><option value="fy">FY to date</option></select>
+        <label htmlFor="dashboard-month" className="text-xs font-medium text-slate-600">Ending month</label>
+        <input id="dashboard-month" type="month" max={today.slice(0, 7)} value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value || today.slice(0, 7))} className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-900" />
+      </div>
+      {purchaseEnabled && <section className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-slate-900">Purchase</h2><p className="text-xs text-slate-500">Bought and paid {period === 'fy' ? `since ${formatFullDate(fiscalStart)}` : `in ${selectedMonth}`}; payable is the current balance</p></div><Link to="/purchase-dashboard" className="text-xs font-semibold text-blue-700">Open Purchase</Link></div>
+        {purchaseBillsQuery.isLoading || purchasePaymentsQuery.isLoading || supplierSummariesQuery.isLoading ? <div className="h-20 animate-pulse rounded-lg bg-slate-100" /> : purchaseBillsQuery.isError || purchasePaymentsQuery.isError || supplierSummariesQuery.isError ? <p role="alert" className="text-xs text-rose-700">Purchase data could not load.</p> : <div className="grid gap-3 sm:grid-cols-4">
+          <InfoMetric label="Bought" value={`${formatWhole(purchaseStats.snapshot.totalProcuredKg)} kg`} delta={period === 'month' ? `${signedNumber(purchaseStats.snapshot.totalProcuredKg - previousPurchaseStats.snapshot.totalProcuredKg, 'kg')} vs last month` : undefined} />
+          <InfoMetric label="Purchase amount" value={formatInrInteger(purchaseStats.snapshot.totalProcuredPaise / 100)} delta={period === 'month' ? `${signedMoney((purchaseStats.snapshot.totalProcuredPaise - previousPurchaseStats.snapshot.totalProcuredPaise) / 100)} vs last month` : undefined} />
+          <InfoMetric label="Paid out" value={formatInrInteger(purchaseStats.snapshot.totalPaidPaise / 100)} delta={period === 'month' ? `${signedMoney((purchaseStats.snapshot.totalPaidPaise - previousPurchaseStats.snapshot.totalPaidPaise) / 100)} vs last month` : undefined} />
+          <InfoMetric label="Still to pay" value={formatInrInteger(purchaseStats.snapshot.totalWeOwePaise / 100)} />
+        </div>}
+      </section>}
+      {purchaseEnabled && <section className="mb-4 grid gap-4 xl:grid-cols-2">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold text-slate-950">Pay Next</h2><Link to="/ledger" search={{ tab: 'suppliers' }} className="text-xs font-semibold text-blue-700">Supplier ledger</Link></div>
+          {supplierSummariesQuery.isLoading ? <p className="text-xs text-slate-500">Loading suppliers…</p> : supplierSummariesQuery.isError ? <p role="alert" className="text-xs text-rose-700">Suppliers could not load.</p> : payNext.length === 0 ? <p className="text-xs text-slate-500">No supplier balance due.</p> : <div className="divide-y divide-slate-100">{payNext.map((row) => <div key={row.supplier.id} className="flex items-center justify-between gap-3 py-2"><div className="min-w-0"><p className="truncate text-xs font-medium text-slate-900">{row.supplier.companyName}</p><p className="text-[11px] text-slate-500">{row.oldestDueDays == null ? 'No dated due' : `${row.oldestDueDays} days oldest due`}</p></div><div className="flex shrink-0 items-center gap-3"><span className="font-mono text-xs font-semibold tabular-nums text-slate-900">{formatInrInteger(row.outstandingPaise / 100)}</span><Link to="/new-supplier-payment" search={{ supplierId: row.supplier.id }} className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-800">Pay</Link></div></div>)}</div>}
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold text-slate-950">Latest Purchase Bills</h2><Link to="/purchase-bills" className="text-xs font-semibold text-blue-700">All bills</Link></div>
+          {purchaseBillsQuery.isLoading ? <p className="text-xs text-slate-500">Loading bills…</p> : purchaseBillsQuery.isError ? <p role="alert" className="text-xs text-rose-700">Bills could not load.</p> : latestPurchaseBills.length === 0 ? <p className="text-xs text-slate-500">No purchase bills yet.</p> : <div className="divide-y divide-slate-100">{latestPurchaseBills.map((bill) => <Link key={bill.id} to="/purchase-bills" search={{ billId: bill.id }} className="flex items-center justify-between gap-3 py-2 text-xs hover:bg-slate-50"><span className="min-w-0"><span className="block font-mono font-semibold text-slate-900">{bill.inNo}</span><span className="block truncate text-slate-500">{formatFullDate(bill.date)} · {bill.supplierName}</span></span><span className="shrink-0 font-mono font-semibold tabular-nums text-slate-900">{formatInrInteger(bill.netPaise / 100)}</span></Link>)}</div>}
+        </div>
+      </section>}
       {/* Receivables overview — the number that runs the business, split by age */}
       <section className="mb-4 rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="grid grid-cols-1 divide-y divide-slate-100 lg:grid-cols-[1.25fr_1fr] lg:divide-x lg:divide-y-0">
@@ -129,20 +192,20 @@ function DashboardPage() {
           </div>
 
           <div className="p-5">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">This Month</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{period === 'fy' ? 'FY to Date' : 'This Month'}</p>
             <div className="mt-3 grid grid-cols-3 gap-3">
-              <MonthStat label="Sales" value={fmtMoneyCompact(data.thisMonthSummary.sales)} delta={data.kpis.salesVsLastMonth} />
-              <MonthStat label="Collections" value={fmtMoneyCompact(data.thisMonthSummary.collection)} delta={data.kpis.collectionVsLastMonth} />
+              <MonthStat label="Sales" value={fmtMoneyCompact(period === 'fy' ? data.fiscalYearSummary.sales : data.thisMonthSummary.sales)} delta={period === 'month' ? data.kpis.salesVsLastMonth : undefined} />
+              <MonthStat label="Collections" value={fmtMoneyCompact(period === 'fy' ? data.fiscalYearSummary.collection : data.thisMonthSummary.collection)} delta={period === 'month' ? data.kpis.collectionVsLastMonth : undefined} />
               <MonthStat
                 label="Net"
-                value={`${data.kpis.thisMonthNet >= 0 ? '+' : '-'}${fmtMoneyCompact(Math.abs(data.kpis.thisMonthNet))}`}
-                tone={data.kpis.thisMonthNet >= 0 ? 'emerald' : 'rose'}
+                value={`${(period === 'fy' ? data.fiscalYearSummary.sales - data.fiscalYearSummary.collection : data.kpis.thisMonthNet) >= 0 ? '+' : '-'}${fmtMoneyCompact(Math.abs(period === 'fy' ? data.fiscalYearSummary.sales - data.fiscalYearSummary.collection : data.kpis.thisMonthNet))}`}
+                tone={(period === 'fy' ? data.fiscalYearSummary.sales - data.fiscalYearSummary.collection : data.kpis.thisMonthNet) >= 0 ? 'emerald' : 'rose'}
               />
             </div>
             <div className="mt-4 grid grid-cols-3 gap-3 border-t border-slate-100 pt-3">
-              <MonthStat label="Bills" value={formatWhole(data.kpis.totalBills)} muted />
-              <MonthStat label="Avg bill" value={fmtMoneyCompact(data.kpis.averageBillValue)} muted />
-              <MonthStat label="Sold" value={`${formatWhole(totalSoldBags)} bags`} muted />
+              <MonthStat label="All bills" value={formatWhole(data.kpis.totalBills)} muted />
+              <MonthStat label="Avg bill (all)" value={fmtMoneyCompact(data.kpis.averageBillValue)} muted />
+              <MonthStat label="Sold this month" value={`${formatWhole(totalSoldBags)} bags`} muted />
             </div>
           </div>
         </div>
@@ -167,7 +230,7 @@ function DashboardPage() {
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-slate-950">Collect Next</h2>
-              <p className="text-xs text-slate-500">Largest pending balances, oldest first</p>
+              <p className="text-xs text-slate-500">Pending balances, ranked by latest bill age</p>
             </div>
             <StatusPill tone={data.actionRequired.highRiskParties > 0 ? 'amber' : 'emerald'}>
               {data.actionRequired.highRiskParties > 0 ? `${data.actionRequired.highRiskParties} high` : 'on track'}
@@ -177,7 +240,7 @@ function DashboardPage() {
             <p className="py-6 text-center text-xs text-slate-400">Nothing pending — all parties are clear.</p>
           ) : (
             <div className="space-y-1.5">
-              {data.actionRequired.riskRows.slice(0, 6).map((row) => (
+              {data.actionRequired.riskRows.slice(0, 4).map((row) => (
                 <button
                   key={row.customerId}
                   type="button"
@@ -187,7 +250,7 @@ function DashboardPage() {
                   <span className="min-w-0">
                     <span className="block truncate text-[13px] font-medium text-slate-800">{row.customerName}</span>
                     <span className={`text-[11px] font-semibold ${row.level === 'overdue' ? 'text-rose-600' : row.level === 'due' ? 'text-amber-600' : 'text-slate-500'}`}>
-                      {row.dueDays}d pending
+                      {row.dueDays}d since latest bill
                     </span>
                   </span>
                   <span className="shrink-0 font-mono text-sm font-bold tabular-nums text-slate-900">{fmtMoneyCompact(row.amount)}</span>
@@ -242,16 +305,17 @@ function DashboardPage() {
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-slate-950">Casting Cost Signal</h2>
-              <p className="text-xs text-slate-500">Metal-cost view for pricing decisions</p>
+              <p className="text-xs text-slate-500">{period === 'fy' ? 'FY to date' : selectedMonth} · metal-cost view for pricing decisions</p>
             </div>
             <Link to="/casting" className="text-xs font-semibold text-blue-700 hover:text-blue-800">
               Casting
             </Link>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <CostMetric label="Metal Intake" value={`${formatWhole(castingStats.inputKg)} kg`} icon={<Flame size={15} />} />
-            <CostMetric label="Wire Out" value={`${formatWhole(castingStats.wireOut)} kg`} icon={<Activity size={15} />} />
-            <CostMetric label="Avg Cost" value={castingStats.avgMetalCost > 0 ? `₹${castingStats.avgMetalCost.toFixed(2)}` : '—'} icon={<IndianRupee size={15} />} />
+            <CostMetric label="Metal Intake" value={`${formatWhole(castingStats.inputKg)} kg`} delta={period === 'month' ? `${signedNumber(castingStats.inputDelta, 'kg')} vs last month` : undefined} icon={<Flame size={15} />} />
+            <CostMetric label="Wire Out" value={`${formatWhole(castingStats.wireOut)} kg`} delta={period === 'month' ? `${signedNumber(castingStats.wireOutDelta, 'kg')} vs last month` : undefined} icon={<Activity size={15} />} />
+            <CostMetric label="Wastage" value={`${castingStats.wastagePct.toFixed(1)}%`} icon={<IndianRupee size={15} />} />
+            <CostMetric label="Output Cost" value={castingStats.outputCostPerKg > 0 ? `₹${castingStats.outputCostPerKg.toFixed(2)}/kg` : '—'} icon={<IndianRupee size={15} />} />
             <CostMetric label="Runs" value={`${castingStats.sessions}`} icon={<TrendingUp size={15} />} />
           </div>
           <div className="mt-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
@@ -270,7 +334,7 @@ function DashboardPage() {
       </section>
 
       <section className="grid min-h-[42vh] grid-cols-1 gap-4 xl:grid-cols-2">
-        <RecentBillsTable rows={data.recentBills} onOpen={(customerId) => navigate({ to: '/ledger', search: { customerId, focus: '' } })} />
+        <RecentBillsTable rows={data.recentBills.slice(0, 5)} onOpen={(customerId) => navigate({ to: '/ledger', search: { customerId, focus: '' } })} />
         <RecentPaymentsTable rows={data.recentPayments} onOpen={(customerId) => navigate({ to: '/ledger', search: { customerId, focus: '' } })} />
       </section>
     </div>
@@ -280,17 +344,12 @@ function DashboardPage() {
 type AgingBucketRow = { label: string; amount: number; color: string; text: string }
 
 function buildAgingBuckets(rows: Array<{ amount: number; dueDays: number }>): AgingBucketRow[] {
-  const buckets: AgingBucketRow[] = [
-    { label: '0-30d', amount: 0, color: 'bg-blue-400', text: 'text-blue-700' },
-    { label: '31-60d', amount: 0, color: 'bg-amber-400', text: 'text-amber-700' },
-    { label: '61-90d', amount: 0, color: 'bg-orange-400', text: 'text-orange-700' },
-    { label: '90d+', amount: 0, color: 'bg-rose-500', text: 'text-rose-700' },
+  const summary = computeAgeingBuckets(rows)
+  return [
+    { label: '0–30d', amount: summary.bucket0to30, color: 'bg-slate-400', text: 'text-slate-700' },
+    { label: '31–60d', amount: summary.bucket31to60, color: 'bg-amber-400', text: 'text-amber-700' },
+    { label: '60d+', amount: summary.bucket60plus, color: 'bg-rose-500', text: 'text-rose-700' },
   ]
-  for (const row of rows) {
-    const index = row.dueDays <= 30 ? 0 : row.dueDays <= 60 ? 1 : row.dueDays <= 90 ? 2 : 3
-    buckets[index].amount += row.amount
-  }
-  return buckets
 }
 
 function AgingBar({ buckets }: { buckets: AgingBucketRow[] }) {
@@ -345,11 +404,15 @@ function MonthStat({ label, value, delta, tone, muted = false }: { label: string
 }
 
 
-function InfoMetric({ label, value }: { label: string; value: string }) {
+function signedNumber(value: number, unit: string) { return `${value >= 0 ? '+' : '-'}${formatWhole(Math.abs(value))} ${unit}` }
+function signedMoney(value: number) { return `${value >= 0 ? '+' : '-'}${formatInrInteger(Math.abs(value))}` }
+
+function InfoMetric({ label, value, delta }: { label: string; value: string; delta?: string }) {
   return (
     <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
       <p className="text-[11px] font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-1 font-mono text-xl font-bold leading-tight text-slate-950">{value}</p>
+      {delta && <p className="mt-1 text-[11px] text-slate-500">{delta}</p>}
     </div>
   )
 }
@@ -367,7 +430,7 @@ function SmallActivity({ title, value, detail, icon }: { title: string; value: s
   )
 }
 
-function CostMetric({ label, value, icon }: { label: string; value: string; icon: ReactNode }) {
+function CostMetric({ label, value, icon, delta }: { label: string; value: string; icon: ReactNode; delta?: string }) {
   return (
     <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase text-slate-500">
@@ -375,6 +438,7 @@ function CostMetric({ label, value, icon }: { label: string; value: string; icon
         <span>{label}</span>
       </div>
       <p className="mt-2 font-mono text-lg font-bold leading-tight text-slate-950">{value}</p>
+      {delta && <p className="mt-1 text-[11px] text-slate-500">{delta}</p>}
     </div>
   )
 }
@@ -402,7 +466,7 @@ function RecentBillsTable({
     <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-slate-950">Recent Bills</h2>
-        <span className="text-xs text-slate-500">Last 8</span>
+        <span className="text-xs text-slate-500">Last 5</span>
       </div>
       <div className="overflow-x-auto no-scrollbar">
         <table className="w-full min-w-[640px]">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeSupplierSettlement, type SupplierSettlementInput } from './supplier-settlement'
+import { computeSupplierSettlement, previewSupplierPayment, type SupplierSettlementInput } from './supplier-settlement'
 
 const CREATED = {
   a: '2026-04-05T09:00:00.000Z',
@@ -20,6 +20,19 @@ function baseInput(overrides: Partial<SupplierSettlementInput> = {}): SupplierSe
     ...overrides,
   }
 }
+
+it('previews a pinned payment against the bill before the older opening balance', () => {
+  const input = baseInput({
+    supplier: { openingKachaPaise: 5000, openingGstPaise: 0 },
+    bills: [{ id: 'bill1', date: '2026-04-01', created: CREATED.a, pool: 'kacha', taxMode: 'none', gstRateBp: 0 }],
+    lines: [{ billId: 'bill1', amountPaise: 10000 }],
+  })
+  const preview = previewSupplierPayment(input, { pool: 'kacha', date: '2026-04-06', kind: 'payment', amountPaise: 6000, pinnedBillIds: ['bill1'] })
+  expect(preview.after.pools.kacha.bills[0].duePaise).toBe(4000)
+  expect(preview.after.pools.kacha.outstandingPaise).toBe(9000)
+  expect(preview.after.pools.kacha.payments.find((payment) => payment.paymentId === preview.previewPaymentId)?.appliedPaise).toBe(6000)
+  expect(preview.before.pools.kacha.outstandingPaise).toBe(15000)
+})
 
 /**
  * Spec test 1: bill 101 = ₹3,52,000 (400 kg x 880), paid ₹4,00,000 same day;

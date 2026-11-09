@@ -3,6 +3,11 @@ import { useQuery } from '@tanstack/react-query'
 import { Activity, ArrowUpRight, ArrowDownRight, Coins, Flame, TrendingUp } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { loadCastingSessions, loadMonthlyAverageMarketRate } from '@/data/casting'
+import {
+  summarizeCastingSessions as summarizeSessions,
+  buildMonthlyCastingTrend,
+  findBestWorstCastingSessions,
+} from '@/domain/casting-calculations'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
@@ -144,25 +149,11 @@ function CastingOverviewPage() {
   }, [monthPrefix, sessionsQuery.data])
 
   const monthlyTrend = useMemo(() => {
-    const grouped = new Map<string, Array<(typeof monthSessions)[number]>>()
-    for (const s of sessionsQuery.data ?? []) {
-      const m = s.date.slice(0, 7)
-      const prev = grouped.get(m) ?? []
-      prev.push(s)
-      grouped.set(m, prev)
-    }
-    return [...grouped.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-6)
-      .map(([month, items]) => ({ month, ...summarizeSessions(items) }))
-  }, [sessionsQuery.data, monthStats])
+    return buildMonthlyCastingTrend(sessionsQuery.data ?? [], 6)
+  }, [sessionsQuery.data])
 
   const sessionSignals = useMemo(() => {
-    const usable = monthSessions.filter((session) => session.costPerKg > 0).sort((a, b) => a.costPerKg - b.costPerKg)
-    return {
-      best: usable[0] ?? null,
-      worst: usable[usable.length - 1] ?? null,
-    }
+    return findBestWorstCastingSessions(monthSessions)
   }, [monthSessions])
 
   const costVsMarketDelta = useMemo(() => {
@@ -173,7 +164,7 @@ function CastingOverviewPage() {
   return (
     <div className="w-full space-y-5 px-3 pb-8 pt-3 sm:px-4 lg:px-6">
       {sessionsQuery.isLoading && <p className="text-sm text-slate-500">Loading workspace...</p>}
-      {sessionsQuery.isError && <p className="text-sm text-red-600">Unable to load casting workspace stats.</p>}
+      {sessionsQuery.isError && <p className="text-sm text-rose-600">Unable to load casting workspace stats.</p>}
 
       {!sessionsQuery.isLoading && !sessionsQuery.isError && (
         <>
@@ -380,7 +371,7 @@ function CastingOverviewPage() {
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3.5">
                   <div>
                     <h3 className="text-sm font-bold text-slate-900">Material Dashboard</h3>
-                    <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Casting Stats summary</span>
+                    <span className="text-[11px] text-slate-400 uppercase tracking-wider font-bold">Casting Stats summary</span>
                   </div>
                   <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
                     <button
@@ -403,19 +394,19 @@ function CastingOverviewPage() {
                 <div className="space-y-3.5">
                   {/* Avg Metal / kg cost (Highlighted - Most Important) */}
                   <div className="rounded-xl bg-blue-50/60 border border-blue-150 p-4 shadow-sm text-center">
-                    <span className="block text-[10px] uppercase font-bold text-blue-500 tracking-wider">Avg Metal Cost / kg</span>
+                    <span className="block text-[11px] uppercase font-bold text-blue-500 tracking-wider">Avg Metal Cost / kg</span>
                     <span className="font-mono text-3xl font-black text-blue-700 block mt-1">
                       {period === 'monthly'
                         ? (stats.month.avgMetalCost > 0 ? `₹${stats.month.avgMetalCost.toFixed(2)}/kg` : '—')
                         : (stats.year.avgMetalCost > 0 ? `₹${stats.year.avgMetalCost.toFixed(2)}/kg` : '—')
                       }
                     </span>
-                    <span className="text-[9px] text-blue-600 font-bold uppercase tracking-wide mt-1 block">★ Most Important Metric</span>
+                    <span className="text-[11px] text-blue-600 font-bold uppercase tracking-wide mt-1 block">★ Most Important Metric</span>
                   </div>
 
                   {/* Total Metal Intake */}
                   <div className="rounded-xl border border-slate-150 bg-slate-50/30 p-3.5 text-center">
-                    <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider">Metal Intake</span>
+                    <span className="block text-[11px] uppercase font-bold text-slate-400 tracking-wider">Metal Intake</span>
                     <span className="font-mono text-base font-bold text-slate-850 block mt-1">
                       {period === 'monthly' ? formatMass(stats.month.inputKg) : formatMass(stats.year.inputKg)}
                     </span>
@@ -423,7 +414,7 @@ function CastingOverviewPage() {
 
                   {/* Total Wire Out */}
                   <div className="rounded-xl border border-slate-150 bg-slate-50/30 p-3.5 text-center">
-                    <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider">Total Wire Out</span>
+                    <span className="block text-[11px] uppercase font-bold text-slate-400 tracking-wider">Total Wire Out</span>
                     <span className="font-mono text-base font-bold text-slate-850 block mt-1">
                       {period === 'monthly' ? formatMass(stats.month.wireOut) : formatMass(stats.year.wireOut)}
                     </span>
@@ -432,7 +423,7 @@ function CastingOverviewPage() {
 
                 {/* Material Breakdown Share */}
                 <div className="space-y-3 pt-3 border-t border-slate-100">
-                  <span className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider">Material Share</span>
+                  <span className="block text-[11px] uppercase font-bold text-slate-400 tracking-wider">Material Share</span>
                   {(period === 'monthly' ? stats.month.materials : stats.year.materials).length === 0 ? (
                     <span className="text-xs text-slate-400 italic block py-1">No material usage in this period.</span>
                   ) : (
@@ -488,7 +479,7 @@ function SignalCard({
 
   return (
     <div className={`rounded-lg border border-slate-200 border-l-4 ${borderColor} ${bgColor} p-3 transition hover:shadow-sm`}>
-      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
+      <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
       <p className={`mt-1 font-mono text-lg tabular-nums ${textColor}`}>
         {session ? `₹${session.costPerKg.toFixed(2)}` : '—'}
       </p>
@@ -550,63 +541,3 @@ function formatMass(kg: number) {
   return `${kg.toFixed(1)} kg`
 }
 
-function summarizeSessions(
-  sessions: Array<{
-    date: string
-    unit: number
-    totalInputKg: number
-    totalInputCost: number
-    wireOut: number
-    wastage: number
-    cholIn: number
-    costPerKg: number
-    coalKg: number
-    coalRate: number
-    workerSalary: number
-  }>,
-) {
-  const runningDays = new Set<string>()
-  let batches = 0
-  let kg = 0
-  let wire = 0
-  let wastage = 0
-  let cholIn = 0
-  let totalCost = 0
-  let totalCoalKg = 0
-  let totalCoalCost = 0
-  let totalWorkerSalary = 0
-  let loadedCostSum = 0
-
-  for (const s of sessions) {
-    runningDays.add(s.date)
-    batches += s.unit
-    kg += s.totalInputKg
-    wire += s.wireOut
-    wastage += s.wastage
-    cholIn += s.cholIn
-    totalCost += s.totalInputCost
-    totalCoalKg += s.coalKg
-    totalCoalCost += (s.coalKg * s.coalRate)
-    totalWorkerSalary += s.workerSalary
-    loadedCostSum += (s.costPerKg * s.wireOut)
-  }
-
-  const avgCostKg = kg > 0 ? totalCost / kg : 0
-  const avgLoadedCostKg = wire > 0 ? loadedCostSum / wire : 0
-
-  return {
-    daysRunning: runningDays.size,
-    batches,
-    count: sessions.length,
-    kg,
-    wire,
-    wastage,
-    cholIn,
-    totalCost,
-    totalCoalKg,
-    totalCoalCost,
-    totalWorkerSalary,
-    avgCostKg,
-    avgLoadedCostKg,
-  }
-}

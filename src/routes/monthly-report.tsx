@@ -1,28 +1,62 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, CircleDollarSign, Landmark, ReceiptText, TrendingUp } from 'lucide-react'
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, CircleDollarSign, Download, Landmark, ReceiptText, TrendingUp } from 'lucide-react'
 import { CollectionEfficiencyGauge, GasSellingRateTrendChart, ReceivableAgingBars, SalesCollectionTrendChart, WeeklySalesChart } from '@/components/reports/company-charts'
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { loadDashboardCollections } from '@/data/dashboard'
+import { purchaseReadModelQueryOptions } from '@/data/purchase-queries'
+import { loadCastingSessions } from '@/data/casting'
+import { useModuleSettings } from '@/lib/use-module-settings'
+import { computeBillNet } from '@/domain/supplier-purchases'
+import { computeSupplierPositions } from '@/domain/supplier-settlement'
+import { fiscalYearStart } from '@/domain/dashboard'
+import { formatPaiseInr } from '@/lib/inr-format'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { buildGasSalesReport, type GasSalesGroup, type GasSalesMetrics } from '@/domain/gas-sales-reporting'
 import { computeCustomerOutstanding, type CanonicalBillRecord, type CanonicalPaymentRecord } from '@/domain/records'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
 import { formatInrInteger } from '@/lib/inr-format'
+import { exportNodeAsJpg } from '@/lib/image-export'
 
 export const Route = createFileRoute('/monthly-report')({
   component: ReportPage,
 })
 
 function ReportPage() {
-  const today = useMemo(() => getLocalIsoDate(), [])
+  const reportRef = useRef<HTMLDivElement>(null)
+  const [exportError, setExportError] = useState('')
+  const { purchaseEnabled, castingEnabled } = useModuleSettings()
+  const actualToday = useMemo(() => getLocalIsoDate(), [])
+  const currentFiscalYear = Number(fiscalYearStart(actualToday.slice(0, 7)).slice(0, 4))
+  const [selectedFiscalYear, setSelectedFiscalYear] = useState(currentFiscalYear)
+  const today = selectedFiscalYear === currentFiscalYear ? actualToday : `${selectedFiscalYear + 1}-03-31`
+  const periodFrom = `${selectedFiscalYear}-04-01`
   const [selectedAgingBucket, setSelectedAgingBucket] = useState<'current' | 'days31to60' | 'days61to90' | 'above90'>('above90')
   const [selectedGasMonth, setSelectedGasMonth] = useState(() => today.slice(0, 7))
+  useEffect(() => setSelectedGasMonth(today.slice(0, 7)), [today])
   const reportQuery = useQuery({
     queryKey: ['company-report', today],
     queryFn: loadDashboardCollections,
   })
+  const purchaseQuery = useQuery({ ...purchaseReadModelQueryOptions(), enabled: purchaseEnabled })
+  const castingQuery = useQuery({ queryKey: ['company-report-casting', periodFrom, today], queryFn: () => loadCastingSessions({ from: periodFrom, to: today }), enabled: castingEnabled })
+  const purchaseSummary = useMemo(() => {
+    const data = purchaseQuery.data
+    if (!data) return null
+    const positions = computeSupplierPositions(data.summaries)
+    let rcm = 0
+    for (const bill of data.bills) if (!bill.cancelled && bill.date >= periodFrom && bill.date <= today && bill.taxMode === 'rcm') rcm += computeBillNet(bill.lines, bill.adjustments, bill.bardan, bill.taxMode, bill.gstRateBp).rcmLiabilityPaise
+    return { kacha: positions.kachaPayablePaise, gst: positions.gstPayablePaise, rcm, bills: data.bills.filter((bill) => !bill.cancelled && bill.date >= periodFrom && bill.date <= today).length }
+  }, [purchaseQuery.data, periodFrom, today])
+
+  const castingSummary = useMemo(() => {
+    const rows = castingQuery.data ?? []
+    const input = rows.reduce((sum, row) => sum + row.totalInputKg, 0)
+    const output = rows.reduce((sum, row) => sum + row.totalWireOut, 0)
+    const cost = rows.reduce((sum, row) => sum + row.totalInputCost, 0)
+    return { sessions: rows.length, output, wastage: input > 0 ? (input - output) / input * 100 : 0, chol: rows.reduce((sum, row) => sum + row.cholIn, 0), costPerKg: output > 0 ? cost / output : 0 }
+  }, [castingQuery.data])
   const report = useMemo(() => {
     const data = reportQuery.data
     if (!data) {
@@ -377,8 +411,40 @@ function ReportPage() {
   const salesDelta = report.thisMonth.sales - report.lastMonth.sales
   const collectionEfficiencyStatus = getEfficiencyStatus(report.overall.collectionEfficiencyPct)
 
+  function downloadSummaryCsv() {
+    const rows: Array<[string, string]> = [
+      ['Metric', 'Value'],
+      ['Financial year', `${selectedFiscalYear}-${selectedFiscalYear + 1}`],
+      ['Sales to date', String(report.overall.totalSales)],
+      ['Collections to date', String(report.overall.totalCollections)],
+      ['Receivable as of date', String(report.overall.receivable)],
+      ['FY Sales', String(report.thisFinancialYear.sales)],
+      ['FY Collections', String(report.thisFinancialYear.collections)],
+    ]
+    if (purchaseEnabled && purchaseSummary) rows.push(['Current Kacha payable paise', String(purchaseSummary.kacha)], ['Current GST payable paise', String(purchaseSummary.gst)], ['FY RCM liability paise', String(purchaseSummary.rcm)], ['FY Purchase bills', String(purchaseSummary.bills)])
+    if (castingEnabled) rows.push(['FY Casting sessions', String(castingSummary.sessions)], ['FY Wire out kg', String(castingSummary.output)], ['FY Wastage percent', String(castingSummary.wastage)], ['FY Chol in kg', String(castingSummary.chol)], ['FY Casting cost per kg', String(castingSummary.costPerKg)])
+    const content = rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(',')).join('\r\n')
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `company-report-fy-${selectedFiscalYear}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function downloadReportJpg() {
+    if (!reportRef.current) return
+    setExportError('')
+    try { await exportNodeAsJpg(reportRef.current, { filename: `company-report-fy-${selectedFiscalYear}.jpg`, backgroundColor: '#f1f5f9', preferredWidthPx: 1600 }) }
+    catch (error) { setExportError(error instanceof Error ? error.message : 'Could not export the report image.') }
+  }
+
   return (
-    <div className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+    <div ref={reportRef} className="w-full space-y-6 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+      <div className="flex flex-wrap items-center justify-end gap-2"><span className="text-xs text-slate-500">All-time cards are as of {formatFullDate(today)}; module activity is for the selected FY.</span><label htmlFor="company-report-fy" className="text-xs font-medium text-slate-600">Financial year</label><select id="company-report-fy" value={selectedFiscalYear} onChange={(event) => setSelectedFiscalYear(Number(event.target.value))} className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-900">{Array.from({ length: 5 }, (_, index) => currentFiscalYear - index).map((year) => <option key={year} value={year}>FY {year}–{String(year + 1).slice(-2)}{year === currentFiscalYear ? ' to date' : ''}</option>)}</select><button type="button" onClick={downloadSummaryCsv} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800"><Download size={14} /> Summary CSV</button><button type="button" onClick={() => void downloadReportJpg()} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800"><Download size={14} /> JPG</button></div>
+      {exportError && <p role="alert" className="text-xs text-rose-700">{exportError}</p>}
+      {purchaseEnabled && <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><h2 className="text-sm font-semibold text-slate-900">Purchase summary</h2><p className="mt-1 text-xs text-slate-500">Bills and RCM are for the selected FY; payable is the current live balance.</p>{purchaseQuery.isError ? <p role="alert" className="mt-2 text-xs text-rose-700">Purchase figures could not load.</p> : purchaseSummary ? <div className="mt-3 grid gap-3 text-xs sm:grid-cols-4"><div><span className="text-slate-500">Current Kacha payable</span><p className="font-mono font-semibold">{formatPaiseInr(purchaseSummary.kacha)}</p></div><div><span className="text-slate-500">Current GST payable</span><p className="font-mono font-semibold">{formatPaiseInr(purchaseSummary.gst)}</p></div><div><span className="text-slate-500">FY RCM liability</span><p className="font-mono font-semibold">{formatPaiseInr(purchaseSummary.rcm)}</p></div><div><span className="text-slate-500">FY bills</span><p className="font-mono font-semibold">{purchaseSummary.bills}</p></div></div> : <div className="mt-3 h-12 animate-pulse rounded bg-slate-100" />}</section>}
+      {castingEnabled && <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><h2 className="text-sm font-semibold text-slate-900">Casting summary</h2>{castingQuery.isError ? <p role="alert" className="mt-2 text-xs text-rose-700">Casting figures could not load.</p> : <div className="mt-3 grid gap-3 text-xs sm:grid-cols-5"><div><span className="text-slate-500">Sessions</span><p className="font-mono font-semibold">{castingSummary.sessions}</p></div><div><span className="text-slate-500">Wire out</span><p className="font-mono font-semibold">{castingSummary.output.toFixed(2)} kg</p></div><div><span className="text-slate-500">Wastage</span><p className="font-mono font-semibold">{castingSummary.wastage.toFixed(1)}%</p></div><div><span className="text-slate-500">Chol in</span><p className="font-mono font-semibold">{castingSummary.chol.toFixed(2)} kg</p></div><div><span className="text-slate-500">Cost/kg</span><p className="font-mono font-semibold">₹{castingSummary.costPerKg.toFixed(2)}</p></div></div>}</section>}
       {reportQuery.isLoading && <section className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">Loading company report...</section>}
       {reportQuery.isError && <section className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700 shadow-sm">Unable to load company report.</section>}
 
@@ -457,7 +523,7 @@ function ReportPage() {
               <Link
                 to="/ledger"
                 search={selectedAgingBucket === 'above90' ? { customerId: '', focus: 'overdue' } : { customerId: '', focus: '' }}
-                className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-400/30"
               >
                 Collect from overdue parties
               </Link>
@@ -611,7 +677,7 @@ function ActionCenter({
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Business action center</p>
           <h2 id="action-center-title" className="mt-1 text-base font-semibold text-slate-950">Priority signals</h2>
         </div>
-        <Link to="/ledger" search={{ customerId: highestOutstandingCustomer?.customerId ?? '', focus: highestOutstandingCustomer ? '' : 'overdue' }} className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-100">
+        <Link to="/ledger" search={{ customerId: highestOutstandingCustomer?.customerId ?? '', focus: highestOutstandingCustomer ? '' : 'overdue' }} className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-400/30">
           Collect from overdue parties
         </Link>
       </div>
@@ -677,7 +743,7 @@ function GasSalesPerformance({
             type="month"
             value={month}
             onChange={(event) => onMonthChange(event.target.value || month)}
-            className="mt-1 block h-9 rounded-lg border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            className="mt-1 block h-9 rounded-lg border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
           />
         </label>
       </div>
@@ -725,7 +791,7 @@ function GasSalesPerformance({
 function GasMetric({ label, value, detail, valueClassName = 'text-slate-950' }: { label: string; value: string; detail: string; valueClassName?: string }) {
   return (
     <div className="min-w-0 bg-white px-4 py-3.5">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
       <p className={`mt-1 truncate font-mono text-lg font-bold tabular-nums ${valueClassName}`}>{value}</p>
       <p className="mt-1 truncate text-[11px] text-slate-500" title={detail}>{detail}</p>
     </div>
@@ -741,7 +807,7 @@ function GasBreakdownTable({ title, rows, mode }: { title: string; rows: GasSale
       </div>
       <div className="overflow-x-auto rounded-lg border border-slate-200">
         <table className="w-full min-w-[760px] border-collapse text-xs">
-          <thead className="bg-slate-50 text-[10px] uppercase tracking-[0.06em] text-slate-500">
+          <thead className="bg-slate-50 text-[11px] uppercase tracking-[0.06em] text-slate-500">
             <tr>
               <th className="px-3 py-2.5 text-left font-semibold">{mode === 'customer' ? 'Customer' : 'Item'}</th>
               <th className="px-3 py-2.5 text-right font-semibold">Gas sales</th>

@@ -83,3 +83,122 @@ export function computeBardanPremium(
   })
   return { rows: outRows, totalPremiumPaise: total }
 }
+
+export type PurchaseItemMarketPremium = {
+  itemName: string
+  totalKg: number
+  totalPaise: number
+  avgRateRupees: number
+  premiumRupees: number
+  premiumKg: number
+  premiumRupeesPerKg: number
+}
+
+export type PurchaseBillLike = {
+  id: string
+  inNo?: string
+  date: string
+  cancelled?: boolean
+  bardanPending?: boolean
+  lines: Array<{
+    itemName: string
+    weightG: number
+    rateMilli: number
+    amountPaise: number
+  }>
+}
+
+/**
+ * Computes per-item purchase rates against historical Vilaity market rates.
+ * Invariant: Market premium is strictly an internal management signal;
+ * never exposed in external prints or exports.
+ */
+export function computePurchaseItemMarketPremium(
+  bills: readonly PurchaseBillLike[],
+  history: readonly VilaityEntry[],
+): PurchaseItemMarketPremium[] {
+  const lookup = makeVilaityLookup(history)
+  const itemMap = new Map<string, { kg: number; paise: number; premium: number; premiumKg: number }>()
+
+  for (const bill of bills) {
+    if (bill.cancelled) continue
+    const marketMilli = lookup(bill.date)
+
+    for (const line of bill.lines) {
+      const row = itemMap.get(line.itemName) ?? { kg: 0, paise: 0, premium: 0, premiumKg: 0 }
+      const kg = line.weightG / 1000
+      row.kg += kg
+      row.paise += line.amountPaise
+      if (marketMilli != null) {
+        row.premium += ((line.rateMilli - marketMilli) / 1000) * kg
+        row.premiumKg += kg
+      }
+      itemMap.set(line.itemName, row)
+    }
+  }
+
+  return [...itemMap.entries()].map(([itemName, row]) => ({
+    itemName,
+    totalKg: row.kg,
+    totalPaise: row.paise,
+    avgRateRupees: row.kg > 0 ? row.paise / 100 / row.kg : 0,
+    premiumRupees: row.premium,
+    premiumKg: row.premiumKg,
+    premiumRupeesPerKg: row.premiumKg > 0 ? row.premium / row.premiumKg : 0,
+  }))
+}
+
+export type BardanPendingBill = {
+  id: string
+  inNo: string
+  supplierName: string
+  date: string
+  daysOld: number
+}
+
+export type BardanPendingSummary = {
+  count: number
+  oldestDays: number
+  bills: BardanPendingBill[]
+}
+
+/**
+ * Computes bardan-pending count and ageing in days since purchase bill arrival.
+ */
+export function computeBardanPendingSummary(
+  bills: readonly {
+    id: string
+    inNo?: string
+    supplierName?: string
+    date: string
+    cancelled?: boolean
+    bardanPending?: boolean
+  }[],
+  asOfDate: string,
+): BardanPendingSummary {
+  const pending: BardanPendingBill[] = []
+  const asOfMs = new Date(`${asOfDate}T00:00:00Z`).getTime()
+
+  for (const bill of bills) {
+    if (bill.cancelled || !bill.bardanPending) continue
+    const billMs = new Date(`${bill.date}T00:00:00Z`).getTime()
+    const daysOld = Math.max(0, Math.floor((asOfMs - billMs) / (1000 * 60 * 60 * 24)))
+    pending.push({
+      id: bill.id,
+      inNo: bill.inNo ?? '',
+      supplierName: bill.supplierName ?? '',
+      date: bill.date,
+      daysOld,
+    })
+  }
+
+  pending.sort((a, b) => b.daysOld - a.daysOld)
+  const oldestDays = pending.length > 0 ? pending[0].daysOld : 0
+
+  return {
+    count: pending.length,
+    oldestDays,
+    bills: pending,
+  }
+}
+

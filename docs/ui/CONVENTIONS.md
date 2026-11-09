@@ -31,6 +31,14 @@
 - **Aria Labels:** Every icon-only button must have an explicit `aria-label` describing the action.
 - **Dialog Keybindings:** All modals and dialogs must support keyboard shortcuts: `Esc` to close/cancel and `Ctrl+Enter` to submit/save.
 
+### The Cards Rule (Zero Page Float)
+- **Nothing on the page background may float.** Every piece of content on every dashboard lives inside a card.
+- The only items allowed directly on the `#f1f5f9` page background are cards (`SectionCard`, `KpiCard`, `Panel`, `DashboardToolbar`, `ChartCard`) and grids/stacks whose direct children are cards.
+- Bare headings, bare text, bare tables, bare charts, and bare buttons directly on the background are banned.
+- Empty, loading, and error states must render inside their card (skeleton, in-card empty text, retry button), never as loose text on the page background.
+- Standard card elements automatically declare `data-card="true"`.
+
+
 ---
 
 ## 2. Colour & Status Map
@@ -63,7 +71,16 @@ Colour is used sparingly and represents business state only:
 | **Party / Item Autocomplete** | `SearchableCombobox` | `@/components/ui/searchable-combobox` | Keyboard-navigable accessible dropdown |
 | **Date Picker** | `DateInput` | `@/components/ui/date-input` | Standard date input control |
 | **Month Picker** | `MonthPicker` | `@/components/ui/business-kit` | Props: `value`, `onChange`, `label` |
+| **Dashboard Toolbar** | `DashboardToolbar` | `@/components/ui/business-kit` | Props: `mode`, `onModeChange`, `selectedMonth`, `onMonthChange`, `comparisonNote`, `actions` (`data-card="true"`) |
+| **Chart Card Container** | `ChartCard` | `@/components/charts/chart-card` | Props: `title`, `question`, `actions`, `loading`, `error`, `empty`, `emptyText`, `onRetry`, `children` (`data-card="true"`) |
+| **Mini Sparkline** | `Sparkline` | `@/components/charts/sparkline` | Props: `values`, `color`, `width`, `height` (hides under 2 points, pure SVG) |
+| **Delta Change Chip** | `DeltaChip` | `@/components/charts/delta-chip` | Props: `delta`, `formattedDelta`, `unit`, `goodDirection` (`'up' \| 'down' \| 'neutral'`) |
+| **Stacked Horizontal Bar** | `StackedBar` | `@/components/charts/stacked-bar` | Props: `segments`, `formatValue`, `emptyText` (handles all-zero gracefully) |
+| **Ranked Horizontal Bars** | `RankedBars` | `@/components/charts/ranked-bars` | Props: `rows`, `maxScale`, `tone`, `emptyText`, `actionSlot` |
+| **Donut Composition** | `DonutSplit` | `@/components/charts/donut-split` | Props: `slices`, `centerLabel`, `formatValue`, `formatTotal` (pure SVG, 6 or fewer parts) |
+| **Trend Chart Wrapper** | `TrendChart` | `@/components/charts/trend-chart` | Props: `data`, `xKey`, `series`, `height`, `formatY`, `formatTooltip` (Recharts, max 24 pts) |
 | **Payment Amount Input** | `PaymentAmountInput` | `@/components/ui/payment-amount-input` | Specialized monetary input with paise handling |
+
 | **Transaction Logs Shell** | `LogsPager`, `LogsDateWindow` | `@/components/logging/logs-shell` | 90-day time window pager |
 | **Toast Notifications** | `toast` | `sonner` | Standard toast notification caller |
 

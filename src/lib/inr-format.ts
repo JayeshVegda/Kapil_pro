@@ -22,6 +22,52 @@ export function formatInrCurrency(value: number): string {
   return `₹${inrCurrency2.format(n)}`
 }
 
+/**
+ * Compact Indian currency formatting for dashboard cards:
+ * >= 1 Crore (1,00,00,000) -> ₹X.XCr
+ * >= 1 Lakh (1,00,000)     -> ₹X.XL
+ * >= 1 Thousand (1,000)    -> ₹Xk
+ * < 1,000                  -> ₹X
+ */
+export function formatCompactInr(value: number): string {
+  if (!Number.isFinite(value)) return '₹0'
+  const sign = value < 0 ? '-' : ''
+  const abs = Math.abs(value)
+
+  if (abs >= 10_000_000) {
+    const cr = abs / 10_000_000
+    const formatted = cr >= 10 ? cr.toFixed(1) : cr.toFixed(2)
+    return `${sign}₹${formatted.replace(/\.?0+$/, '')}Cr`
+  }
+  if (abs >= 100_000) {
+    const l = abs / 100_000
+    const formatted = l >= 10 ? l.toFixed(1) : l.toFixed(2)
+    return `${sign}₹${formatted.replace(/\.?0+$/, '')}L`
+  }
+  if (abs >= 1_000) {
+    const k = abs / 1_000
+    const formatted = k >= 10 ? k.toFixed(0) : k.toFixed(1)
+    return `${sign}₹${formatted.replace(/\.?0+$/, '')}k`
+  }
+  return `${sign}₹${Math.round(abs)}`
+}
+
+/**
+ * Compact weight formatting for cards:
+ * >= 1,000 kg -> X.X t (tonnes)
+ * < 1,000 kg  -> X kg
+ */
+export function formatCompactKg(kg: number): string {
+  if (!Number.isFinite(kg) || kg <= 0) return '0 kg'
+  if (kg >= 1_000) {
+    const t = kg / 1_000
+    const formatted = t >= 10 ? t.toFixed(1) : t.toFixed(2)
+    return `${t >= 100 ? t.toFixed(0) : formatted.replace(/\.?0+$/, '')} t`
+  }
+  return `${Math.round(kg)} kg`
+}
+
+
 export function formatPaiseInr(paise: number): string {
   const p = Math.trunc(Number(paise ?? 0))
   const sign = p < 0 ? '-' : ''

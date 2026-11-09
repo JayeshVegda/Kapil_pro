@@ -106,6 +106,36 @@ export type SupplierSettlementInput = {
   allocations: readonly { paymentId: string; billId: string; amountPaise: number }[]
 }
 
+/** Evaluate an unsaved supplier payment with the same ordering and pin rules as the ledger. */
+export function previewSupplierPayment(
+  input: SupplierSettlementInput,
+  proposed: { pool: SupplierPool; date: string; kind: string; amountPaise: number; pinnedBillIds: readonly string[] },
+) {
+  const previewPaymentId = 'paymentpreview'
+  const before = computeSupplierSettlement(input)
+  const openBillById = new Map(before.pools[proposed.pool].bills.map((bill) => [bill.billId, bill]))
+  const after = computeSupplierSettlement({
+    ...input,
+    payments: [...input.payments, {
+      id: previewPaymentId, date: proposed.date, created: '9999-12-31 23:59:59',
+      pool: proposed.pool, kind: proposed.kind, amountPaise: proposed.amountPaise,
+    }],
+    allocations: [...input.allocations, ...proposed.pinnedBillIds.flatMap((billId) => {
+      const duePaise = openBillById.get(billId)?.duePaise ?? 0
+      return duePaise > 0 ? [{ paymentId: previewPaymentId, billId, amountPaise: duePaise }] : []
+    })],
+  })
+  return { before, after, previewPaymentId }
+}
+
+export type SupplierSettlementBillCredit = {
+  paymentId?: string
+  date: string
+  reference?: string
+  amountPaise: number
+  pinned: boolean
+}
+
 export type SupplierSettlementBillRow = {
   billId: string
   date: string
@@ -118,6 +148,7 @@ export type SupplierSettlementBillRow = {
   bardanEntryCount: number
   bardanPending: boolean
   bardanNotes: string[]
+  creditsApplied?: SupplierSettlementBillCredit[]
 }
 
 export type SupplierSettlementPaymentRow = {
@@ -149,6 +180,70 @@ export type SupplierSettlementResult = {
     netPositionPaise: number // outstanding - advance (we-owe positive)
   }
 }
+
+export type SupplierPositions = {
+  kachaPayablePaise: number
+  kachaAdvancePaise: number
+  gstPayablePaise: number
+  gstAdvancePaise: number
+  totalPayablePaise: number
+  totalAdvancePaise: number
+  suppliersCountWithDue: number
+  suppliersCountWithAdvance: number
+}
+
+/**
+ * Computes pool-separated payable and advance positions across suppliers.
+ * Hard rule: Kacha and GST pools never cross; advances are shown separately
+ * and NEVER subtracted from what we owe.
+ */
+export function computeSupplierPositions(
+  rows: readonly {
+    kachaDuePaise?: number
+    gstDuePaise?: number
+    advancePaise?: number
+    kachaAdvancePaise?: number
+    gstAdvancePaise?: number
+    outstandingPaise?: number
+  }[],
+): SupplierPositions {
+  let kachaPayablePaise = 0
+  let kachaAdvancePaise = 0
+  let gstPayablePaise = 0
+  let gstAdvancePaise = 0
+  let totalAdvancePaise = 0
+  let suppliersCountWithDue = 0
+  let suppliersCountWithAdvance = 0
+
+  for (const row of rows) {
+    const kDue = Math.max(0, row.kachaDuePaise ?? 0)
+    const gDue = Math.max(0, row.gstDuePaise ?? 0)
+    const kAdv = Math.max(0, row.kachaAdvancePaise ?? 0)
+    const gAdv = Math.max(0, row.gstAdvancePaise ?? 0)
+    const adv = Math.max(0, row.advancePaise ?? (kAdv + gAdv))
+
+    kachaPayablePaise += kDue
+    gstPayablePaise += gDue
+    kachaAdvancePaise += kAdv
+    gstAdvancePaise += gAdv
+    totalAdvancePaise += adv
+
+    if (kDue > 0 || gDue > 0) suppliersCountWithDue += 1
+    if (adv > 0) suppliersCountWithAdvance += 1
+  }
+
+  return {
+    kachaPayablePaise,
+    kachaAdvancePaise,
+    gstPayablePaise,
+    gstAdvancePaise,
+    totalPayablePaise: kachaPayablePaise + gstPayablePaise,
+    totalAdvancePaise,
+    suppliersCountWithDue,
+    suppliersCountWithAdvance,
+  }
+}
+
 
 /** Chronological key used everywhere: business date, then created, then id. */
 export function settlementOrderKey(year: { date: string; created: string; id: string }): string {
@@ -225,7 +320,6 @@ export function computeSupplierSettlement(input: SupplierSettlementInput): Suppl
 
     // 1) opening = the pool's oldest payable (positive opening only)
     if (opening > 0) payables.push({ key: '', remaining: opening })
-    if (opening < 0) result.advancePaise += -opening // negative opening = advance
 
     // bills + refunds enter the FIFO in (date, created, id) order
     const owedEntries: Payable[] = []
@@ -313,6 +407,18 @@ export function computeSupplierSettlement(input: SupplierSettlementInput): Suppl
           target.remaining -= applied
           consumedTotal += applied
           rowForApplied.appliedPaise += applied
+          if (target.billId) {
+            const billRow = result.bills.find((b) => b.billId === target.billId)
+            if (billRow) {
+              if (!billRow.creditsApplied) billRow.creditsApplied = []
+              billRow.creditsApplied.push({
+                paymentId: rowForApplied.paymentId,
+                date: rowForApplied.date,
+                amountPaise: applied,
+                pinned: true,
+              })
+            }
+          }
         }
         pinsByPayment.set(rowForApplied.paymentId, [])
       }
@@ -328,10 +434,41 @@ export function computeSupplierSettlement(input: SupplierSettlementInput): Suppl
         creditOwner.remaining -= applied
         payable.remaining -= applied
         consumedTotal += applied
-        if (rowForApplied) rowForApplied.appliedPaise += applied
+        if (rowForApplied) {
+          rowForApplied.appliedPaise += applied
+          if (payable.billId) {
+            const billRow = result.bills.find((b) => b.billId === payable.billId)
+            if (billRow) {
+              if (!billRow.creditsApplied) billRow.creditsApplied = []
+              billRow.creditsApplied.push({
+                paymentId: rowForApplied.paymentId,
+                date: rowForApplied.date,
+                amountPaise: applied,
+                pinned: false,
+              })
+            }
+          }
+        } else if (payable.billId) {
+          const billRow = result.bills.find((b) => b.billId === payable.billId)
+          if (billRow) {
+            if (!billRow.creditsApplied) billRow.creditsApplied = []
+            billRow.creditsApplied.push({
+              date: '',
+              reference: 'Opening Advance',
+              amountPaise: applied,
+              pinned: false,
+            })
+          }
+        }
         payableIndex++ // forward-only FIFO: never come back
       }
       return consumedTotal
+    }
+
+    if (opening < 0) {
+      const openingCredit = { remaining: -opening }
+      drain(openingCredit, null)
+      result.advancePaise += openingCredit.remaining
     }
 
     for (const { payment, remaining } of sortedPayments) {
