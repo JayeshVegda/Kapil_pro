@@ -1,543 +1,556 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, ArrowUpRight, ArrowDownRight, Coins, Flame, TrendingUp } from 'lucide-react'
+import { AlertCircle, AlertTriangle, ArrowRight, Award, Plus } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { loadCastingSessions, loadMonthlyAverageMarketRate } from '@/data/casting'
+import { pb } from '@/data/pocketbase'
+import { loadCastingSessions } from '@/data/casting'
 import {
-  summarizeCastingSessions as summarizeSessions,
-  buildMonthlyCastingTrend,
+  summarizeCastingSessions,
   findBestWorstCastingSessions,
 } from '@/domain/casting-calculations'
+import {
+  computeSafeRecoveryAndWastage,
+  aggregateCastingMaterials,
+  buildCastingMonthlyTrendPoints,
+  computeOperationalAverages,
+} from '@/domain/casting-dashboard-calculations'
+import {
+  buildPeriodRange,
+  previousPeriod,
+  deltaPct,
+  type PeriodMode,
+} from '@/domain/period-helpers'
+import { DashboardToolbar } from '@/components/ui/dashboard-toolbar'
+import { formatCompactInr, formatCompactKg } from '@/lib/inr-format'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
-import { formatInrInteger } from '@/lib/inr-format'
+import { SectionCard, KpiCard } from '@/components/ui/business-kit'
+import { Panel } from '@/components/ui/panel'
+import { DeltaChip } from '@/components/charts/delta-chip'
+import { Sparkline } from '@/components/charts/sparkline'
+import { TrendChart } from '@/components/charts/trend-chart'
+import { DonutSplit } from '@/components/charts/donut-split'
 
 export const Route = createFileRoute('/casting/')({
-  component: CastingOverviewPage,
+  component: CastingDashboardPage,
 })
 
 const CASTING_SESSIONS_KEY = ['casting-sessions'] as const
 
-function CastingOverviewPage() {
-  const [period, setPeriod] = useState<'monthly' | 'yearly'>('monthly')
-  const to = getLocalIsoDate()
-  const from = useMemo(() => {
-    const [y, m, d] = to.split('-').map(Number)
-    const dt = new Date((y ?? 2000), (m ?? 1) - 13, d ?? 1)
-    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
-  }, [to])
+function CastingDashboardPage() {
+  const today = useMemo(() => getLocalIsoDate(), [])
+  const [mode, setMode] = useState<PeriodMode>('month')
+  const [selectedMonth, setSelectedMonth] = useState<string>(today.slice(0, 7))
 
+  // 1. Period ranges (fair comparison rule: same days)
+  const currentRange = useMemo(
+    () => buildPeriodRange(mode, selectedMonth, today),
+    [mode, selectedMonth, today],
+  )
+  const prevRange = useMemo(() => previousPeriod(currentRange), [currentRange])
+
+  // Rolling 6-month timeline window ending at selectedMonth
+  const past6Months = useMemo(() => {
+    const months: string[] = []
+    const [y, m] = selectedMonth.split('-').map(Number)
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(y, m - 1 - i, 1)
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+    }
+    return months
+  }, [selectedMonth])
+
+  // 2. Data Queries
   const sessionsQuery = useQuery({
-    queryKey: [...CASTING_SESSIONS_KEY, from, to],
-    queryFn: () => loadCastingSessions({ from, to }),
-  })
-
-  // Compute monthly and yearly stats
-  const now = new Date()
-  const currentYear = now.getFullYear()
-  const currentMonth = now.getMonth()
-
-  const stats = useMemo(() => {
-    const list = sessionsQuery.data ?? []
-    let monthInputKg = 0
-    let monthWireOut = 0
-    let monthInputCost = 0
-    let monthMel = 0
-
-    let yearInputKg = 0
-    let yearWireOut = 0
-    let yearInputCost = 0
-    let yearMel = 0
-
-    const monthMaterials = new Map<string, number>()
-    const yearMaterials = new Map<string, number>()
-
-    for (const session of list) {
-      const sDate = new Date(session.date)
-      const sYear = sDate.getFullYear()
-      const sMonth = sDate.getMonth()
-
-      const isCurrentYear = sYear === currentYear
-      const isCurrentMonth = isCurrentYear && sMonth === currentMonth
-
-      const inputKg = session.totalInputKg
-      const inputCost = session.totalInputCost
-      const wire = session.totalWireOut
-      const mel = session.totalMel
-
-      if (isCurrentYear) {
-        yearInputKg += inputKg
-        yearWireOut += wire
-        yearInputCost += inputCost
-        yearMel += mel
-        for (const input of session.inputs) {
-          const name = input.materialName.trim() || 'Unknown'
-          yearMaterials.set(name, (yearMaterials.get(name) ?? 0) + input.qty)
-        }
-      }
-
-      if (isCurrentMonth) {
-        monthInputKg += inputKg
-        monthWireOut += wire
-        monthInputCost += inputCost
-        monthMel += mel
-        for (const input of session.inputs) {
-          const name = input.materialName.trim() || 'Unknown'
-          monthMaterials.set(name, (monthMaterials.get(name) ?? 0) + input.qty)
-        }
-      }
-    }
-
-    const monthAvgMetalCost = monthInputKg > 0 ? monthInputCost / monthInputKg : 0
-    const yearAvgMetalCost = yearInputKg > 0 ? yearInputCost / yearInputKg : 0
-
-    return {
-      month: {
-        inputKg: monthInputKg,
-        wireOut: monthWireOut,
-        inputCost: monthInputCost,
-        mel: monthMel,
-        avgMetalCost: monthAvgMetalCost,
-        materials: [...monthMaterials.entries()]
-          .map(([name, qty]) => ({ name, qty }))
-          .sort((a, b) => b.qty - a.qty),
-      },
-      year: {
-        inputKg: yearInputKg,
-        wireOut: yearWireOut,
-        inputCost: yearInputCost,
-        mel: yearMel,
-        avgMetalCost: yearAvgMetalCost,
-        materials: [...yearMaterials.entries()]
-          .map(([name, qty]) => ({ name, qty }))
-          .sort((a, b) => b.qty - a.qty),
-      },
-    }
-  }, [sessionsQuery.data, currentYear, currentMonth])
-
-  const monthPrefix = useMemo(() => {
-    const list = sessionsQuery.data ?? []
-    const current = getLocalIsoDate().slice(0, 7)
-    if (list.some((s) => s.date.startsWith(current))) return current
-    const latest = list
-      .map((s) => s.date.slice(0, 7))
-      .sort()
-      .pop()
-    return latest ?? current
-  }, [sessionsQuery.data])
-
-  const monthSessions = useMemo(() => {
-    const list = sessionsQuery.data ?? []
-    return list.filter((s) => s.date.startsWith(monthPrefix))
-  }, [sessionsQuery.data, monthPrefix])
-
-  const monthStats = useMemo(() => summarizeSessions(monthSessions), [monthSessions])
-
-  const marketMonthQuery = useQuery({
-    queryKey: ['casting-market-month', monthPrefix],
-    queryFn: () => loadMonthlyAverageMarketRate(monthPrefix),
-    enabled: Boolean(monthPrefix),
+    queryKey: [...CASTING_SESSIONS_KEY],
+    queryFn: () => loadCastingSessions(),
     staleTime: 60_000,
   })
 
-  const previousMonthStats = useMemo(() => {
-    const [y, m] = monthPrefix.split('-').map(Number)
-    const prevMonthDate = new Date((y ?? 2000), (m ?? 1) - 2, 1)
-    const prevPrefix = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`
-    const list = sessionsQuery.data ?? []
-    const prevSessions = list.filter((s) => s.date.startsWith(prevPrefix))
-    return { prefix: prevPrefix, stats: summarizeSessions(prevSessions) }
-  }, [monthPrefix, sessionsQuery.data])
+  const brassRatesQuery = useQuery({
+    queryKey: ['brass-rates-history'],
+    queryFn: async () => {
+      try {
+        const records = await pb.collection('brass_rates').getFullList({
+          sort: 'date',
+          fields: 'date,vilaity',
+        })
+        return records.map((r) => ({
+          date: String(r.date).slice(0, 10),
+          vilaity: Number(r.vilaity || 0),
+        }))
+      } catch {
+        return []
+      }
+    },
+    staleTime: 60_000,
+  })
 
-  const monthlyTrend = useMemo(() => {
-    return buildMonthlyCastingTrend(sessionsQuery.data ?? [], 6)
-  }, [sessionsQuery.data])
+  // Monthly average market rate lookup
+  const monthlyMarketRates = useMemo(() => {
+    const sumCount = new Map<string, { sum: number; count: number }>()
+    for (const r of brassRatesQuery.data ?? []) {
+      const m = r.date.slice(0, 7)
+      const v = r.vilaity
+      if (v > 0) {
+        const curr = sumCount.get(m) ?? { sum: 0, count: 0 }
+        curr.sum += v
+        curr.count += 1
+        sumCount.set(m, curr)
+      }
+    }
+    const map: Record<string, number | null> = {}
+    for (const [m, { sum, count }] of sumCount.entries()) {
+      map[m] = count > 0 ? sum / count : null
+    }
+    return map
+  }, [brassRatesQuery.data])
 
-  const sessionSignals = useMemo(() => {
-    return findBestWorstCastingSessions(monthSessions)
-  }, [monthSessions])
+  // 3. Filtered Sessions
+  const allSessions = sessionsQuery.data ?? []
 
-  const costVsMarketDelta = useMemo(() => {
-    if (!marketMonthQuery.data || !(monthStats.avgLoadedCostKg > 0)) return null
-    return monthStats.avgLoadedCostKg - marketMonthQuery.data
-  }, [marketMonthQuery.data, monthStats.avgLoadedCostKg])
+  const periodSessions = useMemo(() => {
+    return allSessions.filter(
+      (s) => s.date && s.date >= currentRange.from && s.date <= currentRange.to,
+    )
+  }, [allSessions, currentRange.from, currentRange.to])
 
-  return (
-    <div className="w-full space-y-5 px-3 pb-8 pt-3 sm:px-4 lg:px-6">
-      {sessionsQuery.isLoading && <p className="text-sm text-slate-500">Loading workspace...</p>}
-      {sessionsQuery.isError && <p className="text-sm text-rose-600">Unable to load casting workspace stats.</p>}
+  const prevPeriodSessions = useMemo(() => {
+    return allSessions.filter(
+      (s) => s.date && s.date >= prevRange.from && s.date <= prevRange.to,
+    )
+  }, [allSessions, prevRange.from, prevRange.to])
 
-      {!sessionsQuery.isLoading && !sessionsQuery.isError && (
-        <>
-          {/* Row 1: KPI Panels */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {/* KPI 1: Production Volume */}
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Production Volume</span>
-                <Activity size={18} className="text-blue-500" />
-              </div>
-              <div className="mt-2.5">
-                <span className="font-mono text-2xl font-black text-slate-900 tabular-nums">
-                  {formatMass(monthStats.wire)}
-                </span>
-                <span className="ml-1.5 text-xs font-semibold text-emerald-600">
-                  {monthStats.kg > 0 ? `${((monthStats.wire / monthStats.kg) * 100).toFixed(1)}% Yield` : ''}
-                </span>
-              </div>
-              <div className="mt-2 flex justify-between border-t border-slate-50 pt-2 text-[11px] text-slate-500">
-                <span>Total Input: <strong>{formatMass(monthStats.kg)}</strong></span>
-                <span>Wastage: <strong>{formatMass(monthStats.wastage)}</strong></span>
-              </div>
-            </div>
-
-            {/* KPI 2: Weighted Cost */}
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Avg Rod Cost / kg</span>
-                <Coins size={18} className="text-amber-500" />
-              </div>
-              <div className="mt-2.5">
-                <span className="font-mono text-2xl font-black text-slate-900 tabular-nums">
-                  {monthStats.avgLoadedCostKg > 0 ? `₹${monthStats.avgLoadedCostKg.toFixed(2)}` : '—'}
-                </span>
-                <span className="ml-1.5 text-xs text-slate-400">weighted loaded</span>
-              </div>
-              <div className="mt-2 flex justify-between border-t border-slate-50 pt-2 text-[11px] text-slate-500">
-                <span>Avg Metal: <strong>₹{monthStats.avgCostKg.toFixed(1)}</strong></span>
-                <span>Total Cost: <strong>{formatInrInteger(monthStats.totalCost)}</strong></span>
-              </div>
-            </div>
-
-            {/* KPI 3: Market Rate Comparison */}
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Brass Market Rate</span>
-                <TrendingUp size={18} className="text-slate-400" />
-              </div>
-              <div className="mt-2.5 flex items-baseline">
-                <span className="font-mono text-2xl font-black text-slate-900 tabular-nums">
-                  {marketMonthQuery.data ? `₹${marketMonthQuery.data.toFixed(2)}` : '—'}
-                </span>
-                {costVsMarketDelta !== null && (
-                  <span className={`ml-2 inline-flex items-center text-xs font-bold ${costVsMarketDelta <= 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                    {costVsMarketDelta <= 0 ? (
-                      <><ArrowDownRight size={14} className="mr-0.5" />-{Math.abs(costVsMarketDelta).toFixed(1)}</>
-                    ) : (
-                      <><ArrowUpRight size={14} className="mr-0.5" />+{costVsMarketDelta.toFixed(1)}</>
-                    )}
-                  </span>
-                )}
-              </div>
-              <div className="mt-2 text-[11px] border-t border-slate-50 pt-2 text-slate-500">
-                <span>Avg cost comparison vs monthly Vilaity market rate</span>
-              </div>
-            </div>
-
-            {/* KPI 4: Operations Activity */}
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Furnace Activity</span>
-                <Flame size={18} className="text-orange-500" />
-              </div>
-              <div className="mt-2.5">
-                <span className="font-mono text-2xl font-black text-slate-900 tabular-nums">
-                  {monthStats.daysRunning} Days
-                </span>
-                <span className="ml-2 text-xs text-slate-400">running logs</span>
-              </div>
-              <div className="mt-2 flex justify-between border-t border-slate-50 pt-2 text-[11px] text-slate-500">
-                <span>Total Batches: <strong>{monthStats.batches}</strong></span>
-                <span>Avg: <strong>{(monthStats.daysRunning > 0 ? monthStats.batches / monthStats.daysRunning : 0).toFixed(1)}/day</strong></span>
-              </div>
-            </div>
-          </div>
-
-          {/* Row 2: Unified Split Dashboard Layout */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-            
-            {/* Left Column (8/12 cols) - Operational Analytics & Trends */}
-            <div className="lg:col-span-8 space-y-6">
-              
-              {/* Monthly Trend Table */}
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3.5">Monthly Trend (Last 6 Months)</h3>
-                <div className="overflow-x-auto no-scrollbar">
-                  <table className="w-full text-xs text-slate-700">
-                    <thead>
-                      <tr className="border-b border-slate-100 text-left font-bold uppercase text-slate-400">
-                        <th className="pb-2.5">Month</th>
-                        <th className="pb-2.5 text-right">Runs</th>
-                        <th className="pb-2.5 text-right">Wire (kg)</th>
-                        <th className="pb-2.5 text-right">Avg Metal</th>
-                        <th className="pb-2.5 text-right">Avg Loaded</th>
-                        <th className="pb-2.5 text-right">Yield</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {monthlyTrend.map((m) => (
-                        <tr key={m.month} className="hover:bg-slate-50/50">
-                          <td className="py-2.5 font-bold text-slate-900">{m.month}</td>
-                          <td className="py-2.5 text-right font-mono tabular-nums">{m.daysRunning}</td>
-                          <td className="py-2.5 text-right font-mono tabular-nums">{formatMass(m.wire)}</td>
-                          <td className="py-2.5 text-right font-mono tabular-nums">₹{m.avgCostKg.toFixed(1)}</td>
-                          <td className="py-2.5 text-right font-mono tabular-nums font-bold text-blue-600">₹{m.avgLoadedCostKg.toFixed(1)}</td>
-                          <td className="py-2.5 text-right font-mono tabular-nums">{m.kg > 0 ? `${((m.wire / m.kg) * 100).toFixed(1)}%` : '—'}</td>
-                        </tr>
-                      ))}
-                      {monthlyTrend.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="py-4 text-center text-slate-400">No monthly trend data available.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Side-by-Side: MoM & Operational Averages */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                {/* MoM Performance Comparison */}
-                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">MoM Comparison</h3>
-                  <div className="divide-y divide-slate-100 text-sm">
-                    <CompactDeltaRow
-                      label="Running Days"
-                      current={monthStats.daysRunning}
-                      previous={previousMonthStats.stats.daysRunning}
-                      formatter={(v) => `${v} days`}
-                    />
-                    <CompactDeltaRow
-                      label="Wire Output"
-                      current={monthStats.wire}
-                      previous={previousMonthStats.stats.wire}
-                      formatter={formatMass}
-                    />
-                    <CompactDeltaRow
-                      label="Input Cost"
-                      current={monthStats.totalCost}
-                      previous={previousMonthStats.stats.totalCost}
-                      formatter={formatInrInteger}
-                    />
-                    <CompactDeltaRow
-                      label="Weighted Cost/kg"
-                      current={monthStats.avgLoadedCostKg}
-                      previous={previousMonthStats.stats.avgLoadedCostKg}
-                      formatter={(v) => v > 0 ? `₹${v.toFixed(2)}` : '—'}
-                      isCost
-                    />
-                  </div>
-                </div>
-
-                {/* Operational Averages */}
-                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">Operational Averages</h3>
-                  <div className="divide-y divide-slate-100 text-sm">
-                    <div className="py-2.5 flex justify-between">
-                      <span className="text-slate-600">Avg Wire per Batch</span>
-                      <span className="font-mono text-slate-900 font-semibold">{monthStats.batches > 0 ? formatMass(monthStats.wire / monthStats.batches) : '—'}</span>
-                    </div>
-                    <div className="py-2.5 flex justify-between">
-                      <span className="text-slate-600">Avg Loss per Batch</span>
-                      <span className="font-mono text-slate-900 font-semibold text-amber-700">{monthStats.batches > 0 ? formatMass(monthStats.wastage / monthStats.batches) : '—'}</span>
-                    </div>
-                    <div className="py-2.5 flex justify-between">
-                      <span className="text-slate-600">Avg Coal per Batch</span>
-                      <span className="font-mono text-slate-900 font-semibold">{monthStats.batches > 0 ? `${(monthStats.totalCoalKg / monthStats.batches).toFixed(1)} kg` : '—'}</span>
-                    </div>
-                    <div className="py-2.5 flex justify-between">
-                      <span className="text-slate-600">Avg Wage per Batch</span>
-                      <span className="font-mono text-slate-900 font-semibold">{monthStats.batches > 0 ? `₹${Math.round(monthStats.totalWorkerSalary / monthStats.batches)}` : '—'}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* High / Low Signals */}
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3.5">Cost Threshold Signals</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <SignalCard label="Lowest Cost Session (Best)" session={sessionSignals.best} type="best" />
-                  <SignalCard label="Highest Cost Session (Worst)" session={sessionSignals.worst} type="worst" />
-                </div>
-              </div>
-
-            </div>
-
-            {/* Right Column (4/12 cols) - Material Share Sidebar Dashboard */}
-            <div className="lg:col-span-4 space-y-6">
-              
-              {/* Material Dashboard Stats Card */}
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3.5">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900">Material Dashboard</h3>
-                    <span className="text-[11px] text-slate-400 uppercase tracking-wider font-bold">Casting Stats summary</span>
-                  </div>
-                  <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
-                    <button
-                      type="button"
-                      className={`rounded-md px-2.5 py-1 transition ${period === 'monthly' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                      onClick={() => setPeriod('monthly')}
-                    >
-                      This Month
-                    </button>
-                    <button
-                      type="button"
-                      className={`rounded-md px-2.5 py-1 transition ${period === 'yearly' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                      onClick={() => setPeriod('yearly')}
-                    >
-                      This Year
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-3.5">
-                  {/* Avg Metal / kg cost (Highlighted - Most Important) */}
-                  <div className="rounded-xl bg-blue-50/60 border border-blue-150 p-4 shadow-sm text-center">
-                    <span className="block text-[11px] uppercase font-bold text-blue-500 tracking-wider">Avg Metal Cost / kg</span>
-                    <span className="font-mono text-3xl font-black text-blue-700 block mt-1">
-                      {period === 'monthly'
-                        ? (stats.month.avgMetalCost > 0 ? `₹${stats.month.avgMetalCost.toFixed(2)}/kg` : '—')
-                        : (stats.year.avgMetalCost > 0 ? `₹${stats.year.avgMetalCost.toFixed(2)}/kg` : '—')
-                      }
-                    </span>
-                    <span className="text-[11px] text-blue-600 font-bold uppercase tracking-wide mt-1 block">★ Most Important Metric</span>
-                  </div>
-
-                  {/* Total Metal Intake */}
-                  <div className="rounded-xl border border-slate-150 bg-slate-50/30 p-3.5 text-center">
-                    <span className="block text-[11px] uppercase font-bold text-slate-400 tracking-wider">Metal Intake</span>
-                    <span className="font-mono text-base font-bold text-slate-850 block mt-1">
-                      {period === 'monthly' ? formatMass(stats.month.inputKg) : formatMass(stats.year.inputKg)}
-                    </span>
-                  </div>
-
-                  {/* Total Wire Out */}
-                  <div className="rounded-xl border border-slate-150 bg-slate-50/30 p-3.5 text-center">
-                    <span className="block text-[11px] uppercase font-bold text-slate-400 tracking-wider">Total Wire Out</span>
-                    <span className="font-mono text-base font-bold text-slate-850 block mt-1">
-                      {period === 'monthly' ? formatMass(stats.month.wireOut) : formatMass(stats.year.wireOut)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Material Breakdown Share */}
-                <div className="space-y-3 pt-3 border-t border-slate-100">
-                  <span className="block text-[11px] uppercase font-bold text-slate-400 tracking-wider">Material Share</span>
-                  {(period === 'monthly' ? stats.month.materials : stats.year.materials).length === 0 ? (
-                    <span className="text-xs text-slate-400 italic block py-1">No material usage in this period.</span>
-                  ) : (
-                    <div className="space-y-3">
-                      {(period === 'monthly' ? stats.month.materials : stats.year.materials).map((mat) => {
-                        const totalKg = period === 'monthly' ? stats.month.inputKg : stats.year.inputKg
-                        const pct = totalKg > 0 ? (mat.qty / totalKg) * 100 : 0
-                        return (
-                          <div key={mat.name} className="space-y-1">
-                            <div className="flex justify-between text-xs font-semibold text-slate-700">
-                              <span>{mat.name}</span>
-                              <span className="font-mono text-slate-500">
-                                {formatMass(mat.qty)} ({pct.toFixed(1)}%)
-                              </span>
-                            </div>
-                            <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                              <div className="bg-blue-500 h-full rounded-full transition-all" style={{ width: `${pct}%` }} />
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-            </div>
-
-          </div>
-        </>
-      )}
-    </div>
+  // 4. Summaries & KPIs
+  const periodSummary = useMemo(() => summarizeCastingSessions(periodSessions), [periodSessions])
+  const prevPeriodSummary = useMemo(
+    () => summarizeCastingSessions(prevPeriodSessions),
+    [prevPeriodSessions],
   )
-}
 
-function SignalCard({
-  label,
-  session,
-  type,
-}: {
-  label: string
-  session: {
-    date: string
-    costPerKg: number
-    totalWireOut: number
-    totalInputKg: number
-  } | null
-  type: 'best' | 'worst'
-}) {
-  const borderColor = type === 'best' ? 'border-l-emerald-500' : 'border-l-rose-500'
-  const bgColor = type === 'best' ? 'bg-emerald-50/40' : 'bg-rose-50/40'
-  const textColor = type === 'best' ? 'text-emerald-700 font-extrabold' : 'text-rose-700 font-extrabold'
-
-  return (
-    <div className={`rounded-lg border border-slate-200 border-l-4 ${borderColor} ${bgColor} p-3 transition hover:shadow-sm`}>
-      <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
-      <p className={`mt-1 font-mono text-lg tabular-nums ${textColor}`}>
-        {session ? `₹${session.costPerKg.toFixed(2)}` : '—'}
-      </p>
-      <p className="mt-0.5 text-xs font-medium text-slate-600">
-        {session ? `${formatFullDate(session.date)} · ${formatMass(session.totalWireOut)} output` : 'No session data yet'}
-      </p>
-    </div>
+  const wireOutDelta = useMemo(
+    () => deltaPct(periodSummary.wire, prevPeriodSummary.wire),
+    [periodSummary.wire, prevPeriodSummary.wire],
   )
-}
+  const metalInputDelta = useMemo(
+    () => deltaPct(periodSummary.kg, prevPeriodSummary.kg),
+    [periodSummary.kg, prevPeriodSummary.kg],
+  )
+  const costDelta = useMemo(() => {
+    if (periodSummary.avgLoadedCostKg === 0 || prevPeriodSummary.avgLoadedCostKg === 0) return null
+    return deltaPct(periodSummary.avgLoadedCostKg, prevPeriodSummary.avgLoadedCostKg)
+  }, [periodSummary.avgLoadedCostKg, prevPeriodSummary.avgLoadedCostKg])
 
-function CompactDeltaRow({
-  label,
-  current,
-  previous,
-  formatter,
-  isCost = false,
-}: {
-  label: string
-  current: number
-  previous: number
-  formatter: (v: number) => string
-  isCost?: boolean
-}) {
-  const delta = current - previous
-  const isZero = delta === 0
-  const isUp = delta > 0
+  const safeYield = useMemo(
+    () =>
+      computeSafeRecoveryAndWastage(
+        periodSummary.wire,
+        periodSummary.wastage,
+        periodSummary.kg,
+      ),
+    [periodSummary.wire, periodSummary.wastage, periodSummary.kg],
+  )
 
-  // For costs, lower is better. For others, higher is better.
-  const isFavorable = isCost ? delta <= 0 : delta >= 0
+  const opAverages = useMemo(
+    () => computeOperationalAverages(periodSummary),
+    [periodSummary],
+  )
 
-  const statusColor = isZero
-    ? 'text-slate-400'
-    : isFavorable
-    ? 'text-emerald-600'
-    : 'text-rose-600'
+  // 5. 6-Month Trends
+  const trendPoints = useMemo(
+    () => buildCastingMonthlyTrendPoints(allSessions, past6Months, monthlyMarketRates),
+    [allSessions, past6Months, monthlyMarketRates],
+  )
 
-  return (
-    <div className="flex items-center justify-between py-2.5">
-      <span className="text-slate-600 font-medium">{label}</span>
-      <div className="flex items-center gap-2">
-        <span className="font-mono font-bold text-slate-900">{formatter(current)}</span>
-        <span className={`inline-flex items-center text-xs font-bold font-mono ${statusColor}`}>
-          {isZero ? (
-            '—'
-          ) : isUp ? (
-            <><ArrowUpRight size={12} className="mr-0.5" />+{formatter(delta)}</>
-          ) : (
-            <><ArrowDownRight size={12} className="mr-0.5" />-{formatter(Math.abs(delta))}</>
-          )}
-        </span>
+  const wireTrend6M = useMemo(() => trendPoints.map((p) => p.wireOutKg), [trendPoints])
+  const metalTrend6M = useMemo(() => trendPoints.map((p) => p.metalInKg), [trendPoints])
+  const costTrend6M = useMemo(() => trendPoints.map((p) => p.loadedCostKg), [trendPoints])
+
+  // 6. Material Breakdown
+  const materials = useMemo(
+    () => aggregateCastingMaterials(periodSessions),
+    [periodSessions],
+  )
+
+  const donutSlices = useMemo(() => {
+    return materials.slice(0, 5).map((m) => ({
+      key: m.name,
+      label: m.name,
+      value: m.qty,
+    }))
+  }, [materials])
+
+  // 7. Signals & Recent Sessions
+  const signals = useMemo(
+    () => findBestWorstCastingSessions(periodSessions),
+    [periodSessions],
+  )
+
+  const recentSessions = useMemo(() => {
+    return [...allSessions]
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .slice(0, 5)
+  }, [allSessions])
+
+  // Error handling
+  if (sessionsQuery.isError) {
+    return (
+      <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+        <Panel role="alert" className="rounded-xl border-rose-200 bg-rose-50 p-6 text-center">
+          <AlertCircle className="mx-auto mb-2 text-rose-600" size={24} />
+          <h2 className="text-sm font-semibold text-rose-800">Unable to load casting dashboard</h2>
+          <p className="mt-1 text-xs text-rose-600">Failed to fetch casting session data.</p>
+        </Panel>
       </div>
+    )
+  }
+
+  // Quick Action Buttons for DashboardToolbar
+  const toolbarActions = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Link
+        to="/casting/new-session"
+        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+      >
+        <Plus size={14} /> New Casting Session
+      </Link>
+    </div>
+  )
+
+  return (
+    <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+      {/* 1. Dashboard Toolbar (Cards Rule compliant) */}
+      <DashboardToolbar
+        mode={mode}
+        onModeChange={setMode}
+        selectedMonth={selectedMonth}
+        onMonthChange={setSelectedMonth}
+        comparisonNote={prevRange.comparisonNote}
+        actions={toolbarActions}
+      />
+
+      {/* 2. KPI Cards Row (5 Cards) */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        {/* Wire Out */}
+        <KpiCard
+          label="Wire Out"
+          hint={currentRange.label}
+          value={formatCompactKg(periodSummary.wire)}
+          delta={<DeltaChip delta={wireOutDelta} goodDirection="up" />}
+          sparkline={
+            <Sparkline
+              values={wireTrend6M}
+              trend={wireOutDelta != null ? (wireOutDelta < 0 ? 'down' : 'up') : undefined}
+              width={90}
+              height={32}
+              showArea
+              id="casting-kpi-wire"
+            />
+          }
+          subtext={
+            periodSummary.batches > 0
+              ? `${periodSummary.batches} batches · ${periodSummary.daysRunning} days`
+              : 'No casting runs'
+          }
+          href="/casting/log"
+        />
+
+        {/* Metal Input */}
+        <KpiCard
+          label="Metal Input"
+          hint="Furnace charge"
+          value={formatCompactKg(periodSummary.kg)}
+          delta={<DeltaChip delta={metalInputDelta} goodDirection="up" />}
+          sparkline={
+            <Sparkline
+              values={metalTrend6M}
+              trend={metalInputDelta != null ? (metalInputDelta < 0 ? 'down' : 'up') : undefined}
+              width={90}
+              height={32}
+              showArea
+              id="casting-kpi-metal"
+            />
+          }
+          subtext={
+            periodSummary.totalCost > 0
+              ? `${formatCompactInr(periodSummary.totalCost)} charged`
+              : 'No metal charged'
+          }
+          href="/casting/log"
+        />
+
+        {/* Loaded Cost / kg */}
+        <KpiCard
+          label="Loaded Cost"
+          hint="Per kg rod"
+          value={periodSummary.avgLoadedCostKg > 0 ? `₹${periodSummary.avgLoadedCostKg.toFixed(2)}` : '—'}
+          delta={<DeltaChip delta={costDelta} goodDirection="down" />}
+          sparkline={
+            <Sparkline
+              values={costTrend6M}
+              trend={costDelta != null ? (costDelta <= 0 ? 'up' : 'down') : undefined}
+              width={90}
+              height={32}
+              showArea
+              id="casting-kpi-cost"
+            />
+          }
+          subtext={
+            periodSummary.avgCostKg > 0
+              ? `Avg metal: ₹${periodSummary.avgCostKg.toFixed(1)}/kg`
+              : 'Weighted rod cost'
+          }
+          href="/casting/log"
+        />
+
+        {/* Wastage */}
+        <KpiCard
+          label="Wastage"
+          hint="Melting loss"
+          value={safeYield.wastagePct != null ? `${safeYield.wastagePct}%` : '—'}
+          tone={safeYield.wastagePct != null && safeYield.wastagePct > 6 ? 'warning' : 'neutral'}
+          subtext={
+            periodSummary.wastage > 0
+              ? `${formatCompactKg(periodSummary.wastage)} mel / burning loss`
+              : 'No loss recorded'
+          }
+          href="/casting/log"
+        />
+
+        {/* Furnace Activity */}
+        <KpiCard
+          label="Heats Run"
+          hint="Foundry"
+          value={`${periodSummary.batches} batches`}
+          tone={periodSummary.batches > 0 ? 'positive' : 'neutral'}
+          subtext={
+            periodSummary.daysRunning > 0
+              ? `${periodSummary.daysRunning} operating days · ${(periodSummary.daysRunning > 0 ? periodSummary.batches / periodSummary.daysRunning : 0).toFixed(1)}/day`
+              : 'Furnace idle'
+          }
+          href="/casting/log"
+        />
+      </div>
+
+      {/* 3. Row 1: Production Output Trend & Loaded Cost vs Market */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+        <SectionCard
+          title="Production Output"
+          subtitle="Monthly wire output vs metal charged (last 6 months)"
+          className="xl:col-span-7"
+        >
+          <TrendChart
+            data={trendPoints}
+            xKey="month"
+            height={230}
+            series={[
+              { dataKey: 'wireOutKg', name: 'Wire Out (kg)', type: 'bar', color: '#0f172a' },
+              { dataKey: 'metalInKg', name: 'Metal Input (kg)', type: 'bar', color: '#059669' },
+            ]}
+            formatY={(v) => formatCompactKg(v)}
+            formatTooltip={(v) => `${v.toLocaleString('en-IN')} kg`}
+            ariaLabel="Production Output Trend"
+          />
+        </SectionCard>
+
+        <SectionCard
+          title="Cost vs Market Benchmark"
+          subtitle="Foundry loaded cost vs Vilaity market rate (₹/kg)"
+          className="xl:col-span-5"
+        >
+          <TrendChart
+            data={trendPoints}
+            xKey="month"
+            height={230}
+            series={[
+              { dataKey: 'loadedCostKg', name: 'Loaded Cost (₹)', type: 'line', color: '#0f172a' },
+              { dataKey: 'marketRate', name: 'Vilaity Mkt (₹)', type: 'line', dashed: true, color: '#94a3b8' },
+            ]}
+            formatY={(v) => `₹${v}`}
+            formatTooltip={(v) => `₹${v.toFixed(2)}/kg`}
+            ariaLabel="Cost vs Market Benchmark"
+          />
+        </SectionCard>
+      </div>
+
+      {/* 4. Row 2: Material Mix, Operational Averages & Signals */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <SectionCard
+          title="Material Charge Mix"
+          subtitle={`Raw materials charged into furnace (${currentRange.label})`}
+          className="lg:col-span-5"
+        >
+          <DonutSplit
+            slices={donutSlices}
+            centerLabel="Input"
+            formatValue={(v) => formatCompactKg(v)}
+            formatTotal={(v) => formatCompactKg(v)}
+            emptyText="No material charge recorded this period."
+          />
+          {materials.length > 0 && (
+            <div className="mt-4 space-y-2 border-t border-slate-100 pt-3">
+              {materials.slice(0, 4).map((mat) => (
+                <div key={mat.name} className="flex items-center justify-between text-xs">
+                  <span className="font-medium text-slate-700">{mat.name}</span>
+                  <span className="font-mono text-slate-500">
+                    {formatCompactKg(mat.qty)} ({mat.pct}%) · Avg ₹{Math.round(mat.avgRate)}/kg
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Operational Averages"
+          subtitle="Per-batch efficiency"
+          className="lg:col-span-3"
+        >
+          <div className="divide-y divide-slate-100 text-xs">
+            <div className="flex items-center justify-between py-2.5">
+              <span className="text-slate-600">Avg Wire Output</span>
+              <span className="font-mono font-bold text-slate-900">
+                {periodSummary.batches > 0 ? formatCompactKg(opAverages.avgWirePerBatch) : '—'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between py-2.5">
+              <span className="text-slate-600">Avg Melting Loss</span>
+              <span className="font-mono font-bold text-amber-700">
+                {periodSummary.batches > 0 ? formatCompactKg(opAverages.avgLossPerBatch) : '—'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between py-2.5">
+              <span className="text-slate-600">Avg Coal Usage</span>
+              <span className="font-mono font-bold text-slate-900">
+                {periodSummary.batches > 0 ? `${opAverages.avgCoalPerBatch} kg` : '—'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between py-2.5">
+              <span className="text-slate-600">Avg Labor Wage</span>
+              <span className="font-mono font-bold text-slate-900">
+                {periodSummary.batches > 0 ? `₹${opAverages.avgWagePerBatch.toLocaleString('en-IN')}` : '—'}
+              </span>
+            </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Cost Threshold Signals"
+          subtitle={`Heats efficiency benchmark (${currentRange.label})`}
+          className="lg:col-span-4"
+        >
+          <div className="space-y-3">
+            {/* Best Heat */}
+            <div className="rounded-lg border border-slate-200 border-l-4 border-l-emerald-500 bg-emerald-50/30 p-3 transition hover:shadow-sm">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+                  Lowest Cost Session (Best)
+                </p>
+                <Award size={14} className="text-emerald-600" />
+              </div>
+              <p className="mt-1 font-mono text-lg font-black tabular-nums text-emerald-700">
+                {signals.best ? `₹${signals.best.costPerKg.toFixed(2)}/kg` : '—'}
+              </p>
+              <p className="mt-0.5 text-xs font-medium text-slate-600">
+                {signals.best
+                  ? `${formatFullDate(signals.best.date)} · ${formatCompactKg(signals.best.totalWireOut || signals.best.wireOut)} output`
+                  : 'No heat data recorded'}
+              </p>
+            </div>
+
+            {/* Worst Heat */}
+            <div className="rounded-lg border border-slate-200 border-l-4 border-l-rose-500 bg-rose-50/30 p-3 transition hover:shadow-sm">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-rose-800">
+                  Highest Cost Session (Worst)
+                </p>
+                <AlertTriangle size={14} className="text-rose-600" />
+              </div>
+              <p className="mt-1 font-mono text-lg font-black tabular-nums text-rose-700">
+                {signals.worst ? `₹${signals.worst.costPerKg.toFixed(2)}/kg` : '—'}
+              </p>
+              <p className="mt-0.5 text-xs font-medium text-slate-600">
+                {signals.worst
+                  ? `${formatFullDate(signals.worst.date)} · ${formatCompactKg(signals.worst.totalWireOut || signals.worst.wireOut)} output`
+                  : 'No heat data recorded'}
+              </p>
+            </div>
+          </div>
+        </SectionCard>
+      </div>
+
+      {/* 5. Row 3: Recent Casting Sessions Table */}
+      <SectionCard
+        title="Recent Casting Sessions"
+        subtitle="Last 5 recorded foundry production runs"
+        actions={
+          <Link
+            to="/casting/log"
+            className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 hover:text-slate-900"
+          >
+            View all in Casting Logs <ArrowRight size={13} />
+          </Link>
+        }
+      >
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-slate-100 bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                <th className="px-3 py-2">Date</th>
+                <th className="px-3 py-2 text-right">Heats / Batches</th>
+                <th className="px-3 py-2 text-right">Metal In</th>
+                <th className="px-3 py-2 text-right">Wire Out</th>
+                <th className="px-3 py-2 text-right">Melting Loss</th>
+                <th className="px-3 py-2 text-right">Loaded Cost</th>
+                <th className="px-3 py-2 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {recentSessions.map((s) => {
+                const wire = s.totalWireOut || s.wireOut || 0
+                const wastage = s.totalMel || s.wastage || 0
+                const inputKg = s.totalInputKg || 0
+                return (
+                  <tr key={s.id} className="hover:bg-slate-50/60">
+                    <td className="whitespace-nowrap px-3 py-2.5 font-medium text-slate-900">
+                      {formatFullDate(s.date)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-700">
+                      {s.unit || s.batches?.length || 1}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-700">
+                      {formatCompactKg(inputKg)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-slate-900">
+                      {formatCompactKg(wire)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-amber-700">
+                      {formatCompactKg(wastage)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-slate-900">
+                      {s.costPerKg > 0 ? `₹${s.costPerKg.toFixed(2)}/kg` : '—'}
+                    </td>
+                    <td className="px-3 py-2.5 text-right">
+                      <Link
+                        to="/casting/log"
+                        className="font-medium text-slate-600 hover:text-slate-900 hover:underline"
+                      >
+                        Details
+                      </Link>
+                    </td>
+                  </tr>
+                )
+              })}
+              {recentSessions.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-xs text-slate-400">
+                    No casting sessions recorded yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
     </div>
   )
 }
-
-function formatMass(kg: number) {
-  if (!Number.isFinite(kg) || kg <= 0) return '0 kg'
-  if (kg >= 1000) return `${(kg / 1000).toFixed(2)} t`
-  return `${kg.toFixed(1)} kg`
-}
-

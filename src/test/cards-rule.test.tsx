@@ -239,6 +239,35 @@ describe('Chart Kit Visuals & Cards Rule', () => {
       expect(result.violations).toHaveLength(0)
     })
 
+    it('validates the Casting Dashboard (Step 5) layout complies strictly with the Cards Rule', () => {
+      const castingDashboardLayout = (
+        <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
+          <DashboardToolbar mode="month" onModeChange={() => {}} />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <KpiCard label="Wire Out" value="1.3 t" />
+            <KpiCard label="Metal Input" value="1.4 t" />
+            <KpiCard label="Loaded Cost" value="₹770.26" />
+            <KpiCard label="Wastage" value="4.5%" />
+            <KpiCard label="Heats Run" value="12 batches" />
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+            <SectionCard title="Production Output" className="xl:col-span-7">Chart</SectionCard>
+            <SectionCard title="Cost vs Market Benchmark" className="xl:col-span-5">Chart</SectionCard>
+          </div>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+            <SectionCard title="Material Charge Mix" className="lg:col-span-5">Donut</SectionCard>
+            <SectionCard title="Operational Averages" className="lg:col-span-3">List</SectionCard>
+            <SectionCard title="Cost Threshold Signals" className="lg:col-span-4">Cards</SectionCard>
+          </div>
+          <SectionCard title="Recent Casting Sessions">Table</SectionCard>
+        </div>
+      )
+
+      const result = validateCardsRule(castingDashboardLayout)
+      expect(result.valid).toBe(true)
+      expect(result.violations).toHaveLength(0)
+    })
+
     it('fails the Cards Rule when bare floating elements sit directly on the background', () => {
       const nonConformingDashboard = (
         <div id="dashboard-container" className="space-y-4">
