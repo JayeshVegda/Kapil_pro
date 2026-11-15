@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { calculateDraftLinePaise, parsePurchaseBillDraft, parsePurchaseDecimal } from '@/domain/purchase-bill-draft'
+import { computeBillNet, resolveTaxModeForPool } from '@/domain/supplier-purchases'
+import { nextPurchaseInNo } from '@/domain/in-no'
 
 describe('purchase bill draft validation', () => {
   const draft = {
@@ -39,5 +41,23 @@ describe('purchase bill draft validation', () => {
     expect(() => parsePurchaseDecimal('1e5', 2, 'Amount')).toThrow('decimal number')
     expect(() => parsePurchaseDecimal('999999999999999999', 2, 'Amount')).toThrow('too large')
     expect(() => calculateDraftLinePaise(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)).toThrow('too large')
+    expect(() => parsePurchaseDecimal('1,2', 2, 'Amount')).toThrow('invalid grouping')
+  })
+
+  it('keeps whole-rupee payable, GST and RCM, bardan and FY numbering separate', () => {
+    const material = calculateDraftLinePaise(90500, 395000)
+    const bardanCredit = calculateDraftLinePaise(500, 395000)
+    const lines = [{ amountPaise: material }]
+    const bardan = [{ method: 'deduct', creditPaise: bardanCredit }]
+    const gst = computeBillNet(lines, [], bardan, resolveTaxModeForPool('gst', 'gst'), 1800)
+    const rcm = computeBillNet(lines, [], bardan, resolveTaxModeForPool('gst', 'rcm'), 1800)
+    expect(gst.netPaise % 100).toBe(0)
+    expect(gst.taxPaise).toBe(639900)
+    expect(gst.netPaise).toBe(4194900)
+    expect(rcm.netPaise).toBe(3555000)
+    expect(rcm.rcmLiabilityPaise).toBe(639900)
+    expect(resolveTaxModeForPool('kacha', 'gst')).toBe('none')
+    expect(nextPurchaseInNo(['IN-2627-0001'], '2026-11-15')).toBe('IN-2627-0002')
+    expect(nextPurchaseInNo(['IN-2627-0001'], '2027-04-01')).toBe('IN-2728-0001')
   })
 })
