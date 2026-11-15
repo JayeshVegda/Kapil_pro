@@ -915,6 +915,7 @@ export async function uncancelPurchaseBill(billId: string): Promise<PurchaseBill
 
 export type SupplierPaymentCreateInput = {
   requestId?: string
+  draftId?: string
   supplierId: string
   date: string
   pool: SupplierPool
@@ -930,6 +931,13 @@ export type SupplierPaymentCreateInput = {
 
 export async function createSupplierPayment(input: SupplierPaymentCreateInput): Promise<SupplierPaymentView> {
   return runDataOperation('create-supplier-payment', async () => {
+    if (input.draftId) {
+      const draft = await pb.collection('purchase_payment_drafts').getOne(input.draftId)
+      if (draft.status === 'approved' && draft.converted_payment) {
+        throw new AppError({ code: 'CONFLICT', message: 'Draft already converted.', details: { paymentId: String(draft.converted_payment) } })
+      }
+      if (draft.status !== 'pending_review') throw new AppError({ code: 'CONFLICT', message: 'This draft was already processed.' })
+    }
     requirePositiveInteger(input.amountPaise, 'Payment amount')
     const pinnedTotal = (input.allocations ?? []).reduce((sum, allocation) => {
       requirePositiveInteger(allocation.amountPaise, 'Allocation amount')
@@ -983,8 +991,18 @@ export async function createSupplierPayment(input: SupplierPaymentCreateInput): 
       after_json: JSON.stringify(payload),
       actor: currentActor(),
     })
+    if (input.draftId) batch.collection('purchase_payment_drafts').update(input.draftId, { status: 'approved', converted_payment: paymentId })
     return { batch, record: payload }
       },
+    }).catch(async (error: unknown) => {
+      if (input.draftId) {
+        const draft = await pb.collection('purchase_payment_drafts').getOne(input.draftId).catch(() => null)
+        if (draft?.status === 'approved' && draft.converted_payment) {
+          throw new AppError({ code: 'CONFLICT', message: 'Draft already converted.', details: { paymentId: String(draft.converted_payment) }, cause: error })
+        }
+        if (draft?.status === 'rejected') throw new AppError({ code: 'CONFLICT', message: 'This draft was rejected.', cause: error })
+      }
+      throw error
     })
     const paymentId = saved.id
     if (input.photos && input.photos.length > 0) {
