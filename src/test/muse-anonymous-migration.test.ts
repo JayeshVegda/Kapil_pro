@@ -9,6 +9,7 @@ const root = resolve(import.meta.dirname, '../..')
 const binary = join(root, 'runtime/bin/pocketbase')
 const schemaMigration = join(root, 'pb_migrations/1794640008_created_purchase_bill_drafts.js')
 const stagedRules = join(root, 'pb_migrations/1794640009_tighten_sales_and_purchase_draft_rules.js')
+const paymentSchemaMigration = join(root, 'pb_migrations/1794640012_created_purchase_payment_drafts.js')
 const temp = mkdtempSync(join(tmpdir(), 'kapil-muse-rules-'))
 const migrationsDir = join(temp, 'migrations')
 const dataDir = join(temp, 'data')
@@ -78,7 +79,7 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
       account.set('role', role)
       app.save(account)
     }
-    ${['purchase_bills', 'bills', 'bill_items', 'payments', 'customers', 'items', 'brass_rates'].map(minimalCollection).join('\n    ')}
+    ${['purchase_bills', 'supplier_payments', 'bills', 'bill_items', 'payments', 'customers', 'items', 'brass_rates'].map(minimalCollection).join('\n    ')}
     for (const [name, converted] of [['bill_drafts', 'converted_bill'], ['payment_drafts', 'converted_payment']]) {
       app.save(new Collection({name, type: 'base', listRule: '', viewRule: '', createRule: '', updateRule: '', deleteRule: '', fields: [
         {name: 'created_by', type: 'relation', collectionId: app.findCollectionByNameOrId('users').id, maxSelect: 1},
@@ -113,6 +114,7 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
 
   await stopPocketBase()
   copyFileSync(stagedRules, join(migrationsDir, '1794640009_tighten_sales_and_purchase_draft_rules.js'))
+  copyFileSync(paymentSchemaMigration, join(migrationsDir, '1794640012_created_purchase_payment_drafts.js'))
   url = await startPocketBase(port)
   const after = await stage('anonymous-after')
   expect(after.status).toBe(400)
@@ -197,4 +199,29 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
   })).status).toBe(400)
   const afterRejected = await fetch(`${url}/api/collections/purchase_bills/records`, { headers: { Authorization: operator.token } }).then((response) => response.json()) as { totalItems: number }
   expect(afterRejected.totalItems).toBe(1)
+
+  const paymentDraftResponse = await fetch(`${url}/api/collections/purchase_payment_drafts/records`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: muse.token },
+    body: JSON.stringify({ payload: { supplier_name: 'Test Supplier', date: '2026-11-15', kind: 'payment', amount_rs: '90.50' }, schema_version: 1, status: 'pending_review', source_message_id: 'payment-once', created_by: operator.record.id }),
+  })
+  expect(paymentDraftResponse.status).toBe(200)
+  const paymentDraft = await paymentDraftResponse.json() as { id: string; created_by: string }
+  expect(paymentDraft.created_by).toBe(muse.record.id)
+  expect((await fetch(`${url}/api/collections/purchase_payment_drafts/records/${paymentDraft.id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: muse.token }, body: JSON.stringify({ notes: 'Muse correction' }),
+  })).status).toBe(200)
+  expect((await fetch(`${url}/api/collections/purchase_payment_drafts/records/${paymentDraft.id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: muse.token }, body: JSON.stringify({ status: 'approved', converted_payment: 'aaaaaaaaaaaaaaa' }),
+  })).status).toBe(404)
+  const savePayment = (paymentId: string) => fetch(`${url}/api/batch`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: operator.token },
+    body: JSON.stringify({ requests: [
+      { method: 'POST', url: '/api/collections/supplier_payments/records', body: { id: paymentId } },
+      { method: 'PATCH', url: `/api/collections/purchase_payment_drafts/records/${paymentDraft.id}`, body: { status: 'approved', converted_payment: paymentId } },
+    ] }),
+  })
+  expect((await savePayment('ddddddddddddddd')).status).toBe(200)
+  expect((await savePayment('eeeeeeeeeeeeeee')).status).toBe(400)
+  const supplierPayments = await fetch(`${url}/api/collections/supplier_payments/records`, { headers: { Authorization: operator.token } }).then((response) => response.json()) as { totalItems: number }
+  expect(supplierPayments.totalItems).toBe(1)
 }, 30_000)
