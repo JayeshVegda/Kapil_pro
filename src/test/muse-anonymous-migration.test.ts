@@ -202,11 +202,12 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
 
   const paymentDraftResponse = await fetch(`${url}/api/collections/purchase_payment_drafts/records`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: muse.token },
-    body: JSON.stringify({ payload: { supplier_name: 'Test Supplier', date: '2026-11-15', kind: 'payment', amount_rs: '90.50' }, schema_version: 1, status: 'pending_review', source_message_id: 'payment-once', created_by: operator.record.id }),
+    body: JSON.stringify({ payload: { supplier_name: 'Test Supplier', date: '2026-11-15', kind: 'payment', amount_rs: '90.50' }, schema_version: 1, status: 'pending_review', direct_save: true, source_message_id: 'payment-once', created_by: operator.record.id }),
   })
   expect(paymentDraftResponse.status).toBe(200)
-  const paymentDraft = await paymentDraftResponse.json() as { id: string; created_by: string }
+  const paymentDraft = await paymentDraftResponse.json() as { id: string; created_by: string; status: string; direct_save: boolean }
   expect(paymentDraft.created_by).toBe(muse.record.id)
+  expect(paymentDraft).toMatchObject({ status: 'pending_review', direct_save: true })
   expect((await fetch(`${url}/api/collections/purchase_payment_drafts/records/${paymentDraft.id}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: muse.token }, body: JSON.stringify({ notes: 'Muse correction' }),
   })).status).toBe(200)
