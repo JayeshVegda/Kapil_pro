@@ -18,17 +18,23 @@ import { DateInput } from '@/components/ui/date-input'
 import { PaymentAmountInput } from '@/components/ui/payment-amount-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { createSupplierPayment, type SupplierPaymentView } from '@/data/suppliers'
+import { loadPurchasePaymentDraft } from '@/data/purchase-payment-drafts'
 import { supplierContextQueryOptions, supplierListQueryOptions } from '@/data/purchase-queries'
 import type { SupplierPool } from '@/domain/supplier-settlement'
 import { buildSupplierPaymentWorkflow, prepareSupplierPaymentInput, type SupplierPaymentKind } from '@/domain/supplier-payment-workflow'
 import { SUPPLIER_PAYMENT_MODES, supplierPaymentNeedsReference, type SupplierPaymentMode } from '@/domain/supplier-payment-modes'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
+import { matchPurchaseMaster, parsePurchaseDecimal } from '@/domain/purchase-bill-draft'
+import { paiseToRupeesText } from '@/domain/supplier-units'
+import { Panel } from '@/components/ui/panel'
+import { AppError } from '@/app/errors'
 
 const searchSchema = z.object({
   supplierId: z.string().optional(),
   pool: z.enum(['kacha', 'gst']).optional(),
   billId: z.string().optional(),
+  draftId: z.string().regex(/^[a-z0-9]{15}$/).optional(),
 })
 
 export const Route = createFileRoute('/new-supplier-payment')({
@@ -48,14 +54,17 @@ const KIND_OPTIONS: Array<{ kind: PaymentKind; label: string; allowPins: boolean
 
 function NewSupplierPaymentPage() {
   const queryClient = useQueryClient()
-  const { supplierId: initialSupplierId, pool: initialPool, billId: initialBillId } = Route.useSearch()
+  const { supplierId: initialSupplierId, pool: initialPool, billId: initialBillId, draftId } = Route.useSearch()
 
   const [date, setDate] = useState(() => getLocalIsoDate())
   const [supplierId, setSupplierId] = useState(initialSupplierId ?? '')
   const [pool, setPool] = useState<SupplierPool>(initialPool ?? 'kacha')
   const [kind, setKind] = useState<PaymentKind>('payment')
-  const [mode, setMode] = useState<PaymentMode>('cash')
+  const [mode, setMode] = useState<PaymentMode | ''>('cash')
   const [amountRupees, setAmountRupees] = useState<number>(0)
+  const [draftAmountStr, setDraftAmountStr] = useState('')
+  const [draftSaved, setDraftSaved] = useState(false)
+  const [convertedPaymentId, setConvertedPaymentId] = useState('')
   const [reference, setReference] = useState('')
   const [payeeName, setPayeeName] = useState('')
   const [privateNote, setPrivateNote] = useState('')
@@ -65,18 +74,39 @@ function NewSupplierPaymentPage() {
 
   const amountInputRef = useRef<HTMLInputElement | null>(null)
   const noteInputRef = useRef<HTMLInputElement | null>(null)
+  const appliedDraftRef = useRef('')
 
   const allowPins = KIND_OPTIONS.find((option) => option.kind === kind)?.allowPins ?? true
 
   const suppliersQuery = useQuery(supplierListQueryOptions())
+  const draftQuery = useQuery({ queryKey: ['purchase-payment-draft', draftId], queryFn: () => loadPurchasePaymentDraft(draftId!), enabled: Boolean(draftId), refetchOnWindowFocus: true })
   const contextQuery = useQuery(supplierContextQueryOptions(supplierId))
+
+  useEffect(() => {
+    if (!draftId || !draftQuery.data || !suppliersQuery.data || appliedDraftRef.current === draftId) return
+    const draft = draftQuery.data
+    if (draft.status !== 'pending_review' || draft.parsed.kind !== 'valid') return
+    const p = draft.parsed.value
+    const supplier = matchPurchaseMaster(p.supplier_name, p.supplier_id, suppliersQuery.data.map((s) => ({ id: s.id, name: s.companyName, aliases: s.aliases, active: s.active })))
+    setSupplierId(supplier?.id ?? '')
+    setDate(p.date)
+    setPool(p.pool)
+    setKind(p.kind)
+    setMode(p.mode ?? '')
+    setDraftAmountStr(paiseToRupeesText(draft.parsed.amountPaise))
+    setReference(p.reference ?? '')
+    setPayeeName(p.payee ?? '')
+    setPrivateNote(p.note ?? '')
+    setSelectedBillIds(new Set(p.bill_pins ?? []))
+    appliedDraftRef.current = draftId
+  }, [draftId, draftQuery.data, suppliersQuery.data])
 
   const selectedSupplier = useMemo(
     () => (suppliersQuery.data ?? []).find((s) => s.id === supplierId) ?? null,
     [suppliersQuery.data, supplierId],
   )
 
-  const amountPaise = Math.round(amountRupees * 100)
+  const amountPaise = draftId ? (() => { try { return parsePurchaseDecimal(draftAmountStr || '0', 2, 'Amount') } catch { return 0 } })() : Math.round(amountRupees * 100)
 
   const workflow = useMemo(() => {
     const context = contextQuery.data
@@ -117,6 +147,7 @@ function NewSupplierPaymentPage() {
 
   const resetForm = () => {
     setAmountRupees(0)
+    setDraftAmountStr('')
     setReference('')
     setPrivateNote('')
     setPayeeName('')
@@ -127,15 +158,26 @@ function NewSupplierPaymentPage() {
   const saveMutation = useMutation({
     mutationFn: async () => {
       setStatusText('')
+      if (draftId && (draftSaved || draftQuery.data?.status !== 'pending_review' || draftQuery.data.parsed.kind !== 'valid')) throw new Error('This draft is invalid or was already processed.')
+      if (!mode) throw new Error('Choose a payment mode before saving.')
       const payload = prepareSupplierPaymentInput({ supplierId, date, pool, kind, amountPaise, mode, reference, payeeName, privateNote }, workflow)
-      return createSupplierPayment(payload)
+      return createSupplierPayment({ ...payload, draftId })
     },
     onSuccess: async (savedPayment) => {
       setLastSavedPayment(savedPayment)
       await invalidateAfterSupplierPurchaseWrite(queryClient, savedPayment.supplierId)
+      if (draftId) {
+        setDraftSaved(true)
+        void queryClient.invalidateQueries({ queryKey: ['purchase-payment-draft', draftId] })
+        void queryClient.invalidateQueries({ queryKey: ['purchase-payment-drafts'] })
+        void queryClient.invalidateQueries({ queryKey: ['purchase-payment-drafts-count'] })
+      }
       resetForm()
     },
-    onError: (err) => setStatusText(toUserMessage(err)),
+    onError: (err) => {
+      if (err instanceof AppError && err.code === 'CONFLICT' && err.details && typeof err.details === 'object' && 'paymentId' in err.details) setConvertedPaymentId(String(err.details.paymentId))
+      setStatusText(toUserMessage(err))
+    },
   })
 
   // Keyboard shortcut Ctrl+Enter to save
@@ -143,17 +185,18 @@ function NewSupplierPaymentPage() {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault()
-        if (!saveMutation.isPending && workflow && amountPaise > 0) {
+        if (!saveMutation.isPending && !draftSaved && mode && workflow && amountPaise > 0) {
           saveMutation.mutate()
         }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [saveMutation, workflow, amountPaise])
+  }, [saveMutation, workflow, amountPaise, mode, draftSaved])
 
   return (
     <div className="w-full space-y-5 px-3 pb-12 pt-3 sm:px-4 lg:px-6">
+      {draftId && <Panel className="border-blue-200 bg-blue-50 text-sm text-slate-900">{draftQuery.isLoading ? 'Loading Purchase payment draft…' : draftQuery.data?.parsed.kind === 'invalid' ? `Invalid draft — editor unavailable: ${draftQuery.data.parsed.issues.join('; ')}` : draftQuery.data?.status !== 'pending_review' || draftSaved ? 'This draft has already been processed.' : 'Muse Purchase payment draft · Review supplier, pool, mode and pins before saving.'}{convertedPaymentId && <a className="ml-2 font-semibold underline" href={`/supplier-ledger/${supplierId}`}>View saved payment in supplier ledger</a>}</Panel>}
       {/* Error alert */}
       {statusText && (
         <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 shadow-xs">
@@ -278,7 +321,7 @@ function NewSupplierPaymentPage() {
             <div className="md:col-span-2">
               <Field label="Payment Amount (₹) *">
                 <div className="space-y-1.5">
-                  <PaymentAmountInput
+                  {draftId ? <input type="text" inputMode="decimal" value={draftAmountStr} onChange={(event) => { setDraftAmountStr(event.target.value); setStatusText('') }} className={inputClass} aria-label="Draft payment amount in rupees" /> : <PaymentAmountInput
                     value={amountRupees}
                     onChange={(val) => {
                       setAmountRupees(val)
@@ -288,14 +331,15 @@ function NewSupplierPaymentPage() {
                     className={inputClass}
                     inputRef={amountInputRef}
                     onEnter={() => noteInputRef.current?.focus()}
-                  />
+                  />}
                   {totalDuePaise > 0 && (
                     <div className="flex flex-wrap items-center gap-2 pt-0.5">
                       <span className="text-[11px] text-slate-500">Quick fill:</span>
                       <button
                         type="button"
                         onClick={() => {
-                          setAmountRupees(totalDuePaise / 100)
+                          if (draftId) setDraftAmountStr(paiseToRupeesText(totalDuePaise))
+                          else setAmountRupees(totalDuePaise / 100)
                         }}
                         className="rounded bg-slate-100 hover:bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700 transition"
                       >
@@ -305,7 +349,8 @@ function NewSupplierPaymentPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            setAmountRupees(totalSelectedPaise / 100)
+                            if (draftId) setDraftAmountStr(paiseToRupeesText(totalSelectedPaise))
+                            else setAmountRupees(totalSelectedPaise / 100)
                             }}
                           className="rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 text-[11px] font-semibold transition"
                         >
@@ -377,7 +422,7 @@ function NewSupplierPaymentPage() {
               type="button"
               className="inline-flex h-9 items-center gap-1.5 rounded-md bg-slate-900 px-4 text-xs font-semibold text-white shadow-xs hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 transition"
               onClick={() => saveMutation.mutate()}
-              disabled={saveMutation.isPending || !workflow || amountPaise <= 0}
+              disabled={saveMutation.isPending || !workflow || amountPaise <= 0 || (Boolean(draftId) && (!mode || draftSaved || draftQuery.data?.status !== 'pending_review' || draftQuery.data.parsed.kind !== 'valid'))}
             >
               <CreditCard size={14} />
               {saveMutation.isPending ? 'Saving Payment…' : 'Save Payment (Ctrl+↵)'}

@@ -23,6 +23,7 @@ import {
 import { buildBillPreviewProps } from '@/lib/bill-preview-props'
 import { calculateBillTotals } from '@/domain/billing-calculations'
 import { PurchaseDraftLane } from '@/components/drafts/purchase-draft-lane'
+import { PurchasePaymentDraftLane } from '@/components/drafts/purchase-payment-draft-lane'
 import { useModuleSettings } from '@/lib/use-module-settings'
 import { StatusChip } from '@/components/ui/status-chip'
 
@@ -389,6 +390,7 @@ function DraftsPage() {
       )}
 
       {purchaseEnabled && <PurchaseDraftLane />}
+      {purchaseEnabled && <PurchasePaymentDraftLane />}
 
       {rejectingPayment && (
         <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-900/50 px-4 backdrop-blur-sm">
