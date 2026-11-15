@@ -61,11 +61,16 @@ stop_process() {
 }
 
 start_pocketbase() {
+  if systemctl --user is-active --quiet kapil-pb.service 2>/dev/null; then
+    wait_url "http://127.0.0.1:8090/api/health" 30
+    return 0
+  fi
   if get_running_pid pocketbase >/dev/null; then return 0; fi
   assert_file "$POCKETBASE_BIN" "PocketBase binary"
   assert_port_free 8090 PocketBase
   nohup "$POCKETBASE_BIN" serve --dir "$DATA_DIR" --http 127.0.0.1:8090 \
     --migrationsDir "$PROJECT_ROOT/pb_migrations" \
+    --hooksDir "$PROJECT_ROOT/pb_hooks" \
     >> "$LOG_DIR/pocketbase.out.log" 2>> "$LOG_DIR/pocketbase.err.log" &
   local pid=$!
   echo "$pid" > "$(get_pid_file pocketbase)"
@@ -74,6 +79,10 @@ start_pocketbase() {
 }
 
 start_caddy() {
+  if systemctl --user is-active --quiet kapil-web.service 2>/dev/null; then
+    wait_url "http://127.0.0.1:4174" 30
+    return 0
+  fi
   if get_running_pid caddy >/dev/null; then return 0; fi
   assert_file "$CADDY_BIN" "Caddy binary"
   assert_file "$PROJECT_ROOT/Caddyfile" "Caddyfile"
