@@ -8,7 +8,7 @@ import { resolve, join } from 'node:path'
 const root = resolve(import.meta.dirname, '../..')
 const binary = join(root, 'runtime/bin/pocketbase')
 const schemaMigration = join(root, 'pb_migrations/1794640008_created_purchase_bill_drafts.js')
-const stagedRules = join(root, 'staged_migrations/1794640009_tighten_sales_and_purchase_draft_rules.js')
+const stagedRules = join(root, 'pb_migrations/1794640009_tighten_sales_and_purchase_draft_rules.js')
 const temp = mkdtempSync(join(tmpdir(), 'kapil-muse-rules-'))
 const migrationsDir = join(temp, 'migrations')
 const dataDir = join(temp, 'data')

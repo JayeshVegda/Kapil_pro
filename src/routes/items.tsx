@@ -839,6 +839,7 @@ function PurchaseItemsView() {
   const [newItemName, setNewItemName] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
+  const [editingAliases, setEditingAliases] = useState('')
   const [statusText, setStatusText] = useState('')
   const [rowError, setRowError] = useState('')
   const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; billCount: number } | null>(null)
@@ -912,7 +913,7 @@ function PurchaseItemsView() {
       if (filter === 'active' && !item.active) return false
       if (filter === 'inactive' && item.active) return false
       if (!needle) return true
-      return item.name.toLowerCase().includes(needle)
+      return `${item.name} ${item.aliases}`.toLowerCase().includes(needle)
     })
   }, [allItems, query, filter])
 
@@ -951,10 +952,11 @@ function PurchaseItemsView() {
   })
 
   const renameMutation = useMutation({
-    mutationFn: async ({ id, name }: { id: string; name: string }) => renamePurchaseItem(id, name),
+    mutationFn: async ({ id, name, aliases }: { id: string; name: string; aliases: string }) => renamePurchaseItem(id, name, aliases),
     onSuccess: async () => {
       setEditingId(null)
       setEditingName('')
+      setEditingAliases('')
       setRowError('')
       setStatusText('Scrap item renamed successfully.')
       await invalidateAfterSupplierPurchaseWrite(queryClient)
@@ -992,7 +994,7 @@ function PurchaseItemsView() {
       return
     }
     setRowError('')
-    renameMutation.mutate({ id, name: trimmed })
+    renameMutation.mutate({ id, name: trimmed, aliases: editingAliases })
   }
 
   const isLoading = itemsQuery.isLoading || billsQuery.isLoading
@@ -1227,7 +1229,7 @@ function PurchaseItemsView() {
                         {/* Item Name & Quick Rename */}
                         <td className="px-3.5 py-3 font-medium text-foreground">
                           {isEditing ? (
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
                               <input
                                 autoFocus
                                 value={editingName}
@@ -1239,9 +1241,9 @@ function PurchaseItemsView() {
                                     setRowError('')
                                   }
                                 }}
-                                onBlur={() => commitRename(item.id)}
                                 className="h-7 w-52 rounded-md border border-primary bg-background px-2 text-xs font-semibold text-foreground outline-none ring-2 ring-primary/20"
                               />
+                              <input value={editingAliases} onChange={(e) => setEditingAliases(e.target.value)} placeholder="Other names, comma separated" aria-label="Purchase item aliases" className={`${inputClass} h-7 w-52 text-xs`} />
                               <button
                                 type="button"
                                 aria-label="Confirm rename"
@@ -1268,12 +1270,14 @@ function PurchaseItemsView() {
                           ) : (
                             <div className="flex items-center gap-2">
                               <span className="font-bold text-sm text-foreground">{item.name}</span>
+                              {item.aliases && <span className="max-w-48 truncate text-xs text-muted-foreground" title={item.aliases}>· {item.aliases.replace(/\n/g, ", ")}</span>}
                               <button
                                 type="button"
                                 aria-label={`Rename ${item.name}`}
                                 onClick={() => {
                                   setEditingId(item.id)
                                   setEditingName(item.name)
+                                  setEditingAliases(item.aliases ?? '')
                                   setRowError('')
                                 }}
                                 className="rounded p-1 text-muted-foreground/60 transition hover:bg-secondary hover:text-foreground"
