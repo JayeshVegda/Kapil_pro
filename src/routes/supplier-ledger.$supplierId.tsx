@@ -326,6 +326,7 @@ export function SupplierLedgerDetail({
       const gstSign = formState.openingGstDirection === 'we_owe' ? 1 : -1
       const payload: SupplierUpsertInput = {
         companyName: formState.companyName.trim(),
+        aliases: formState.aliases,
         contactName: formState.contactName,
         phone: formState.phone,
         gstNo: formState.gstNo,
@@ -365,6 +366,7 @@ export function SupplierLedgerDetail({
     setSupplierFormState({
       id: s.id,
       companyName: s.companyName,
+      aliases: s.aliases ?? '',
       contactName: s.contactName ?? '',
       phone: s.phone ?? '',
       gstNo: s.gstNo ?? '',

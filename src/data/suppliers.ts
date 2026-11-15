@@ -8,6 +8,7 @@ import { validateSupplierPaymentMode, type SupplierPaymentMode } from '@/domain/
 import { formatPurchaseLineMemos, parsePurchaseLineMemos } from '@/domain/purchase-receipt-memos'
 import { nextPurchaseInNo } from '@/domain/in-no'
 import { findItemNameCollision, itemNameKey, normalizeItemName } from '@/domain/purchase-item-name'
+import { normalizePurchaseAliases } from '@/domain/purchase-bill-draft'
 import { bundleToLedgerInput, bundleToSettlementInput } from '@/domain/supplier-bundle'
 import {
   buildPurchaseReadModel, buildSupplierBundle, groupPurchaseCollections,
@@ -46,6 +47,7 @@ import {
 export type SupplierView = {
   id: string
   companyName: string
+  aliases?: string
   contactName: string
   phone: string
   gstNo: string
@@ -61,6 +63,7 @@ export type SupplierView = {
 export type PurchaseItemView = {
   id: string
   name: string
+  aliases?: string
   active: boolean
   created: string
 }
@@ -166,6 +169,7 @@ export type SupplierSummary = {
 
 export type SupplierUpsertInput = {
   companyName: string
+  aliases?: string
   contactName?: string
   phone?: string
   gstNo?: string
@@ -205,6 +209,7 @@ function photoList(value: unknown): string[] {
 const mapSupplier = (row: PBRow): SupplierView => ({
   id: row.id,
   companyName: text(row.company_name),
+  aliases: text(row.aliases),
   contactName: text(row.contact_name),
   phone: text(row.phone),
   gstNo: text(row.gst_no),
@@ -220,6 +225,7 @@ const mapSupplier = (row: PBRow): SupplierView => ({
 const mapItem = (row: PBRow): PurchaseItemView => ({
   id: row.id,
   name: text(row.name),
+  aliases: text(row.aliases),
   active: row.active === undefined ? true : bool(row.active),
   created: text(row.created),
 })
@@ -363,6 +369,7 @@ export async function createSupplier(input: SupplierUpsertInput, before?: Suppli
   return runDataOperation('create-supplier', async () => {
     const payload = {
       company_name: input.companyName.trim(),
+      aliases: normalizePurchaseAliases(input.aliases ?? '', input.companyName),
       contact_name: input.contactName ?? '',
       phone: input.phone ?? '',
       gst_no: input.gstNo ?? '',
@@ -384,6 +391,10 @@ export async function updateSupplier(supplierId: string, input: SupplierUpsertIn
     const before = (await pb.collection('suppliers').getOne(supplierId)) as PBRow
     const payload = {
       company_name: text(before.company_name) !== input.companyName ? input.companyName.trim() : undefined,
+      aliases: input.aliases == null ? undefined : normalizePurchaseAliases(
+        text(before.company_name) !== input.companyName ? `${input.aliases}\n${text(before.company_name)}` : input.aliases,
+        input.companyName,
+      ),
       contact_name: input.contactName,
       phone: input.phone,
       gst_no: input.gstNo,
@@ -441,7 +452,7 @@ export async function createPurchaseItem(name: string): Promise<PurchaseItemView
   })
 }
 
-export async function renamePurchaseItem(itemId: string, name: string): Promise<PurchaseItemView> {
+export async function renamePurchaseItem(itemId: string, name: string, aliases?: string): Promise<PurchaseItemView> {
   return runDataOperation('rename-purchase-item', async () => {
     const candidate = normalizeItemName(name)
     if (!candidate) throw new Error('Item name cannot be empty.')
@@ -450,8 +461,12 @@ export async function renamePurchaseItem(itemId: string, name: string): Promise<
     const collision = existing.find((row) => String((row as unknown as { id: string }).id) !== itemId && itemNameKey(String((row as unknown as { name?: string }).name ?? '')) === itemNameKey(candidate))
     if (collision) throw new Error(`Item "${String((collision as unknown as { name?: string }).name ?? '')}" already exists.`)
     if (itemNameKey(text(before.name)) !== itemNameKey(candidate) && await countNameOnlyReferences('purchase', text(before.name)) > 0) throw new Error('Old bills use this name without an item link. Deactivate it and add a new item instead.')
-    const row = (await pb.collection('purchase_items').update(itemId, { name: candidate })) as PBRow
-    await writeAuditRow({ collection: 'purchase_items', recordId: itemId, action: 'rename', before, after: { name: candidate } })
+    const nextAliases = normalizePurchaseAliases(
+      `${aliases ?? text(before.aliases)}${itemNameKey(text(before.name)) !== itemNameKey(candidate) ? `\n${text(before.name)}` : ''}`,
+      candidate,
+    )
+    const row = (await pb.collection('purchase_items').update(itemId, { name: candidate, aliases: nextAliases })) as PBRow
+    await writeAuditRow({ collection: 'purchase_items', recordId: itemId, action: 'rename', before, after: { name: candidate, aliases: nextAliases } })
     return mapItem(row)
   })
 }

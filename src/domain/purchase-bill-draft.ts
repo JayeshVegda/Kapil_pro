@@ -8,6 +8,19 @@ const businessDate = z.iso.date()
 export type PurchaseMaster = { id: string; name: string; aliases?: string; active?: boolean }
 const matchKey = (name: string) => name.trim().replace(/\s+/g, ' ').toLocaleLowerCase()
 
+export function normalizePurchaseAliases(raw: string, primaryName: string): string {
+  const seen = new Set([matchKey(primaryName)])
+  const aliases = raw.split(/[,\n]/).map((alias) => alias.trim().replace(/\s+/g, ' ')).filter(Boolean).filter((alias) => {
+    const key = matchKey(alias)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  const result = aliases.join('\n')
+  if (result.length > 2000) throw new Error('Aliases are too long')
+  return result
+}
+
 /** Match only within the supplied master list; ambiguous aliases stay unresolved. */
 export function matchPurchaseMaster<T extends PurchaseMaster>(name: string, id: string | undefined, masters: T[]): T | null {
   const matches = masters.filter((master) => master.active !== false &&

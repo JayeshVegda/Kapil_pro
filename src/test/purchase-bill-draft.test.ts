@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateDraftLinePaise, parsePurchaseBillDraft, parsePurchaseDecimal } from '@/domain/purchase-bill-draft'
+import { calculateDraftLinePaise, matchPurchaseMaster, normalizePurchaseAliases, parsePurchaseBillDraft, parsePurchaseDecimal } from '@/domain/purchase-bill-draft'
 import { computeBillNet, resolveTaxModeForPool } from '@/domain/supplier-purchases'
 import { nextPurchaseInNo } from '@/domain/in-no'
 
@@ -59,5 +59,16 @@ describe('purchase bill draft validation', () => {
     expect(resolveTaxModeForPool('kacha', 'gst')).toBe('none')
     expect(nextPurchaseInNo(['IN-2627-0001'], '2026-11-15')).toBe('IN-2627-0002')
     expect(nextPurchaseInNo(['IN-2627-0001'], '2027-04-01')).toBe('IN-2728-0001')
+  })
+
+  it('matches only active, unambiguous Purchase aliases within a supplied master list', () => {
+    const masters = [
+      { id: 'aaaaaaaaaaaaaaa', name: 'Brass Scrap', aliases: 'Old Brass\nPeetal', active: true },
+      { id: 'bbbbbbbbbbbbbbb', name: 'Copper Scrap', aliases: 'Tamba', active: false },
+    ]
+    expect(normalizePurchaseAliases(' old brass, Peetal, old brass ', 'Brass Scrap')).toBe('old brass\nPeetal')
+    expect(matchPurchaseMaster('peetal', undefined, masters)?.id).toBe('aaaaaaaaaaaaaaa')
+    expect(matchPurchaseMaster('tamba', undefined, masters)).toBeNull()
+    expect(matchPurchaseMaster('peetal', undefined, [...masters, { id: 'ccccccccccccccc', name: 'Mixed Scrap', aliases: 'Peetal', active: true }])).toBeNull()
   })
 })

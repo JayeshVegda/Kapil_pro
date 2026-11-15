@@ -7,6 +7,7 @@ import { parseNonNegativeNumber } from '@/lib/inr-format'
 export type SupplierFormState = {
   id: string | null
   companyName: string
+  aliases: string
   contactName: string
   phone: string
   gstNo: string
@@ -23,6 +24,7 @@ export type SupplierFormState = {
 export const emptySupplierFormState = (): SupplierFormState => ({
   id: null,
   companyName: '',
+  aliases: '',
   contactName: '',
   phone: '',
   gstNo: '',
@@ -96,6 +98,11 @@ export function SupplierFormModal({
                   autoFocus
                   onChange={(e) => onChange({ ...formState, companyName: e.target.value })}
                 />
+              </Field>
+            </div>
+            <div className="sm:col-span-2">
+              <Field label="Other names (optional)">
+                <input className={inputClass} type="text" placeholder="Comma-separated names used in messages" value={formState.aliases} onChange={(e) => onChange({ ...formState, aliases: e.target.value })} />
               </Field>
             </div>
             <Field label="Contact Person (optional)">

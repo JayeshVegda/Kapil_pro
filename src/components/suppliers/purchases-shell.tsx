@@ -233,6 +233,7 @@ function RailAddSupplierModal({ onClose, onCreated }: { onClose: () => void; onC
       const openingGstPaise = (state.openingGstDirection === 'we_owe' ? 1 : -1) * Math.round(state.openingGstRupees * 100)
       return createSupplier({
         companyName: state.companyName.trim(),
+        aliases: state.aliases,
         contactName: state.contactName,
         phone: state.phone,
         gstNo: state.gstNo,

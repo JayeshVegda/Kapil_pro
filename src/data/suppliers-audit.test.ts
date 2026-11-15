@@ -126,7 +126,7 @@ describe('Purchase Audit Log Integration', () => {
         collection: 'purchase_items',
         record_id: 'item_1',
         action: 'rename',
-        after_json: JSON.stringify({ name: 'Brass Sisu Refined' }),
+        after_json: JSON.stringify({ name: 'Brass Sisu Refined', aliases: 'Old Name' }),
       }),
     )
   })

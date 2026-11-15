@@ -151,6 +151,7 @@ export function SupplierPartiesManager() {
     const gstSign = formState.openingGstDirection === 'we_owe' ? 1 : -1
     return {
       companyName: formState.companyName.trim(),
+      aliases: formState.aliases,
       contactName: formState.contactName,
       phone: formState.phone,
       gstNo: formState.gstNo,
@@ -201,6 +202,7 @@ export function SupplierPartiesManager() {
       formState: {
         id: s.id,
         companyName: s.companyName,
+        aliases: s.aliases ?? '',
         contactName: s.contactName ?? '',
         phone: s.phone ?? '',
         gstNo: s.gstNo ?? '',
