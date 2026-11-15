@@ -9,6 +9,7 @@ import { formatPurchaseLineMemos, parsePurchaseLineMemos } from '@/domain/purcha
 import { nextPurchaseInNo } from '@/domain/in-no'
 import { findItemNameCollision, itemNameKey, normalizeItemName } from '@/domain/purchase-item-name'
 import { normalizePurchaseAliases } from '@/domain/purchase-bill-draft'
+import { parsePurchasePaymentDraft } from '@/domain/purchase-payment-draft'
 import { bundleToLedgerInput, bundleToSettlementInput } from '@/domain/supplier-bundle'
 import {
   buildPurchaseReadModel, buildSupplierBundle, groupPurchaseCollections,
@@ -937,6 +938,9 @@ export async function createSupplierPayment(input: SupplierPaymentCreateInput): 
         throw new AppError({ code: 'CONFLICT', message: 'Draft already converted.', details: { paymentId: String(draft.converted_payment) } })
       }
       if (draft.status !== 'pending_review') throw new AppError({ code: 'CONFLICT', message: 'This draft was already processed.' })
+      if (parsePurchasePaymentDraft(draft.schema_version, draft.payload).kind === 'invalid') {
+        throw new AppError({ code: 'VALIDATION', message: 'Invalid Purchase payment draft cannot be saved.' })
+      }
     }
     requirePositiveInteger(input.amountPaise, 'Payment amount')
     const pinnedTotal = (input.allocations ?? []).reduce((sum, allocation) => {

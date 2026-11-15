@@ -28,6 +28,7 @@ import { formatPaiseInr } from '@/lib/inr-format'
 import { matchPurchaseMaster, parsePurchaseDecimal } from '@/domain/purchase-bill-draft'
 import { paiseToRupeesText } from '@/domain/supplier-units'
 import { Panel } from '@/components/ui/panel'
+import { buttonClass } from '@/components/ui/form-control-classes'
 import { AppError } from '@/app/errors'
 
 const searchSchema = z.object({
@@ -113,6 +114,10 @@ function NewSupplierPaymentPage() {
     if (!context || contextQuery.isError || context.bundle.supplier.id !== supplierId) return null
     return buildSupplierPaymentWorkflow(context, { pool, date, kind, amountPaise, selectedBillIds })
   }, [contextQuery.data, contextQuery.isError, supplierId, pool, date, kind, amountPaise, selectedBillIds])
+  const draftContext = contextQuery.data
+  const draftPinsOutsidePool = draftId && draftContext && selectedBillIds.size > 0
+    ? [...selectedBillIds].filter((id) => !draftContext.bundle.bills.some((bill) => bill.id === id && bill.pool === pool && !bill.cancelled))
+    : []
   const openBills = workflow?.openBills ?? []
   const totalDuePaise = workflow?.totalDuePaise ?? 0
   const totalSelectedPaise = workflow?.totalSelectedPaise ?? 0
@@ -197,6 +202,7 @@ function NewSupplierPaymentPage() {
   return (
     <div className="w-full space-y-5 px-3 pb-12 pt-3 sm:px-4 lg:px-6">
       {draftId && <Panel className="border-blue-200 bg-blue-50 text-sm text-slate-900">{draftQuery.isLoading ? 'Loading Purchase payment draft…' : draftQuery.data?.parsed.kind === 'invalid' ? `Invalid draft — editor unavailable: ${draftQuery.data.parsed.issues.join('; ')}` : draftQuery.data?.status !== 'pending_review' || draftSaved ? 'This draft has already been processed.' : 'Muse Purchase payment draft · Review supplier, pool, mode and pins before saving.'}{convertedPaymentId && <a className="ml-2 font-semibold underline" href={`/supplier-ledger/${supplierId}`}>View saved payment in supplier ledger</a>}</Panel>}
+      {draftPinsOutsidePool.length > 0 && <Panel className="border-amber-200 bg-amber-50 text-sm text-amber-900"><p>{draftPinsOutsidePool.length} draft pin(s) do not belong to an open bill in this supplier’s {pool.toUpperCase()} pool. They will not be applied.</p><button type="button" className={`${buttonClass('secondary')} mt-2`} onClick={() => setSelectedBillIds(new Set([...selectedBillIds].filter((id) => !draftPinsOutsidePool.includes(id))))}>Clear invalid pins</button></Panel>}
       {/* Error alert */}
       {statusText && (
         <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 shadow-xs">
