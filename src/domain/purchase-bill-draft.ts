@@ -18,7 +18,9 @@ export function matchPurchaseMaster<T extends PurchaseMaster>(name: string, id: 
 
 /** Parse decimal text with BigInt scaling. No Number/parseFloat before unit conversion. */
 export function parsePurchaseDecimal(value: string, decimals: number, label: string): number {
-  const clean = value.trim().replace(/,/g, '')
+  const trimmed = value.trim()
+  if (trimmed.includes(',') && !/^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(trimmed)) throw new Error(`${label} has invalid grouping`)
+  const clean = trimmed.replace(/,/g, '')
   const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(clean)
   if (!match) throw new Error(`${label} must be a decimal number`)
   const fraction = match[3] ?? ''
@@ -118,13 +120,22 @@ function invalid(issues: z.core.$ZodIssue[]): { kind: 'invalid'; issues: string[
   return { kind: 'invalid', issues: issues.map((issue) => `${issue.path.join('.') || 'payload'}: ${issue.message}`) }
 }
 
+function validateLineMath(value: PurchaseBillDraftPayloadV1) {
+  try {
+    for (const line of value.lines) calculateDraftLinePaise(line.weight_g, line.rate_milli)
+    return { kind: 'valid' as const, value }
+  } catch (error) {
+    return { kind: 'invalid' as const, issues: [error instanceof Error ? error.message : 'Invalid line amount'] }
+  }
+}
+
 /** The inbox will show invalid drafts for correction, never send them to the editor. */
 export function parsePurchaseBillDraft(schemaVersion: unknown, payload: unknown):
   | { kind: 'valid'; value: PurchaseBillDraftPayloadV1 }
   | { kind: 'invalid'; issues: string[] } {
   if (schemaVersion === 1) {
     const parsed = purchaseBillDraftPayloadV1.safeParse(payload)
-    return parsed.success ? { kind: 'valid', value: parsed.data } : invalid(parsed.error.issues)
+    return parsed.success ? validateLineMath(parsed.data) : invalid(parsed.error.issues)
   }
   if (schemaVersion !== 2) return { kind: 'invalid', issues: ['Unsupported draft schema version'] }
   const parsed = purchaseBillDraftPayloadV2.safeParse(payload)
@@ -158,7 +169,7 @@ export function parsePurchaseBillDraft(schemaVersion: unknown, payload: unknown)
       payment: p.payment && { amount_paise: parsePurchaseDecimal(p.payment.amount_rs, 2, 'Payment'), mode: p.payment.mode, reference: p.payment.reference, note: p.payment.note },
     }
     const checked = purchaseBillDraftPayloadV1.safeParse(value)
-    return checked.success ? { kind: 'valid', value: checked.data } : invalid(checked.error.issues)
+    return checked.success ? validateLineMath(checked.data) : invalid(checked.error.issues)
   } catch (error) {
     return { kind: 'invalid', issues: [error instanceof Error ? error.message : 'Invalid decimal value'] }
   }

@@ -1,5 +1,6 @@
 import { countItemReferences, countNameOnlyReferences } from '@/data/item-usage'
 import { toast } from 'sonner'
+import { AppError } from '@/app/errors'
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
 import { executeConfirmedBatch, generatePurchaseRecordId } from '@/data/confirmed-write'
@@ -481,6 +482,7 @@ export async function deletePurchaseItem(itemId: string): Promise<void> {
 
 export type PurchaseBillCreateInput = {
   requestId?: string
+  draftId?: string
   supplierId: string
   inNo: string
   supplierBillNo?: string
@@ -524,6 +526,13 @@ export async function getNextPurchaseInNo(dateYyyyMmDd: string): Promise<string>
 
 export async function createPurchaseBill(input: PurchaseBillCreateInput): Promise<PurchaseBillView> {
   return runDataOperation('create-purchase-bill', async () => {
+    if (input.draftId) {
+      const draft = await pb.collection('purchase_bill_drafts').getOne(input.draftId)
+      if (draft.status === 'approved' && draft.converted_bill) {
+        throw new AppError({ code: 'CONFLICT', message: 'Draft already converted.', details: { billId: String(draft.converted_bill) } })
+      }
+      if (draft.status !== 'pending_review') throw new AppError({ code: 'CONFLICT', message: 'This draft was already processed.' })
+    }
     validatePurchaseLines(input.lines)
     if (input.payment) {
       requirePositiveInteger(input.payment.amountPaise, 'Payment amount')
@@ -622,8 +631,22 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
           after_json: JSON.stringify(billPayload),
           actor: currentActor(),
         })
+        if (input.draftId) {
+          batch.collection('purchase_bill_drafts').update(input.draftId, {
+            status: 'approved', converted_bill: billId,
+          })
+        }
         return { batch, record: billPayload }
       },
+    }).catch(async (error: unknown) => {
+      if (input.draftId) {
+        const draft = await pb.collection('purchase_bill_drafts').getOne(input.draftId).catch(() => null)
+        if (draft?.status === 'approved' && draft.converted_bill) {
+          throw new AppError({ code: 'CONFLICT', message: 'Draft already converted.', details: { billId: String(draft.converted_bill) }, cause: error })
+        }
+        if (draft?.status === 'rejected') throw new AppError({ code: 'CONFLICT', message: 'This draft was rejected.', cause: error })
+      }
+      throw error
     })
     const billId = saved.id
     if (input.photos && input.photos.length > 0) {
