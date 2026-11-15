@@ -58,15 +58,15 @@ import { SUPPLIER_PAYMENT_MODES, supplierPaymentNeedsReference, type SupplierPay
 import { purchaseReceiptMemoText } from '@/domain/purchase-receipt-memos'
 import {
   gramsToKgText,
-  kgToGrams,
-  lineAmountPaise,
   milliToRateText,
+  paiseToRupeesText,
   percentToBasisPoints,
-  rateToMilli,
-  rupeesToPaise,
 } from '@/domain/supplier-units'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
+import { buttonClass, inputClass } from '@/components/ui/form-control-classes'
+import { loadPurchaseBillDraft, requireEditablePurchaseBillDraft } from '@/data/purchase-bill-drafts'
+import { calculateDraftLinePaise, matchPurchaseMaster, parsePurchaseDecimal } from '@/domain/purchase-bill-draft'
 
 type LineFormItem = {
   id: string
@@ -81,6 +81,18 @@ type AdjustmentFormItem = {
   id: string
   type: PurchaseAdjustmentType
   amountRupeesStr: string
+  note: string
+}
+
+type DraftBardanFormItem = {
+  id: string
+  weightKgStr: string
+  rateRupeesStr: string
+  rateLineIndex?: number
+  method: 'deduct' | 'in_kind' | 'cash_back' | 'advance'
+  creditRupeesStr: string
+  cashRupeesStr: string
+  date: string
   note: string
 }
 
@@ -127,7 +139,7 @@ function ItemDropdownCell({
   selectedItemName: string
   onSelect: (item: { id: string; name: string }) => void
   onNext: () => void
-  onCreateItem: (name: string) => Promise<{ id: string; name: string }>
+  onCreateItem?: (name: string) => Promise<{ id: string; name: string }>
   inputId?: string
 }) {
   const [isOpen, setIsOpen] = useState(false)
@@ -175,7 +187,7 @@ function ItemDropdownCell({
 
   const handleCreateNew = async (name: string) => {
     const clean = name.trim()
-    if (!clean || isCreating) return
+    if (!clean || isCreating || !onCreateItem) return
     try {
       setIsCreating(true)
       const created = await onCreateItem(clean)
@@ -204,7 +216,7 @@ function ItemDropdownCell({
       e.preventDefault()
       if (filteredItems.length > 0 && highlightIndex >= 0 && highlightIndex < filteredItems.length) {
         handlePick(filteredItems[highlightIndex])
-      } else if (query.trim() && !exactMatchExists) {
+      } else if (query.trim() && !exactMatchExists && onCreateItem) {
         void handleCreateNew(query)
       }
     } else if (e.key === 'Tab') {
@@ -251,7 +263,7 @@ function ItemDropdownCell({
           {filteredItems.length === 0 ? (
             <div className="p-3 text-center text-xs text-slate-400">
               No matching item found.
-              {query.trim() && !exactMatchExists && (
+              {query.trim() && !exactMatchExists && onCreateItem && (
                 <button
                   type="button"
                   onClick={() => void handleCreateNew(query)}
@@ -435,12 +447,13 @@ export type PurchaseBillEditorProps = {
   variant?: 'page' | 'modal'
   initialSupplierId?: string
   editBillId?: string
+  draftId?: string
   onSaved?: (saved: { id: string; inNo: string }) => void
   onDiscard?: () => void
   onDirtyChange?: (dirty: boolean) => void
 }
 
-export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', editBillId, onSaved, onDiscard, onDirtyChange }: PurchaseBillEditorProps) {
+export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', editBillId, draftId, onSaved, onDiscard, onDirtyChange }: PurchaseBillEditorProps) {
   const isPage = variant === 'page'
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -455,6 +468,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
   const [privateNote, setPrivateNote] = useState('')
   const [photos, setPhotos] = useState<File[]>([])
   const [paymentAmountRupees, setPaymentAmountRupees] = useState<number>(0)
+  const [draftPaymentStr, setDraftPaymentStr] = useState('')
   const [paymentMode, setPaymentMode] = useState<SupplierPaymentMode>('cash')
   const [paymentReference, setPaymentReference] = useState('')
   const [paymentNote, setPaymentNote] = useState('')
@@ -463,7 +477,11 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
 
   const [lines, setLines] = useState<LineFormItem[]>([defaultLine()])
   const [adjustments, setAdjustments] = useState<AdjustmentFormItem[]>([])
+  const [draftBardan, setDraftBardan] = useState<DraftBardanFormItem[]>([])
+  const [draftBardanBaseline, setDraftBardanBaseline] = useState('[]')
   const [statusText, setStatusText] = useState('')
+  const [convertedBillId, setConvertedBillId] = useState('')
+  const draftAppliedRef = useRef('')
 
   const todayIso = useMemo(() => getLocalIsoDate(), [])
   const [moreDetailsOpen, setMoreDetailsOpen] = useState(false)
@@ -471,6 +489,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
   const [notesOpen, setNotesOpen] = useState(false)
   const [paymentOpen, setPaymentOpen] = useState(false)
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false)
+  const saveConfirmButtonRef = useRef<HTMLButtonElement>(null)
   const [briefOpen, setBriefOpen] = useState(true)
   const [baselineReady, setBaselineReady] = useState(() => !editBillId)
   const [discardOpen, setDiscardOpen] = useState(false)
@@ -511,6 +530,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
   })
 
   const editBillQuery = useQuery(purchaseBillQueryOptions(editBillId ?? ''))
+  const draftQuery = useQuery({ queryKey: ['purchase-bill-draft', draftId], queryFn: () => loadPurchaseBillDraft(draftId!), enabled: Boolean(draftId), refetchOnWindowFocus: true })
 
   // Supplier context strip bundle query
   const supplierBundleQuery = useQuery(supplierBundleQueryOptions(supplierId))
@@ -531,6 +551,53 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
         .map((s) => ({ id: s.id, name: s.companyName })),
     [suppliersQuery.data],
   )
+
+  useEffect(() => {
+    if (!draftId || !draftQuery.data || draftAppliedRef.current === draftId || !suppliersQuery.data || !itemsQuery.data) return
+    if (draftQuery.data.status !== 'pending_review' || draftQuery.data.parsed.kind === 'invalid') return
+    const p = requireEditablePurchaseBillDraft(draftQuery.data)
+    const supplier = matchPurchaseMaster(p.supplier_name, p.supplier_id, suppliersQuery.data.map((s) => ({ ...s, name: s.companyName })))
+    const mappedLines: LineFormItem[] = p.lines.map((line) => {
+      const item = matchPurchaseMaster(line.item_name, line.item_id, itemsQuery.data ?? [])
+      return { id: generateLineId(), itemId: item?.id ?? '', itemName: item?.name ?? line.item_name,
+        bardanStr: line.receipt_memo ?? '', weightKgStr: gramsToKgText(line.weight_g), rateRupeesStr: milliToRateText(line.rate_milli) }
+    })
+    const mappedAdjustments: AdjustmentFormItem[] = (p.adjustments ?? []).map((a) => ({ id: generateLineId(), type: a.type, amountRupeesStr: paiseToRupeesText(a.amount_paise), note: a.note ?? '' }))
+    const nextSupplierId = supplier?.id ?? ''
+    const nextTaxMode = resolveTaxModeForPool(p.pool, p.tax_mode)
+    const nextGstRate = (p.gst_rate_bp ?? (p.pool === 'gst' ? 1800 : 0)) / 100
+    setSupplierId(nextSupplierId)
+    setDate(p.date)
+    setPool(p.pool)
+    setTaxMode(nextTaxMode)
+    setGstRatePercent(nextGstRate)
+    setSupplierBillNo(p.supplier_bill_no ?? '')
+    setPrivateNote(p.private_note ?? '')
+    setLines(mappedLines)
+    setAdjustments(mappedAdjustments)
+    const mappedBardan: DraftBardanFormItem[] = (p.bardan ?? []).map((b) => ({
+      id: generateLineId(), weightKgStr: gramsToKgText(b.bardan_g), rateRupeesStr: milliToRateText(b.rate_milli),
+      rateLineIndex: b.rate_line_index, method: b.method,
+      creditRupeesStr: b.credit_paise == null ? '' : paiseToRupeesText(b.credit_paise),
+      cashRupeesStr: b.cash_amount_paise == null ? '' : paiseToRupeesText(b.cash_amount_paise),
+      date: b.date ?? p.date, note: b.note ?? '',
+    }))
+    setDraftBardan(mappedBardan)
+    setDraftBardanBaseline(JSON.stringify(mappedBardan))
+    if (mappedAdjustments.length) setAdjustedOpen(true)
+    if (p.payment) {
+      setDraftPaymentStr(paiseToRupeesText(p.payment.amount_paise))
+      setPaymentMode(p.payment.mode)
+      setPaymentReference(p.payment.reference ?? '')
+      setPaymentNote(p.payment.note ?? '')
+      setPaymentOpen(true)
+    }
+    setBaselineDraft(snapshotDraft({ supplierId: nextSupplierId, date: p.date, pool: p.pool, taxMode: nextTaxMode,
+      gstRatePercent: nextGstRate, supplierBillNo: p.supplier_bill_no ?? '', bagsAtReceiptStr: '', privateNote: p.private_note ?? '',
+      lines: mappedLines, adjustments: mappedAdjustments }))
+    setBaselineReady(true)
+    draftAppliedRef.current = draftId
+  }, [draftId, draftQuery.data, suppliersQuery.data, itemsQuery.data])
 
   const { marketRate } = useMarketRate(date)
 
@@ -634,7 +701,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
       }),
     [supplierId, date, pool, taxMode, gstRatePercent, supplierBillNo, bagsAtReceiptStr, privateNote, lines, adjustments],
   )
-  const isDirty = baselineReady && (serializedDraft !== baselineDraft || photos.length > 0 || (!editBillId && (paymentAmountRupees > 0 || paymentNote.trim() !== '' || Boolean(paymentReference.trim()))))
+  const isDirty = baselineReady && (serializedDraft !== baselineDraft || (draftId && JSON.stringify(draftBardan) !== draftBardanBaseline) || photos.length > 0 || (!editBillId && ((draftId ? draftPaymentStr.trim() !== '' : paymentAmountRupees > 0) || paymentNote.trim() !== '' || Boolean(paymentReference.trim()))))
   const requestBack = () => (isDirty ? setDiscardOpen(true) : onDiscard ? onDiscard() : window.history.back())
 
   useEffect(() => {
@@ -674,9 +741,14 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
   // Prepared domain calculations
   const parsedLines = useMemo(() => {
     return lines.map((l) => {
-      const weightG = kgToGrams(parseFloat(l.weightKgStr) || 0)
-      const rateMilli = rateToMilli(parseFloat(l.rateRupeesStr) || 0)
-      const amountPaise = lineAmountPaise(weightG, rateMilli)
+      let weightG = 0
+      let rateMilli = 0
+      let amountPaise = 0
+      try {
+        weightG = parsePurchaseDecimal(l.weightKgStr, 3, 'Weight')
+        rateMilli = parsePurchaseDecimal(l.rateRupeesStr, 3, 'Rate')
+        amountPaise = calculateDraftLinePaise(weightG, rateMilli)
+      } catch { /* incomplete typed values are handled by form validation */ }
       return {
         ...l,
         weightG,
@@ -688,7 +760,8 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
 
   const parsedAdjustments = useMemo(() => {
     return adjustments.map((a) => {
-      const amountPaise = rupeesToPaise(parseFloat(a.amountRupeesStr) || 0)
+      let amountPaise = 0
+      try { amountPaise = parsePurchaseDecimal(a.amountRupeesStr, 2, 'Adjustment') } catch { /* incomplete field */ }
       return {
         ...a,
         amountPaise,
@@ -696,16 +769,30 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     })
   }, [adjustments])
 
+  const parsedDraftBardan = useMemo(() => {
+    try {
+      return draftBardan.map((b, index) => {
+        const bardanG = parsePurchaseDecimal(b.weightKgStr, 3, `Bardan ${index + 1} weight`)
+        const rateMilli = parsePurchaseDecimal(b.rateRupeesStr, 3, `Bardan ${index + 1} rate`)
+        const creditPaise = b.creditRupeesStr.trim() ? parsePurchaseDecimal(b.creditRupeesStr, 2, `Bardan ${index + 1} credit`) :
+          b.method === 'deduct' ? calculateDraftLinePaise(bardanG, rateMilli) : 0
+        const cashAmountPaise = b.cashRupeesStr.trim() ? parsePurchaseDecimal(b.cashRupeesStr, 2, `Bardan ${index + 1} cash`) : 0
+        if (bardanG <= 0) throw new Error('Bardan weight must be positive')
+        return { bardanG, rateMilli, rateLineIndex: b.rateLineIndex, method: b.method, creditPaise, cashAmountPaise, date: b.date, note: b.note }
+      })
+    } catch { return null }
+  }, [draftBardan])
+
   const billNet = useMemo(() => {
     const gstRateBp = taxMode === 'none' ? 0 : percentToBasisPoints(gstRatePercent)
     return computeBillNet(
       parsedLines.map((l) => ({ amountPaise: l.amountPaise })),
       parsedAdjustments.map((a) => ({ type: a.type, amountPaise: a.amountPaise })),
-      editBillQuery.data?.bardan ?? [],
+      draftId ? (parsedDraftBardan ?? []) : (editBillQuery.data?.bardan ?? []),
       taxMode,
       gstRateBp,
     )
-  }, [parsedLines, parsedAdjustments, taxMode, gstRatePercent, editBillQuery.data])
+  }, [parsedLines, parsedAdjustments, taxMode, gstRatePercent, editBillQuery.data, draftId, parsedDraftBardan])
 
   // Vilaity benchmark rate for the current date
   const vilaityBenchmark = useMemo(() => {
@@ -768,7 +855,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     const input = bundleToSettlementInput(supplierBundleQuery.data)
     const previewBillId = editBillId || 'billpreview'
     const previewPaymentId = 'paymentpreview'
-    const paidPaise = editBillId ? 0 : rupeesToPaise(paymentAmountRupees)
+    const paidPaise = editBillId ? 0 : (() => { try { return parsePurchaseDecimal(draftId ? draftPaymentStr || '0' : String(paymentAmountRupees), 2, 'Payment') } catch { return 0 } })()
     const oldBill = input.bills.find((bill) => bill.id === previewBillId)
     const simulated = computeSupplierSettlement({
       ...input,
@@ -789,7 +876,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
         return { date: credit.date, mode: proposed ? paymentMode : payment?.mode ?? '', reference: proposed ? paymentReference : payment?.reference || credit.reference || '', amountPaise: credit.amountPaise, pinned: credit.pinned }
       }),
     }
-  }, [supplierBundleQuery.data, editBillId, paymentAmountRupees, paymentMode, paymentReference, paymentNote, date, pool, taxMode, gstRatePercent, parsedLines, parsedAdjustments, billNet.netPaise])
+  }, [supplierBundleQuery.data, editBillId, draftId, draftPaymentStr, paymentAmountRupees, paymentMode, paymentReference, paymentNote, date, pool, taxMode, gstRatePercent, parsedLines, parsedAdjustments, billNet.netPaise])
 
   const billChittyData = useMemo<BillChittyData>(() => ({
     inNo: inNoPreview, date, supplierName, pool, taxMode,
@@ -876,9 +963,12 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
   const saveMutation = useMutation({
     mutationFn: async () => {
       setStatusText('')
-      const paidNowPaise = rupeesToPaise(paymentAmountRupees)
+      if (draftId && (draftQuery.data?.status !== 'pending_review' || draftQuery.data.parsed.kind === 'invalid')) throw new Error('This draft is invalid or was already processed.')
+      const paidNowPaise = parsePurchaseDecimal(draftId ? draftPaymentStr || '0' : String(paymentAmountRupees), 2, 'Payment')
       if (!editBillId && paidNowPaise > 0 && supplierPaymentNeedsReference(paymentMode) && !paymentReference.trim()) throw new Error('Enter the payment reference.')
       if (!supplierId) throw new Error('Please select a supplier.')
+      if (draftId && lines.some((line) => line.itemName.trim() && !line.itemId)) throw new Error('Match every draft item to a Purchase item before saving.')
+      if (draftId && !parsedDraftBardan) throw new Error('Complete every bardan entry or remove it.')
       if (!date) throw new Error('Bill date is required.')
 
       const validLines = parsedLines.filter((l) => l.itemName.trim() && l.weightG > 0 && l.rateMilli > 0)
@@ -922,7 +1012,8 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
       } else {
         const payload: PurchaseBillCreateInput = {
           supplierId,
-          inNo: inNoPreview,
+          inNo: draftId ? '' : inNoPreview,
+          draftId,
           supplierBillNo: supplierBillNo.trim(),
           date,
           pool,
@@ -946,26 +1037,38 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
               amountPaise: a.amountPaise,
               note: a.note.trim(),
             })),
+          bardan: draftId ? parsedDraftBardan ?? [] : undefined,
         }
         return await createPurchaseBill(payload)
       }
     },
     onSuccess: async (savedBill) => {
       await invalidateAfterSupplierPurchaseWrite(queryClient, supplierId)
+      if (draftId) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['purchase-bill-drafts'] }),
+          queryClient.invalidateQueries({ queryKey: ['purchase-bill-drafts-count'] }),
+          queryClient.invalidateQueries({ queryKey: ['purchase-bill-draft', draftId] }),
+        ])
+      }
       if (onSaved) {
         onSaved(savedBill)
         return
       }
       void navigate({ to: '/purchase-bills/$billId', params: { billId: savedBill.inNo } })
     },
-    onError: (error) => setStatusText(toUserMessage(error)),
+    onError: (error) => {
+      const details = error && typeof error === 'object' && 'details' in error ? (error as { details?: { billId?: string } }).details : undefined
+      setConvertedBillId(details?.billId ?? '')
+      setStatusText(toUserMessage(error))
+    },
   })
 
   const hasValidSupplier = Boolean(supplierId)
   const hasValidDate = Boolean(date)
   const validLines = parsedLines.filter((l) => l.itemName.trim() && l.weightG > 0 && l.rateMilli > 0)
   const hasIncompleteLine = parsedLines.some((l) => Boolean(l.itemName.trim() || l.weightKgStr.trim() || l.rateRupeesStr.trim() || l.bardanStr.trim()) && !(l.itemName.trim() && l.weightG > 0 && l.rateMilli > 0))
-  const hasValidLines = validLines.length > 0 && !hasIncompleteLine
+  const hasValidLines = validLines.length > 0 && !hasIncompleteLine && (!draftId || lines.every((line) => !line.itemName.trim() || Boolean(line.itemId)))
 
   let validationHint = ''
   if (!hasValidSupplier) {
@@ -978,8 +1081,8 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     validationHint = 'Complete every entered item, weight and rate'
   }
 
-  const isFormValid = hasValidSupplier && hasValidDate && hasValidLines
-  const billDayPaymentPaise = rupeesToPaise(paymentAmountRupees)
+  const isFormValid = hasValidSupplier && hasValidDate && hasValidLines && (!draftId || (draftQuery.data?.status === 'pending_review' && draftQuery.data.parsed.kind === 'valid' && parsedDraftBardan !== null))
+  const billDayPaymentPaise = (() => { try { return parsePurchaseDecimal(draftId ? draftPaymentStr || '0' : String(paymentAmountRupees), 2, 'Payment') } catch { return 0 } })()
 
   // Save goes through a preview-confirmation dialog first.
   const requestSave = useCallback(() => {
@@ -1026,12 +1129,19 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
   }
 
   return (
-    <div className={isPage ? 'w-full px-3 pb-12 pt-3 sm:px-4 lg:px-6' : 'min-w-0'}>
+    <div className={isPage ? 'w-full px-3 pb-12 pt-3 sm:px-4 lg:px-6' : 'min-w-0 w-full'}>
       <div className={isPage ? 'grid grid-cols-1 gap-5 xl:grid-cols-2' : 'space-y-3'}>
         {/* ============ LEFT PANE — the form (dominant) ============ */}
-        <section aria-label="Bill form" className="min-w-0 space-y-3">
-          {/* Reserved slot for the future Muse input — hidden until wired */}
-          <div data-muse-input-slot hidden aria-hidden="true" />
+        <section aria-label="Bill form" className="@container min-w-0 space-y-3">
+          {draftId && <Panel className="border-blue-200 bg-blue-50 text-sm text-slate-900">
+            <p className="font-semibold">Muse Purchase Bill Draft</p>
+            <p className="text-xs text-slate-600">Review and correct the proposal. Opening it does not create a bill.</p>
+            {draftQuery.isLoading && <p className="mt-1 text-xs">Loading draft…</p>}
+            {draftQuery.isError && <p role="alert" className="mt-1 text-xs text-rose-700">Could not load draft.</p>}
+            {draftQuery.data?.parsed.kind === 'invalid' && <p role="alert" className="mt-1 text-xs text-rose-700">Invalid draft: {draftQuery.data.parsed.issues.join('; ')}</p>}
+            {draftQuery.data && draftQuery.data.status !== 'pending_review' && <p role="alert" className="mt-1 text-xs text-rose-700">This draft was already processed.</p>}
+            {convertedBillId && <a className="mt-1 inline-block text-xs font-semibold text-blue-700 underline" href={`/purchase-bills/${convertedBillId}`}>Open the saved bill</a>}
+          </Panel>}
 
           {hasManualAllocationsWarning && (
             <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-800" role="alert">
@@ -1218,8 +1328,8 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
             )}
 
             {/* Desktop Table View */}
-            <div className="relative hidden overflow-visible rounded-lg border border-border md:block">
-              <table className="w-full min-w-[700px] border-collapse text-xs">
+            <div className="relative hidden min-w-0 rounded-lg border border-border @3xl:block">
+              <table className="w-full table-fixed border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-border bg-slate-50 text-[11px] font-bold uppercase tracking-wider text-slate-700 h-9">
                     <th className="w-10 min-w-[36px] px-2.5 py-2 text-left">#</th>
@@ -1258,7 +1368,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
                               const nextInput = document.getElementById(`bardan-${l.id}`)
                               if (nextInput) (nextInput as HTMLInputElement).focus()
                             }}
-                            onCreateItem={handleCreateNewItem}
+                            onCreateItem={draftId ? undefined : handleCreateNewItem}
                           />
                         </td>
                         <td className="w-24 min-w-[85px] px-2 py-2 text-right">
@@ -1349,7 +1459,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
             </div>
 
             {/* Mobile Cards View */}
-            <div className="block md:hidden space-y-3">
+            <div className="block space-y-3 @3xl:hidden">
               {lines.map((l, index) => {
                 const parsed = parsedLines[index]
                 const last = findLastRateForItem(supplierBundleQuery.data, l.itemId, l.itemName)
@@ -1367,7 +1477,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
                             const nextInput = document.getElementById(`bardan-mob-${l.id}`)
                             if (nextInput) (nextInput as HTMLInputElement).focus()
                           }}
-                          onCreateItem={handleCreateNewItem}
+                          onCreateItem={draftId ? undefined : handleCreateNewItem}
                         />
                       </div>
                       <button
@@ -1487,6 +1597,21 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
               </div>
             </div>
           </Panel>
+
+          {draftId && (draftBardan.length > 0 || draftQuery.data?.parsed.kind === 'valid') && <Panel className="space-y-3 p-3">
+            <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold text-slate-900">Draft Bardan</h3><p className="text-xs text-slate-600">Confirm each bag settlement before saving.</p></div><button type="button" className={buttonClass('secondary')} onClick={() => setDraftBardan((rows) => [...rows, { id: generateLineId(), weightKgStr: '', rateRupeesStr: '', method: 'deduct', creditRupeesStr: '', cashRupeesStr: '', date, note: '' }])}>Add Bardan</button></div>
+            {draftBardan.map((entry, index) => <div key={entry.id} className="grid gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 sm:grid-cols-3">
+              <label className="text-xs font-medium text-slate-600">Method<select className={`${inputClass} mt-1`} value={entry.method} onChange={(event) => setDraftBardan((rows) => rows.map((row) => row.id === entry.id ? { ...row, method: event.target.value as DraftBardanFormItem['method'] } : row))}>{['deduct', 'in_kind', 'cash_back', 'advance'].map((method) => <option key={method} value={method}>{method.replace('_', ' ')}</option>)}</select></label>
+              <label className="text-xs font-medium text-slate-600">Bardan kg<input className={`${inputClass} mt-1`} inputMode="decimal" value={entry.weightKgStr} onChange={(event) => setDraftBardan((rows) => rows.map((row) => row.id === entry.id ? { ...row, weightKgStr: event.target.value } : row))} /></label>
+              <label className="text-xs font-medium text-slate-600">Rate ₹/kg<input className={`${inputClass} mt-1`} inputMode="decimal" value={entry.rateRupeesStr} onChange={(event) => setDraftBardan((rows) => rows.map((row) => row.id === entry.id ? { ...row, rateRupeesStr: event.target.value } : row))} /></label>
+              <label className="text-xs font-medium text-slate-600">Credit ₹ (blank = calculated)<input className={`${inputClass} mt-1`} inputMode="decimal" value={entry.creditRupeesStr} onChange={(event) => setDraftBardan((rows) => rows.map((row) => row.id === entry.id ? { ...row, creditRupeesStr: event.target.value } : row))} /></label>
+              {entry.method === 'cash_back' && <label className="text-xs font-medium text-slate-600">Cash memo ₹<input className={`${inputClass} mt-1`} inputMode="decimal" value={entry.cashRupeesStr} onChange={(event) => setDraftBardan((rows) => rows.map((row) => row.id === entry.id ? { ...row, cashRupeesStr: event.target.value } : row))} /></label>}
+              <label className="text-xs font-medium text-slate-600">Line<select className={`${inputClass} mt-1`} value={entry.rateLineIndex ?? ''} onChange={(event) => setDraftBardan((rows) => rows.map((row) => row.id === entry.id ? { ...row, rateLineIndex: event.target.value ? Number(event.target.value) : undefined } : row))}><option value="">No linked line</option>{lines.map((line, lineIndex) => <option key={line.id} value={lineIndex}>{line.itemName || `Line ${lineIndex + 1}`}</option>)}</select></label>
+              <label className="text-xs font-medium text-slate-600 sm:col-span-2">Note<input className={`${inputClass} mt-1`} value={entry.note} onChange={(event) => setDraftBardan((rows) => rows.map((row) => row.id === entry.id ? { ...row, note: event.target.value } : row))} /></label>
+              <button type="button" className={buttonClass('secondary')} onClick={() => setDraftBardan((rows) => rows.filter((row) => row.id !== entry.id))}>Remove {index + 1}</button>
+            </div>)}
+            {parsedDraftBardan === null && <p role="alert" className="text-xs font-semibold text-rose-700">Complete each bardan number before saving.</p>}
+          </Panel>}
 
           {/* Adjustments — collapsible with count */}
           <Panel className="p-3">
@@ -1657,11 +1782,11 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
                 </p>
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px_minmax(0,1fr)]">
                   <label className="text-xs font-medium text-slate-600">Amount paid (₹)
-                    <PaymentAmountInput
+                    {draftId ? <input type="text" inputMode="decimal" value={draftPaymentStr} onChange={(event) => setDraftPaymentStr(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm" /> : <PaymentAmountInput
                       value={paymentAmountRupees}
                       onChange={setPaymentAmountRupees}
                       className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm"
-                    />
+                    />}
                   </label>
                   <label className="text-xs font-medium text-slate-600">Mode
                     <select value={paymentMode} onChange={(e) => setPaymentMode(e.target.value as typeof paymentMode)} className="mt-1 h-10 w-full rounded-md border border-slate-300 px-2 text-sm">
@@ -1686,13 +1811,13 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
         )}
 
         {/* Sticky bottom action bar — left pane only */}
-        <div className="shrink-0 border-t border-border bg-card px-4 py-3 sm:px-6 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
+        <div className={`shrink-0 border-t border-border bg-card px-4 py-3 shadow-sm sm:px-6 ${isPage ? '' : 'sticky bottom-0 z-20 rounded-b-xl'}`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="font-mono text-xs tabular-nums text-muted-foreground">
                 <span className="font-bold text-foreground">{totalWeightText} kg</span>
                 <span className="px-1.5 text-slate-300">·</span>
-                Net <strong className="text-foreground">{formatPaiseInr(billNet.netPaise)}</strong>
+                <span className="whitespace-nowrap">Net <strong className="text-foreground">{formatPaiseInr(billNet.netPaise)}</strong></span>
               </p>
               {validationHint && (
                 <p className="mt-0.5 text-[11px] font-medium text-amber-700">{validationHint}</p>
@@ -1823,23 +1948,29 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
       />
 
       <Dialog open={saveConfirmOpen} onOpenChange={(open) => { if (!saveMutation.isPending) setSaveConfirmOpen(open) }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent
+          className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[780px]"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            saveConfirmButtonRef.current?.focus()
+          }}
+        >
           <DialogHeader>
             <DialogTitle className="text-sm font-semibold">Check this bill before saving</DialogTitle>
             <DialogDescription asChild>
               <div className="text-xs leading-5 text-muted-foreground">This is what will print. Amounts and the payment line are final once saved.</div>
             </DialogDescription>
           </DialogHeader>
-          <div className="overflow-hidden rounded-lg border border-border bg-slate-50 p-2">
-            <BillChitty data={billChittyData} mode="preview" density="comfortable" />
-          </div>
           {billDayPaymentPaise > 0 && (
-            <p className="text-[11px] leading-5 text-muted-foreground">
-              Records {paymentMode === 'cash' ? 'a cash' : paymentMode === 'cheque' ? 'a cheque' : 'an'} payment of{' '}
-              <strong className="font-mono text-emerald-700">{formatPaiseInr(billDayPaymentPaise)}</strong>
-              {paymentNote.trim() ? <> — “{paymentNote.trim()}”</> : null} against this bill.
+            <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
+              This bill records {paymentMode === 'cash' ? 'a cash' : paymentMode === 'cheque' ? 'a cheque' : 'an'} payment of{' '}
+              <strong className="whitespace-nowrap font-mono tabular-nums">{formatPaiseInr(billDayPaymentPaise)}</strong>
+              {paymentNote.trim() ? <> — “{paymentNote.trim()}”</> : null}.
             </p>
           )}
+          <div className="overflow-hidden rounded-lg border border-border bg-slate-50 p-2">
+            <BillChitty data={billChittyData} mode="preview" density="dialog" />
+          </div>
           <DialogFooter>
             <button
               type="button"
@@ -1850,6 +1981,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
               Go back
             </button>
             <button
+              ref={saveConfirmButtonRef}
               type="button"
               onClick={() => saveMutation.mutate()}
               disabled={!isFormValid || saveMutation.isPending}
@@ -1908,14 +2040,14 @@ export function PurchaseBillEditDialog({
           else onClose()
         }}
       >
-        <DialogContent className="flex h-auto max-h-[92vh] flex-col overflow-hidden p-0 sm:max-w-2xl">
+        <DialogContent className="flex h-auto max-h-[92vh] min-w-0 flex-col overflow-hidden p-0 sm:max-w-5xl">
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
             <div>
-              <p className="text-sm font-semibold text-slate-950">Edit purchase bill</p>
+              <DialogTitle className="text-sm font-semibold text-slate-950">Edit purchase bill</DialogTitle>
               <p className="text-[11px] font-mono text-slate-400">{inNo ?? billId}</p>
             </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 pb-3 sm:px-4">
             <PurchaseBillEditor
               variant="modal"
               editBillId={billId}

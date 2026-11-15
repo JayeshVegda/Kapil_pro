@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef, useState, type RefObject } from 'react'
-import { Check, Eye, RefreshCw, RotateCcw, Search, Sparkles, X } from 'lucide-react'
+import { Check, Eye, RefreshCw, Search, Sparkles, X } from 'lucide-react'
 import { pb } from '@/data/pocketbase'
 import { countPendingDrafts, loadDraftItemMasters, loadDraftPage, type DraftStatusFilter } from '@/data/bill-drafts'
 import { countPendingPaymentDrafts, loadPaymentDraftPage, rejectPaymentDraft, savePaymentFromDraft } from '@/data/payment-drafts'
@@ -22,6 +22,9 @@ import {
 } from '@/lib/bill-print-export'
 import { buildBillPreviewProps } from '@/lib/bill-preview-props'
 import { calculateBillTotals } from '@/domain/billing-calculations'
+import { PurchaseDraftLane } from '@/components/drafts/purchase-draft-lane'
+import { useModuleSettings } from '@/lib/use-module-settings'
+import { StatusChip } from '@/components/ui/status-chip'
 
 export const Route = createFileRoute('/drafts')({
   component: DraftsPage,
@@ -35,6 +38,7 @@ type DraftRow =
   | { source: 'payment'; view: PaymentDraftView }
 
 function DraftsPage() {
+  const { purchaseEnabled } = useModuleSettings()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState<DraftStatusFilter>('pending')
@@ -190,7 +194,7 @@ function DraftsPage() {
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-blue-600 text-white shadow-sm"><Sparkles size={15} /></span>
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-slate-900">AI Drafts</h2>
-          <p className="text-[11px] text-slate-500">Bills and payments staged by Muse</p>
+          <p className="text-[11px] text-slate-500">Sales and Purchase proposals staged by Muse</p>
         </div>
         <span className={`ml-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${combinedPending ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
           {combinedPending} pending
@@ -272,7 +276,7 @@ function DraftsPage() {
                   return (
                     <tr key={`payment-${view.id}`} className={`transition hover:bg-slate-50/70 ${isPending ? '' : 'opacity-70'}`}>
                       <td className="px-3.5 py-2.5">
-                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-bold text-slate-700">Payment</span>
+                        <span className="flex flex-wrap gap-1"><StatusChip tone="selection">Sales</StatusChip><StatusChip>Payment</StatusChip></span>
                       </td>
                       <DraftPartyCell name={view.customerName} isLinked={view.isPartyLinked} avatarClass={view.isPartyLinked ? 'bg-emerald-500' : 'bg-amber-500'} secondaryText={view.rawText} />
                       <td className="whitespace-nowrap px-2 py-2.5 text-slate-600">{view.date ? formatFullDate(view.date) : '—'}</td>
@@ -309,7 +313,7 @@ function DraftsPage() {
                 return (
                   <tr key={`bill-${view.id}`} className={`transition hover:bg-slate-50/70 ${isPending ? '' : 'opacity-70'}`}>
                     <td className="px-3.5 py-2.5">
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-bold text-slate-700">Bill</span>
+                      <span className="flex flex-wrap gap-1"><StatusChip tone="selection">Sales</StatusChip><StatusChip>Bill</StatusChip></span>
                     </td>
                     <DraftPartyCell name={view.customerName} isLinked={view.isPartyLinked} avatarClass={view.isPartyLinked ? 'bg-blue-500' : 'bg-amber-500'} secondaryText={view.notes} />
                     <td className="whitespace-nowrap px-2 py-2.5 text-slate-600">{view.date ? formatFullDate(view.date) : '—'}</td>
@@ -349,7 +353,6 @@ function DraftsPage() {
                         ) : (
                           <>
                             <button type="button" onClick={() => setPreviewDraft(view)} title="Preview" className="rounded-md border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-50"><Eye size={13} /></button>
-                            <button type="button" onClick={() => updateStatusMutation.mutate({ id: view.id, status: 'pending_review' })} className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50"><RotateCcw size={12} /> Re-open</button>
                           </>
                         )}
                       </div>
@@ -382,12 +385,10 @@ function DraftsPage() {
             setPreviewDraft(null)
             loadIntoBill(current, false)
           }}
-          onApprove={() => {
-            updateStatusMutation.mutate({ id: previewDraft.id, status: 'approved' })
-            setPreviewDraft(null)
-          }}
         />
       )}
+
+      {purchaseEnabled && <PurchaseDraftLane />}
 
       {rejectingPayment && (
         <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-900/50 px-4 backdrop-blur-sm">
@@ -459,11 +460,9 @@ type PreviewModalProps = {
   status: string
   setStatus: (value: string) => void
   onEdit: () => void
-  onApprove: () => void
 }
 
-function DraftPreviewModal({ view, onClose, previewRef, status, setStatus, onEdit, onApprove }: PreviewModalProps) {
-  const isPending = view.status !== 'approved' && view.status !== 'rejected'
+function DraftPreviewModal({ view, onClose, previewRef, status, setStatus, onEdit }: PreviewModalProps) {
   const balanceQuery = useQuery({
     queryKey: ['bill-drafts-preview-balance', view.customerId, view.date],
     queryFn: () => loadCustomerAutoBalanceContext(view.customerId, view.date),
@@ -573,10 +572,7 @@ function DraftPreviewModal({ view, onClose, previewRef, status, setStatus, onEdi
 
         <div className="grid shrink-0 gap-3 border-t border-slate-200 bg-white px-5 py-3 md:grid-cols-[1fr_auto] md:items-center">
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={onEdit} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 transition hover:bg-blue-100">Review &amp; Edit in Editor</button>
-            {isPending && (
-              <button type="button" onClick={onApprove} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100">Approve Draft</button>
-            )}
+            {view.status !== 'approved' && view.status !== 'rejected' && <button type="button" onClick={onEdit} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 transition hover:bg-blue-100">Review &amp; Edit in Editor</button>}
           </div>
           <div className="flex flex-wrap justify-start gap-2 md:justify-end">
             <button type="button" onClick={printDraft} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Print</button>
