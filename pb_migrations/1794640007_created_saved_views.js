@@ -6,7 +6,7 @@
 migrate((app) => {
   const nonMuse = '@request.auth.id != "" && @request.auth.role != "muse" && @request.auth.email != "muse@kapil.cosearch.me"'
   const signedIn = '@request.auth.id != ""'
-  const ownRow = (base: string) => `${base} && owner = @request.auth.id`
+  const ownRow = (base) => `${base} && owner = @request.auth.id`
   const collection = new Collection({
     name: 'saved_views', type: 'base', system: false,
     listRule: ownRow(signedIn), viewRule: ownRow(signedIn), createRule: nonMuse, updateRule: ownRow(nonMuse), deleteRule: ownRow(nonMuse),
