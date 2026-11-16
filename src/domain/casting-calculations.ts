@@ -1,4 +1,5 @@
 export type CastingInputRow = {
+  materialId?: string
   materialName: string
   qty: number
   rate: number

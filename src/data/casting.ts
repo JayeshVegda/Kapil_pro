@@ -8,6 +8,9 @@ import { calculateCastingCost, type CastingBatchCostInput, type CastingInputRow 
 import type { CastingBatchRecord, CastingInputRecord, CastingMaterialRecord, CastingSessionRecord, CastingSessionWithInputs } from '@/domain/casting-types'
 import { countItemReferences, countNameOnlyReferences } from '@/data/item-usage'
 import { itemNameKey, normalizeItemName } from '@/domain/purchase-item-name'
+import { normalizePurchaseAliases } from '@/domain/purchase-bill-draft'
+import { AppError } from '@/app/errors'
+import { matchCastingMaterial, parseCastingSessionDraft } from '@/domain/casting-session-draft'
 
 type PBRecord = Record<string, unknown> & { id: string }
 function generateRecordId(): string {
@@ -84,6 +87,7 @@ function mapMaterial(row: PBRecord): CastingMaterialRecord {
   return {
     id: row.id,
     name: String(row.name ?? ''),
+    aliases: String(row.aliases ?? ''),
     code: String(row.code ?? ''),
     category: String(row.category ?? ''),
     isActive: Boolean(row.is_active ?? true),
@@ -310,17 +314,18 @@ export async function createCastingMaterial(payload: { name: string; code?: stri
 
 export async function updateCastingMaterial(
   materialId: string,
-  payload: { name: string; code?: string; category?: string; isActive?: boolean },
+  payload: { name: string; aliases?: string; code?: string; category?: string; isActive?: boolean },
 ): Promise<CastingMaterialRecord> {
   return await runDataOperation('update-casting-material', async () => {
     const name = normalizeItemName(payload.name)
     if (!name) throw new Error('Material name is required')
-    const existing = await pb.collection('casting_materials').getFullList({ fields: 'id,name' })
+    const existing = await pb.collection('casting_materials').getFullList({ fields: 'id,name,aliases' })
     if (existing.some((row) => row.id !== materialId && itemNameKey(String(row.name ?? '')) === itemNameKey(name))) throw new Error('This Casting item already exists')
     const current = existing.find((row) => row.id === materialId)
     if (current && itemNameKey(String(current.name ?? '')) !== itemNameKey(name) && await countNameOnlyReferences('casting', String(current.name ?? '')) > 0) throw new Error('Old casting inputs use this name without an item link. Deactivate it and add a new item instead.')
     const updated = await pb.collection('casting_materials').update(materialId, {
       name,
+      aliases: normalizePurchaseAliases(`${payload.aliases ?? String(current?.aliases ?? '')}${current && itemNameKey(String(current.name ?? '')) !== itemNameKey(name) ? `\n${String(current.name ?? '')}` : ''}`, name),
       code: String(payload.code ?? '').trim(),
       category: String(payload.category ?? '').trim(),
       ...(payload.isActive == null ? {} : { is_active: Boolean(payload.isActive) }),
@@ -414,6 +419,7 @@ export async function syncCastingMaterialMaster(): Promise<{ created: number; li
 }
 
 export type SaveCastingSessionPayload = {
+  draftId?: string
   date: string
   coalKg?: number
   coalRate?: number
@@ -430,6 +436,7 @@ export type SaveCastingSessionPayload = {
 function normalizeInputsForSave(rows: CastingInputRow[]): CastingInputRow[] {
   return rows
     .map((r) => ({
+      materialId: r.materialId,
       materialName: String(r.materialName ?? '').trim(),
       qty: num(r.qty),
       rate: num(r.rate),
@@ -513,8 +520,34 @@ export async function saveCastingSession(payload: SaveCastingSessionPayload): Pr
   })
 
   return await runDataOperation('save-casting-session', async () => {
-    await ensureMaterialMap(inputs.map((r) => r.materialName))
-    const session = await pb.collection('casting_sessions').create({
+    if (payload.draftId) {
+      const draft = await pb.collection('casting_session_drafts').getOne(payload.draftId)
+      if (draft.status === 'approved' && draft.converted_session) throw new AppError({ code: 'CONFLICT', message: 'Draft already converted.', details: { sessionId: String(draft.converted_session) } })
+      if (draft.status !== 'pending_review') throw new AppError({ code: 'CONFLICT', message: 'This draft was already processed.' })
+      if (parseCastingSessionDraft(draft.schema_version, draft.payload).kind === 'invalid') throw new AppError({ code: 'VALIDATION', message: 'Invalid Casting draft cannot be saved.' })
+      const materials = await loadCastingMaterials()
+      if (inputs.some((row) => !matchCastingMaterial(row.materialName, row.materialId, materials))) throw new AppError({ code: 'VALIDATION', message: 'Match every draft input to a Casting material before saving.' })
+    }
+    const sessionId = generateRecordId()
+    const batchRequest = pb.createBatch()
+    if (!payload.draftId) {
+      // Keep the manual path's automatic master creation, but include those
+      // records in the transaction so a failed save leaves no new material.
+      try {
+        const existing = await listAllPaged('casting_materials', { sort: 'name' })
+        const known = new Set(existing.map((row) => itemNameKey(String(row.name ?? ''))))
+        for (const name of inputs.map((row) => row.materialName.trim()).filter(Boolean)) {
+          const key = itemNameKey(name)
+          if (known.has(key)) continue
+          known.add(key)
+          batchRequest.collection('casting_materials').create({ id: generateRecordId(), name, code: '', category: '', is_active: true })
+        }
+      } catch {
+        // Preserve the old save behavior if the optional master lookup fails.
+      }
+    }
+    batchRequest.collection('casting_sessions').create({
+      id: sessionId,
       date: payload.date.slice(0, 10),
       unit: batches.length,
       coal_kg: num(payload.coalKg),
@@ -530,37 +563,34 @@ export async function saveCastingSession(payload: SaveCastingSessionPayload): Pr
       total_input_kg: cost.totalInputKg,
       note: String(payload.note ?? ''),
     })
-
-    const createdBatchIds: string[] = []
-    const createdInputIds: string[] = []
-    try {
-      for (const batch of batches) {
-        const createdBatch = await pb.collection('casting_batches').create({
-          session: session.id,
-          batch_number: batch.batchNumber,
-          wire_out: batch.wireOut,
-          mel: batch.mel,
+    for (const castingBatch of batches) {
+      const batchId = generateRecordId()
+      batchRequest.collection('casting_batches').create({
+        id: batchId, session: sessionId, batch_number: castingBatch.batchNumber,
+        wire_out: castingBatch.wireOut, mel: castingBatch.mel,
+      })
+      for (const row of castingBatch.inputs) {
+        batchRequest.collection('casting_batch_inputs').create({
+          id: generateRecordId(), batch: batchId,
+          material: payload.draftId ? row.materialId : undefined,
+          material_name: row.materialName, qty: row.qty, rate: row.rate,
+          amount: row.qty * row.rate,
         })
-        createdBatchIds.push(createdBatch.id)
-        for (const row of batch.inputs) {
-          const created = await pb.collection('casting_batch_inputs').create({
-            batch: createdBatch.id,
-            material_name: row.materialName,
-            qty: row.qty,
-            rate: row.rate,
-            amount: row.qty * row.rate,
-          })
-          createdInputIds.push(created.id)
-        }
       }
-    } catch (error) {
-      await Promise.allSettled(createdInputIds.map((id) => pb.collection('casting_batch_inputs').delete(id)))
-      await Promise.allSettled(createdBatchIds.map((id) => pb.collection('casting_batches').delete(id)))
-      await pb.collection('casting_sessions').delete(session.id).catch(() => undefined)
-      throw new Error(error instanceof Error ? error.message : 'Failed to save casting inputs', { cause: error })
     }
-
-    return { id: session.id }
+    if (payload.draftId) batchRequest.collection('casting_session_drafts').update(payload.draftId, { status: 'approved', converted_session: sessionId })
+    try {
+      const results = await batchRequest.send()
+      const failed = results.find((result) => result.status < 200 || result.status >= 300)
+      if (failed) throw Object.assign(new Error('Casting session batch rejected.'), { status: failed.status, data: failed.body })
+      return { id: sessionId }
+    } catch (error) {
+      if (payload.draftId) {
+        const draft = await pb.collection('casting_session_drafts').getOne(payload.draftId).catch(() => null)
+        if (draft?.status === 'approved' && draft.converted_session) throw new AppError({ code: 'CONFLICT', message: 'Draft already converted.', details: { sessionId: String(draft.converted_session) }, cause: error })
+      }
+      throw error
+    }
   })
 }
 

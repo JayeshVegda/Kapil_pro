@@ -26,6 +26,7 @@ export type CastingBatchRecord = {
 export type CastingMaterialRecord = {
   id: string
   name: string
+  aliases?: string
   code: string
   category: string
   isActive: boolean
