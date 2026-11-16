@@ -139,6 +139,7 @@ function invalid(issues: z.core.$ZodIssue[]): { kind: 'invalid'; issues: string[
 
 function validateLineMath(value: PurchaseBillDraftPayloadV1) {
   try {
+    if (value.private_note?.includes('[bags_at_receipt:')) throw new Error('Use bags_at_receipt for bag weight; remove the reserved tag from private_note')
     if (value.pool === 'gst' && value.tax_mode === 'none') throw new Error('GST pool requires gst or rcm tax_mode')
     if (value.pool === 'kacha' && value.tax_mode !== 'none') throw new Error('Kacha pool requires none tax_mode')
     if ((value.gst_rate_bp ?? 0) > 2800) throw new Error('gst_rate_bp cannot exceed 2800 (28%)')
@@ -175,9 +176,6 @@ export function parsePurchaseBillDraft(schemaVersion: unknown, payload: unknown)
   if (!parsed.success) return invalid(parsed.error.issues)
   const p = parsed.data
   try {
-    // The live bill reserves this tag for its own memo metadata. Never infer a
-    // draft's bag weight from unstructured note text or silently strip that text.
-    if (p.private_note?.includes('[bags_at_receipt:')) throw new Error('Use bags_at_receipt for bag weight; remove the reserved tag from private_note')
     const pool = p.pool ?? 'kacha'
     if (pool === 'gst' && p.tax_mode === 'none') throw new Error('GST pool requires gst or rcm tax_mode')
     if (pool === 'kacha' && p.tax_mode != null && p.tax_mode !== 'none') throw new Error('Kacha pool requires none tax_mode')

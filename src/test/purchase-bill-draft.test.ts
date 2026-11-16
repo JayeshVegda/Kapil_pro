@@ -46,6 +46,7 @@ describe('purchase bill draft validation', () => {
     expect(parsePurchaseBillDraft(2, { ...payload, private_note: 'Keep [bags_at_receipt:2.500] dry' })).toMatchObject({
       kind: 'invalid', issues: [expect.stringContaining('Use bags_at_receipt')],
     })
+    expect(parsePurchaseBillDraft(1, { ...draft, private_note: '[bags_at_receipt:2.500]' }).kind).toBe('invalid')
   })
 
   it('marks contradictory pool and tax mode invalid without silent coercion', () => {

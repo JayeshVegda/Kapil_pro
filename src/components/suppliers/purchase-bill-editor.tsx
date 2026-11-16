@@ -578,6 +578,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     setSupplierBillNo(p.supplier_bill_no ?? '')
     setVehicleNo(p.vehicle_no ?? '')
     setBagsAtReceiptStr(p.bags_at_receipt_g == null ? '' : gramsToKgText(p.bags_at_receipt_g))
+    if (p.vehicle_no || p.bags_at_receipt_g != null || p.supplier_bill_no) setMoreDetailsOpen(true)
     setPrivateNote(p.private_note ?? '')
     setLines(mappedLines)
     setAdjustments(mappedAdjustments)
@@ -1118,7 +1119,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
 
   const totalWeightG = parsedLines.reduce((sum, line) => sum + line.weightG, 0)
   const totalWeightText = gramsToKgText(totalWeightG)
-  const detailsHoldCount = (supplierBillNo.trim() ? 1 : 0) + (bagsAtReceiptStr.trim() !== '' ? 1 : 0) + (pool === 'gst' ? 2 : 0)
+  const detailsHoldCount = (supplierBillNo.trim() ? 1 : 0) + (vehicleNo.trim() ? 1 : 0) + (bagsAtReceiptStr.trim() !== '' ? 1 : 0) + (pool === 'gst' ? 2 : 0)
   const notesCount = (privateNote.trim() !== '' ? 1 : 0) + photos.length
   const poolCaption =
     pool === 'kacha'
