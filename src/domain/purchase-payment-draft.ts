@@ -32,6 +32,7 @@ export function parsePurchasePaymentDraft(version: unknown, payload: unknown): P
   try {
     const amountPaise = parsePurchaseDecimal(parsed.data.amount_rs, 2, 'Amount')
     if (amountPaise <= 0) throw new Error('Amount must be greater than zero')
+    if (parsed.data.mode && ['upi', 'rtgs', 'neft', 'cheque'].includes(parsed.data.mode) && !parsed.data.reference?.trim()) throw new Error(`${parsed.data.mode.toUpperCase()} payment requires a reference`)
     return { kind: 'valid', value: { ...parsed.data, pool: parsed.data.pool ?? 'kacha' }, amountPaise }
   } catch (error) {
     return { kind: 'invalid', issues: [error instanceof Error ? error.message : 'Invalid amount'] }

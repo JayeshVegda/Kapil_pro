@@ -11,4 +11,8 @@ it('parses Purchase payment money from strings without float drift', () => {
   }
   expect(parsePurchasePaymentDraft(1, { ...payload, mode: 'Cash' }).kind).toBe('invalid')
   expect(parsePurchasePaymentDraft(2, payload).kind).toBe('invalid')
+  for (const mode of ['neft', 'rtgs', 'cheque', 'upi']) {
+    expect(parsePurchasePaymentDraft(1, { ...payload, mode }).kind).toBe('invalid')
+    expect(parsePurchasePaymentDraft(1, { ...payload, mode, reference: 'TX-1' }).kind).toBe('valid')
+  }
 })

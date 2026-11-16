@@ -3,6 +3,7 @@ import { z } from 'zod'
 const id = z.string().regex(/^[a-z0-9]{15}$/)
 const nonnegativeInteger = z.number().int().safe().nonnegative()
 const positiveInteger = z.number().int().safe().positive()
+const signedInteger = z.number().int().safe()
 const businessDate = z.iso.date()
 
 export type PurchaseMaster = { id: string; name: string; aliases?: string; active?: boolean }
@@ -69,13 +70,13 @@ export const purchaseBillDraftPayloadV1 = z.strictObject({
     item_name: z.string().trim().min(1),
     weight_g: positiveInteger,
     rate_milli: nonnegativeInteger,
-    amount_paise: nonnegativeInteger,
+    amount_paise: positiveInteger,
     receipt_memo: z.string().optional(),
   })).min(1),
   stated_total_paise: nonnegativeInteger.optional(),
   adjustments: z.array(z.strictObject({
     type: z.enum(['labour', 'transport', 'quality_cut', 'other']),
-    amount_paise: nonnegativeInteger,
+    amount_paise: signedInteger,
     note: z.string().optional(),
   })).optional(),
   bardan: z.array(z.strictObject({
@@ -138,7 +139,19 @@ function validateLineMath(value: PurchaseBillDraftPayloadV1) {
   try {
     if (value.pool === 'gst' && value.tax_mode === 'none') throw new Error('GST pool requires gst or rcm tax_mode')
     if (value.pool === 'kacha' && value.tax_mode !== 'none') throw new Error('Kacha pool requires none tax_mode')
-    for (const line of value.lines) calculateDraftLinePaise(line.weight_g, line.rate_milli)
+    if ((value.gst_rate_bp ?? 0) > 2800) throw new Error('gst_rate_bp cannot exceed 2800 (28%)')
+    for (const [index, line] of value.lines.entries()) {
+      if (line.rate_milli <= 0) throw new Error(`Line ${index + 1} rate must be greater than zero`)
+      calculateDraftLinePaise(line.weight_g, line.rate_milli)
+    }
+    for (const [index, adjustment] of (value.adjustments ?? []).entries()) {
+      if (adjustment.type === 'quality_cut' && adjustment.amount_paise <= 0) throw new Error(`Adjustment ${index + 1} quality_cut must be positive`)
+    }
+    for (const [index, entry] of (value.bardan ?? []).entries()) {
+      if (entry.rate_line_index != null && entry.rate_line_index >= value.lines.length) throw new Error(`Bardan ${index + 1} rate_line_index is outside the item lines`)
+      if (entry.method === 'advance' && !(entry.credit_paise && entry.credit_paise > 0)) throw new Error(`Bardan ${index + 1} advance requires positive credit_rs`)
+    }
+    if (value.payment && ['upi', 'rtgs', 'neft', 'cheque'].includes(value.payment.mode) && !value.payment.reference?.trim()) throw new Error(`${value.payment.mode.toUpperCase()} payment requires a reference`)
     return { kind: 'valid' as const, value }
   } catch (error) {
     return { kind: 'invalid' as const, issues: [error instanceof Error ? error.message : 'Invalid line amount'] }

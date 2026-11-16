@@ -57,6 +57,20 @@ describe('purchase bill draft validation', () => {
     expect(parsePurchaseBillDraft(1, { ...draft, pool: 'kacha', tax_mode: 'gst' }).kind).toBe('invalid')
   })
 
+  it('validates save-critical purchase fields and allows signed non-quality adjustments', () => {
+    const base = { supplier_name: 'Supplier', date: '2026-11-15', lines: [{ item_name: 'Scrap', weight_kg: '10', rate_rs_per_kg: '395' }] }
+    for (const change of [
+      { lines: [{ item_name: 'Scrap', weight_kg: '10', rate_rs_per_kg: '0' }] },
+      { payment: { amount_rs: '100', mode: 'neft' } },
+      { gst_rate_bp: 2801 },
+      { bardan: [{ weight_kg: '1', rate_rs_per_kg: '395', method: 'deduct', rate_line_index: 2 }] },
+      { bardan: [{ weight_kg: '1', rate_rs_per_kg: '395', method: 'advance' }] },
+      { adjustments: [{ type: 'quality_cut', amount_rs: '-1' }] },
+    ]) expect(parsePurchaseBillDraft(2, { ...base, ...change }).kind).toBe('invalid')
+    const signed = parsePurchaseBillDraft(2, { ...base, adjustments: [{ type: 'labour', amount_rs: '-10.50' }] })
+    expect(signed).toMatchObject({ kind: 'valid', value: { adjustments: [{ amount_paise: -1050 }] } })
+  })
+
   it('rejects excess decimals, exponent notation and unsafe magnitudes', () => {
     expect(() => parsePurchaseDecimal('1.0001', 3, 'Weight')).toThrow('at most 3')
     expect(() => parsePurchaseDecimal('1.001', 2, 'Amount')).toThrow('at most 2')
