@@ -5,7 +5,7 @@ onRecordCreateRequest((e) => {
   const user = e.auth && e.auth.collection().name === 'users' ? e.auth : null
   e.record.set('created_by', user ? user.id : '')
   e.next()
-}, 'purchase_bill_drafts', 'purchase_payment_drafts', 'bill_drafts', 'payment_drafts')
+}, 'purchase_bill_drafts', 'purchase_payment_drafts', 'casting_session_drafts', 'bill_drafts', 'payment_drafts')
 
 onRecordCreateRequest((e) => {
   if (e.record.get('status') !== 'pending_review' || e.record.get('converted_bill')) {
@@ -20,6 +20,13 @@ onRecordCreateRequest((e) => {
   }
   e.next()
 }, 'purchase_payment_drafts')
+
+onRecordCreateRequest((e) => {
+  if (e.record.get('status') !== 'pending_review' || e.record.get('converted_session')) {
+    throw new BadRequestError('New Casting drafts must be pending review')
+  }
+  e.next()
+}, 'casting_session_drafts')
 
 // The separate rules migration has intentionally NOT been installed yet. Keep
 // Purchase conversion safe during that rollout: the original status is read
@@ -57,3 +64,20 @@ onRecordUpdateRequest((e) => {
   }
   e.next()
 }, 'purchase_payment_drafts')
+
+onRecordUpdateRequest((e) => {
+  const previous = e.app.findRecordById('casting_session_drafts', e.record.id)
+  if (previous.get('status') !== 'pending_review') throw new BadRequestError('Draft already processed')
+  e.record.set('created_by', previous.get('created_by'))
+  const nextStatus = e.record.get('status')
+  const nextSession = e.record.get('converted_session')
+  if (nextStatus === 'approved' || nextStatus === 'rejected') {
+    const operator = e.auth && e.auth.collection().name === 'users' && e.auth.get('role') !== 'muse' && e.auth.get('email') !== 'muse@kapil.cosearch.me'
+    if (!operator) throw new ForbiddenError('Only the operator can process a draft')
+    if (nextStatus === 'approved' && !nextSession) throw new BadRequestError('Approved draft needs its saved session')
+    if (nextStatus === 'rejected' && nextSession) throw new BadRequestError('Rejected draft cannot link a session')
+  } else if (nextStatus !== 'pending_review' || nextSession) {
+    throw new BadRequestError('Invalid draft transition')
+  }
+  e.next()
+}, 'casting_session_drafts')

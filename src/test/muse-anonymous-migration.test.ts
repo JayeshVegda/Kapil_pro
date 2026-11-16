@@ -10,6 +10,7 @@ const binary = join(root, 'runtime/bin/pocketbase')
 const schemaMigration = join(root, 'pb_migrations/1794640008_created_purchase_bill_drafts.js')
 const stagedRules = join(root, 'pb_migrations/1794640009_tighten_sales_and_purchase_draft_rules.js')
 const paymentSchemaMigration = join(root, 'pb_migrations/1794640012_created_purchase_payment_drafts.js')
+const castingSchemaMigration = join(root, 'pb_migrations/1794640013_created_casting_session_drafts.js')
 const temp = mkdtempSync(join(tmpdir(), 'kapil-muse-rules-'))
 const migrationsDir = join(temp, 'migrations')
 const dataDir = join(temp, 'data')
@@ -79,7 +80,7 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
       account.set('role', role)
       app.save(account)
     }
-    ${['purchase_bills', 'supplier_payments', 'bills', 'bill_items', 'payments', 'customers', 'items', 'brass_rates'].map(minimalCollection).join('\n    ')}
+    ${['purchase_bills', 'supplier_payments', 'bills', 'bill_items', 'payments', 'customers', 'items', 'brass_rates', 'casting_sessions', 'casting_batches', 'casting_batch_inputs', 'casting_materials'].map(minimalCollection).join('\n    ')}
     for (const [name, converted] of [['bill_drafts', 'converted_bill'], ['payment_drafts', 'converted_payment']]) {
       app.save(new Collection({name, type: 'base', listRule: '', viewRule: '', createRule: '', updateRule: '', deleteRule: '', fields: [
         {name: 'created_by', type: 'relation', collectionId: app.findCollectionByNameOrId('users').id, maxSelect: 1},
@@ -115,6 +116,7 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
   await stopPocketBase()
   copyFileSync(stagedRules, join(migrationsDir, '1794640009_tighten_sales_and_purchase_draft_rules.js'))
   copyFileSync(paymentSchemaMigration, join(migrationsDir, '1794640012_created_purchase_payment_drafts.js'))
+  copyFileSync(castingSchemaMigration, join(migrationsDir, '1794640013_created_casting_session_drafts.js'))
   url = await startPocketBase(port)
   const after = await stage('anonymous-after')
   expect(after.status).toBe(400)
@@ -225,4 +227,35 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
   expect((await savePayment('eeeeeeeeeeeeeee')).status).toBe(400)
   const supplierPayments = await fetch(`${url}/api/collections/supplier_payments/records`, { headers: { Authorization: operator.token } }).then((response) => response.json()) as { totalItems: number }
   expect(supplierPayments.totalItems).toBe(1)
+
+  expect((await fetch(`${url}/api/collections/casting_materials/records`, { headers: { Authorization: muse.token } })).status).toBe(200)
+  const castingDraftResponse = await fetch(`${url}/api/collections/casting_session_drafts/records`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: muse.token },
+    body: JSON.stringify({ schema_version: 1, status: 'pending_review', direct_save: true, source_message_id: 'casting-once', payload: { date: '2026-11-15', coal_kg: '1', coal_rate_rs: '10', worker_salary_rs: '100', batches: [{ inputs: [{ material_name: 'Brass', qty_kg: '10', rate_rs_per_kg: '400' }], wire_out_kg: '9', mel_kg: '1' }] } }),
+  })
+  expect(castingDraftResponse.status).toBe(200)
+  const castingDraft = await castingDraftResponse.json() as { id: string; created_by: string; status: string; direct_save: boolean }
+  expect(castingDraft).toMatchObject({ created_by: muse.record.id, status: 'pending_review', direct_save: true })
+  expect((await fetch(`${url}/api/collections/casting_session_drafts/records/${castingDraft.id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: muse.token }, body: JSON.stringify({ notes: 'Muse correction' }),
+  })).status).toBe(200)
+  expect((await fetch(`${url}/api/collections/casting_session_drafts/records/${castingDraft.id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: muse.token }, body: JSON.stringify({ status: 'approved', converted_session: 'fffffffffffffff' }),
+  })).status).toBe(404)
+  const castingBatch = (sessionId: string, inputId: string) => fetch(`${url}/api/batch`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: operator.token },
+    body: JSON.stringify({ requests: [
+      { method: 'POST', url: '/api/collections/casting_sessions/records', body: { id: sessionId } },
+      { method: 'POST', url: '/api/collections/casting_batches/records', body: { id: 'ggggggggggggggg', session: sessionId } },
+      { method: 'POST', url: '/api/collections/casting_batch_inputs/records', body: { id: inputId, batch: 'ggggggggggggggg' } },
+      { method: 'PATCH', url: `/api/collections/casting_session_drafts/records/${castingDraft.id}`, body: { status: 'approved', converted_session: sessionId } },
+    ] }),
+  })
+  expect((await castingBatch('fffffffffffffff', 'invalid!')).status).toBe(400)
+  const sessionsAfterFailure = await fetch(`${url}/api/collections/casting_sessions/records`, { headers: { Authorization: operator.token } }).then((response) => response.json()) as { totalItems: number }
+  expect(sessionsAfterFailure.totalItems).toBe(0)
+  expect((await castingBatch('fffffffffffffff', 'hhhhhhhhhhhhhhh')).status).toBe(200)
+  expect((await castingBatch('iiiiiiiiiiiiiii', 'jjjjjjjjjjjjjjj')).status).toBe(400)
+  const sessionsAfterRetry = await fetch(`${url}/api/collections/casting_sessions/records`, { headers: { Authorization: operator.token } }).then((response) => response.json()) as { totalItems: number }
+  expect(sessionsAfterRetry.totalItems).toBe(1)
 }, 30_000)
