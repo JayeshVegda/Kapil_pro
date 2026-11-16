@@ -29,7 +29,8 @@ if ($null -eq (Get-KapilProcess 'pocketbase' $script:PocketBaseExe)) {
     'serve',
     '--dir', $script:DataDir,
     '--http', '127.0.0.1:8090',
-    '--migrationsDir', (Join-Path $script:ProjectRoot 'pb_migrations')
+    '--migrationsDir', (Join-Path $script:ProjectRoot 'pb_migrations'),
+    '--hooksDir', (Join-Path $script:ProjectRoot 'pb_hooks')
   )
   $pb = Start-Process -FilePath $script:PocketBaseExe -ArgumentList $pbArgs -WorkingDirectory $script:ProjectRoot -WindowStyle Hidden -RedirectStandardOutput $pbOut -RedirectStandardError $pbErr -PassThru
   Set-Content -LiteralPath (Get-KapilPidFile 'pocketbase') -Value $pb.Id
