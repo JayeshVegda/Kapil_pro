@@ -9,6 +9,7 @@ import { formatPurchaseLineMemos, parsePurchaseLineMemos } from '@/domain/purcha
 import { nextPurchaseInNo } from '@/domain/in-no'
 import { findItemNameCollision, itemNameKey, normalizeItemName } from '@/domain/purchase-item-name'
 import { normalizePurchaseAliases } from '@/domain/purchase-bill-draft'
+import { MAX_PURCHASE_BILL_PAISE, MAX_PURCHASE_RATE_MILLI, MAX_PURCHASE_WEIGHT_G, sumPaise } from '@/domain/supplier-units'
 import { parsePurchasePaymentDraft } from '@/domain/purchase-payment-draft'
 import { bundleToLedgerInput, bundleToSettlementInput } from '@/domain/supplier-bundle'
 import {
@@ -531,7 +532,9 @@ function validatePurchaseLines(lines: PurchaseBillCreateInput['lines']): void {
     requirePositiveInteger(line.weightG, `Weight on line ${index + 1}`)
     requirePositiveInteger(line.rateMilli, `Rate on line ${index + 1}`)
     requirePositiveInteger(line.amountPaise, `Amount on line ${index + 1}`)
+    if (line.weightG > MAX_PURCHASE_WEIGHT_G || line.rateMilli > MAX_PURCHASE_RATE_MILLI || line.amountPaise > MAX_PURCHASE_BILL_PAISE) throw new Error(`Purchase line ${index + 1} exceeds the weight, rate or amount limit.`)
   }
+  if (sumPaise(lines.map((line) => line.amountPaise)) > MAX_PURCHASE_BILL_PAISE) throw new Error('Purchase bill total exceeds the limit.')
 }
 
 export async function getNextPurchaseInNo(dateYyyyMmDd: string): Promise<string> {

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MAX_PURCHASE_BILL_PAISE, MAX_PURCHASE_RATE_MILLI, MAX_PURCHASE_WEIGHT_G, sumPaise } from './supplier-units'
 
 const id = z.string().regex(/^[a-z0-9]{15}$/)
 const nonnegativeInteger = z.number().int().safe().nonnegative()
@@ -48,6 +49,7 @@ export function parsePurchaseDecimal(value: string, decimals: number, label: str
 
 export function calculateDraftLinePaise(weightG: number, rateMilli: number): number {
   if (!Number.isSafeInteger(weightG) || !Number.isSafeInteger(rateMilli) || weightG < 0 || rateMilli < 0) throw new Error('Invalid purchase line units')
+  if (weightG > MAX_PURCHASE_WEIGHT_G || rateMilli > MAX_PURCHASE_RATE_MILLI) throw new Error('Purchase line weight or rate exceeds the limit')
   const numerator = BigInt(weightG) * BigInt(rateMilli)
   const amount = (numerator + 5000n) / 10000n
   if (amount > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Purchase line amount is too large')
@@ -143,7 +145,9 @@ function validateLineMath(value: PurchaseBillDraftPayloadV1) {
     for (const [index, line] of value.lines.entries()) {
       if (line.rate_milli <= 0) throw new Error(`Line ${index + 1} rate must be greater than zero`)
       calculateDraftLinePaise(line.weight_g, line.rate_milli)
+      if (line.amount_paise > MAX_PURCHASE_BILL_PAISE) throw new Error(`Line ${index + 1} amount exceeds the bill limit`)
     }
+    if (sumPaise(value.lines.map((line) => line.amount_paise)) > MAX_PURCHASE_BILL_PAISE) throw new Error('Purchase bill total exceeds the limit')
     for (const [index, adjustment] of (value.adjustments ?? []).entries()) {
       if (adjustment.type === 'quality_cut' && adjustment.amount_paise <= 0) throw new Error(`Adjustment ${index + 1} quality_cut must be positive`)
     }

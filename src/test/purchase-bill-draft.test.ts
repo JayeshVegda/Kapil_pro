@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { calculateDraftLinePaise, matchPurchaseMaster, normalizePurchaseAliases, parsePurchaseBillDraft, parsePurchaseDecimal } from '@/domain/purchase-bill-draft'
 import { computeBillNet, resolveTaxModeForPool } from '@/domain/supplier-purchases'
 import { nextPurchaseInNo } from '@/domain/in-no'
+import { sumPaise } from '@/domain/supplier-units'
 
 describe('purchase bill draft validation', () => {
   const draft = {
@@ -71,12 +72,27 @@ describe('purchase bill draft validation', () => {
     expect(signed).toMatchObject({ kind: 'valid', value: { adjustments: [{ amount_paise: -1050 }] } })
   })
 
+  it('rejects oversized line units and checked aggregate money', () => {
+    const base = { supplier_name: 'Supplier', date: '2026-11-15' }
+    const line = { item_name: 'Scrap', weight_kg: '1', rate_rs_per_kg: '395' }
+    for (const badLine of [
+      { ...line, weight_kg: '100000.001' },
+      { ...line, rate_rs_per_kg: '10000.001' },
+      { ...line, amount_rs: '100000001' },
+    ]) expect(parsePurchaseBillDraft(2, { ...base, lines: [badLine] }).kind).toBe('invalid')
+    expect(parsePurchaseBillDraft(2, { ...base, lines: [
+      { ...line, amount_rs: '60000000' }, { ...line, amount_rs: '60000000' },
+    ] }).kind).toBe('invalid')
+    expect(() => sumPaise([Number.MAX_SAFE_INTEGER, 1])).toThrow('safe integer')
+    expect(() => computeBillNet([{ amountPaise: Number.MAX_SAFE_INTEGER }], [], [], 'none', 0)).toThrow('limit')
+  })
+
   it('rejects excess decimals, exponent notation and unsafe magnitudes', () => {
     expect(() => parsePurchaseDecimal('1.0001', 3, 'Weight')).toThrow('at most 3')
     expect(() => parsePurchaseDecimal('1.001', 2, 'Amount')).toThrow('at most 2')
     expect(() => parsePurchaseDecimal('1e5', 2, 'Amount')).toThrow('decimal number')
     expect(() => parsePurchaseDecimal('999999999999999999', 2, 'Amount')).toThrow('too large')
-    expect(() => calculateDraftLinePaise(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)).toThrow('too large')
+    expect(() => calculateDraftLinePaise(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)).toThrow('limit')
     expect(() => parsePurchaseDecimal('1,2', 2, 'Amount')).toThrow('invalid grouping')
   })
 

@@ -73,9 +73,18 @@ export function lineAmountPaise(weightGrams: number, rateMilli: number): number 
 /** Lines total helper — plain integer sum, nothing rounding here. */
 export function sumPaise(values: number[]): number {
   let total = 0
-  for (const value of values) total += Math.trunc(Number(value) || 0)
+  for (const value of values) {
+    if (!Number.isSafeInteger(value) || !Number.isSafeInteger(total + value)) throw new Error('Purchase money total exceeds safe integer range')
+    total += value
+  }
   return total
 }
+
+// 100 tonnes, ₹10,000/kg and ₹100 crore per bill: intentionally generous
+// limits that keep every line product and GST calculation exactly representable.
+export const MAX_PURCHASE_WEIGHT_G = 100_000_000
+export const MAX_PURCHASE_RATE_MILLI = 10_000_000
+export const MAX_PURCHASE_BILL_PAISE = 10_000_000_000
 
 /** Basis-point proportion: roundHalfUp(valuePaise * bp / 10000). */
 export function applyBasisPoints(valuePaise: number, basisPoints: number): number {

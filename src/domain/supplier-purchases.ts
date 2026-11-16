@@ -1,4 +1,4 @@
-import { applyBasisPoints, sumPaise } from './supplier-units'
+import { applyBasisPoints, MAX_PURCHASE_BILL_PAISE, sumPaise } from './supplier-units'
 import { removePurchaseLineMemoMetadata } from './purchase-receipt-memos'
 
 /**
@@ -129,10 +129,11 @@ export function computeBillNet(
   gstRateBp: number,
 ): BillNetResult {
   const linesTotalPaise = sumPaise(lines.map((line) => line.amountPaise))
+  if (linesTotalPaise > MAX_PURCHASE_BILL_PAISE) throw new Error('Purchase bill total exceeds the limit')
 
   let bardanDeductPaise = 0
   for (const entry of bardan) {
-    if (entry.method === 'deduct') bardanDeductPaise += Math.trunc(Number(entry.creditPaise ?? 0)) || 0
+    if (entry.method === 'deduct') bardanDeductPaise = sumPaise([bardanDeductPaise, entry.creditPaise ?? 0])
     // in_kind -> credit 0 by definition; cash_back -> no payable effect at all;
     // advance -> creates a supplier_payments `bardan_advance` row instead, never a credit here.
   }
@@ -142,26 +143,26 @@ export function computeBillNet(
   for (const adjustment of adjustments) {
     const amount = Math.trunc(Number(adjustment.amountPaise ?? 0)) || 0
     if (adjustment.type === 'quality_cut') {
-      qualityCutPaise += amount // positive amounts are the usual direction
+      qualityCutPaise = sumPaise([qualityCutPaise, amount]) // positive amounts are the usual direction
     } else {
-      otherAdjustmentsPaise += amount
+      otherAdjustmentsPaise = sumPaise([otherAdjustmentsPaise, amount])
     }
   }
 
-  const taxablePaise = Math.max(0, linesTotalPaise - bardanDeductPaise - qualityCutPaise)
+  const taxablePaise = Math.max(0, sumPaise([linesTotalPaise, -bardanDeductPaise, -qualityCutPaise]))
 
   let taxPaise = 0
   if (taxMode === 'gst') taxPaise = applyBasisPoints(taxablePaise, gstRateBp)
   if (taxMode === 'rcm') taxPaise = applyBasisPoints(taxablePaise, gstRateBp)
   const rcmLiabilityPaise = taxMode === 'rcm' ? taxPaise : 0
 
-  const beforeRoundPaise = taxablePaise + (taxMode === 'gst' ? taxPaise : 0) + otherAdjustmentsPaise
+  const beforeRoundPaise = sumPaise([taxablePaise, taxMode === 'gst' ? taxPaise : 0, otherAdjustmentsPaise])
   // Round to the NEAREST whole rupee; exact .50 rounds UP (half away from zero,
   // 62.50 -> 63, 62.01 -> 62, 62.49 -> 62). Rounds toward we-owe at the midpoint,
   // which is the safe direction for a supplier payable.
   const remainder = beforeRoundPaise % 100
   const roundOffPaise = beforeRoundPaise < 0 || remainder === 0 ? 0 : remainder < 50 ? -remainder : 100 - remainder
-  const finalNetPaise = Math.max(0, beforeRoundPaise + roundOffPaise)
+  const finalNetPaise = Math.max(0, sumPaise([beforeRoundPaise, roundOffPaise]))
 
   return {
     linesTotalPaise,
