@@ -22,6 +22,7 @@ All project documentation is indexed here with its current validity status.
 | `CURRENT-STATE.md` | `Current` | Live routes, verified collections, data-flows, and settings architecture. | Updated 2026-11-09. |
 | `DECISIONS.md` | `Current` | Durable one-line rationale for every major architectural decision. | Core architectural record (22 decisions). |
 | `project-architecture-and-data-flow.md` | `Current` | System architecture, frontend-backend flow, and subsystem map. | Visual diagrams and dataflow. |
+| `DATABASE-SCHEMA-AND-SAMPLE-DATA.md` | `Current` | Master schema, table purposes, relations, and sample payloads for external AI agents. | Comprehensive reference. |
 
 ## 3. UI Design System (`docs/ui/`)
 
