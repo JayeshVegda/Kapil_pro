@@ -17,10 +17,11 @@ http://127.0.0.1:4174, http://localhost:4174, http://kapil-products:4174, http:/
 	}
 
 	handle /api/market-rate {
-		rewrite * /telegram/channel/brassb2b
-		reverse_proxy https://rss.zayu.dev {
-			header_up Host rss.zayu.dev
-		}
+		root * C:/Site_imp/kapil-windows/JayeshVegda-Kapil_pro-49c561a/runtime/data
+		rewrite * /market-rate.xml
+		header Content-Type "application/rss+xml; charset=utf-8"
+		header Cache-Control "no-cache, no-store, must-revalidate"
+		file_server
 	}
 
 	handle /assets/* {
@@ -63,10 +64,11 @@ http://:4174 {
 	}
 
 	handle /api/market-rate {
-		rewrite * /telegram/channel/brassb2b
-		reverse_proxy https://rss.zayu.dev {
-			header_up Host rss.zayu.dev
-		}
+		root * C:/Site_imp/kapil-windows/JayeshVegda-Kapil_pro-49c561a/runtime/data
+		rewrite * /market-rate.xml
+		header Content-Type "application/rss+xml; charset=utf-8"
+		header Cache-Control "no-cache, no-store, must-revalidate"
+		file_server
 	}
 
 	handle {

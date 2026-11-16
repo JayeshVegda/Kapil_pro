@@ -171,7 +171,7 @@ function IssuesPage() {
           )}
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Market rate feed (rss.zayu.dev)</p>
+          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Market rate feed (Local RSS)</p>
           {marketFeedQuery.isLoading ? (
             <p className="mt-2 text-xs text-slate-500">Checking…</p>
           ) : marketFeedQuery.data?.reachable ? (

@@ -18,8 +18,8 @@ http://127.0.0.1:4174, http://localhost:4174, http://arch:4174, http://100.66.74
 
 	handle /api/market-rate {
 		rewrite * /telegram/channel/brassb2b
-		reverse_proxy https://rss.zayu.dev {
-			header_up Host rss.zayu.dev
+		reverse_proxy http://127.0.0.1:4174/api/market-rate {
+			header_up Host 127.0.0.1
 		}
 	}
 
@@ -64,8 +64,8 @@ http://:4174 {
 
 	handle /api/market-rate {
 		rewrite * /telegram/channel/brassb2b
-		reverse_proxy https://rss.zayu.dev {
-			header_up Host rss.zayu.dev
+		reverse_proxy http://127.0.0.1:4174/api/market-rate {
+			header_up Host 127.0.0.1
 		}
 	}
 

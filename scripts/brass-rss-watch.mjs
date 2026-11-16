@@ -16,7 +16,7 @@ loadEnvFile(new URL('.env', REPO_ROOT))
 loadEnvFile(new URL('.env.production', REPO_ROOT))
 
 const TELEGRAM_CHANNEL = 'brassb2b'
-const RSS_URL = process.env.BRASS_RSS_URL || process.env.VITE_MARKET_RATE_URL_PUBLIC || 'https://rss.zayu.dev/telegram/channel/brassb2b'
+const RSS_URL = process.env.BRASS_RSS_URL || process.env.VITE_MARKET_RATE_URL_PUBLIC || 'http://127.0.0.1:4174/api/market-rate'
 // Sources: 1) local RSSHub (in-process, uses TELEGRAM_SESSION), 2) mirror RSS URLs (comma-separated).
 const RSS_SOURCES = String(RSS_URL).split(',').map((part) => part.trim()).filter(Boolean)
 // Local-first: only explicitly configured PocketBase URLs are used. Never fall back to a remote host.

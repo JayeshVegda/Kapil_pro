@@ -36,7 +36,7 @@ try {
   $env:PB_ADMIN_EMAIL = $adminEmail
   $env:PB_ADMIN_PASSWORD = $adminPassword
   $env:PB_URL = 'http://127.0.0.1:8090'
-  $env:BRASS_RSS_URL = 'https://rss.zayu.dev/telegram/channel/brassb2b'
+  $env:BRASS_RSS_URL = 'http://127.0.0.1:4174/api/market-rate'
 
   if ($LatestOnly) {
     $authBody = @{ identity = $env:PB_ADMIN_EMAIL; password = $env:PB_ADMIN_PASSWORD } | ConvertTo-Json
@@ -51,10 +51,9 @@ try {
     }
   }
 
-  $arguments = @((Join-Path $repo 'scripts\brass-rss-watch.mjs'), '--no-telegram', '--require-today')
-  if (-not $LatestOnly) { $arguments = @((Join-Path $repo 'scripts\brass-rss-watch.mjs'), '--backfill', '--no-telegram') }
+  $arguments = @((Join-Path $repo 'scripts\update-market-rate.mjs'))
   & (Get-Command node.exe -ErrorAction Stop).Source @arguments
-  if ($LASTEXITCODE -ne 0) { throw "RSS importer exited with code $LASTEXITCODE." }
+  if ($LASTEXITCODE -ne 0) { throw "Market rate updater exited with code $LASTEXITCODE." }
   Write-SyncLog ('Sync succeeded in {0} mode.' -f $(if ($LatestOnly) { 'latest-only' } else { 'catch-up' }))
 } catch {
   Write-SyncLog ('Sync failed: ' + $_.Exception.Message)
