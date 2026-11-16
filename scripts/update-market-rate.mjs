@@ -93,46 +93,64 @@ async function main() {
     return;
   }
 
-  // Attempt sync from Telegram web channel
+  // Attempt sync from Telegram web channel with retries
   console.log('Fetching latest bulletin from Telegram channel @brassb2b...');
-  try {
-    const html = execFileSync('curl.exe', ['-s', '-m', '15', 'https://t.me/s/brassb2b'], {
-      encoding: 'utf8',
-      maxBuffer: 10 * 1024 * 1024
-    });
-
-    const messageRegex = /<div class="tgme_widget_message_wrap[\s\S]*?<div class="tgme_widget_message_text js-message_text[^"]*"[^>]*>([\s\S]*?)<\/div>[\s\S]*?<a class="tgme_widget_message_date" href="([^"]+)"/gi;
-    let match;
-    let synced = 0;
-    while ((match = messageRegex.exec(html)) !== null) {
-      const text = match[1];
-      const link = match[2];
-      if (/BrassB2B\s+Rate\s+Bulletin/i.test(text)) {
-        const dateMatch = text.match(/Date\s*:\s*(\d{1,2})[./](\d{1,2})[./](\d{4})/i);
-        const vilaityMatch = text.match(/(?:Brass\s+)?Vi[la]{2,3}ity(?:\.\s*\(Local\))?[\s\S]{0,40}?:\s*[^0-9]*(\d{3,4})/i);
-        const gulfMatch = text.match(/Honey\s+Gulf\.?[\s\S]{0,40}?:\s*[^0-9]*(\d{3,4})/i);
-        const europeMatch = text.match(/Honey\s+Europe(?:\/U\.?K\.?)?\.?[\s\S]{0,40}?:\s*[^0-9]*(\d{3,4})/i);
-
-        if (dateMatch && vilaityMatch) {
-          const date = `${dateMatch[3]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[1].padStart(2, '0')}`;
-          const cleanText = text.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
-          upsertRate({
-            date,
-            vilaity: Number(vilaityMatch[1]),
-            honey_gulf: gulfMatch ? Number(gulfMatch[1]) : 0,
-            honey_europe: europeMatch ? Number(europeMatch[1]) : 0,
-            raw_text: cleanText,
-            source: 'brassb2b_telegram',
-            rss_link: link,
-            rss_guid: link
-          });
-          synced++;
-        }
+  let html = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      html = execFileSync('curl.exe', ['-s', '-m', '10', '--tlsv1.3', '--http1.1', 'https://t.me/s/brassb2b'], {
+        encoding: 'utf8',
+        maxBuffer: 10 * 1024 * 1024
+      });
+      if (html && html.includes('BrassB2B Rate Bulletin')) {
+        break;
+      }
+    } catch (e) {
+      if (attempt < 3) {
+        execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Start-Sleep -Milliseconds 1500']);
       }
     }
-    console.log(`Synced ${synced} bulletins from Telegram.`);
-  } catch (err) {
-    console.warn(`Telegram fetch failed (${err.message}). Using local cache.`);
+  }
+
+  if (html) {
+    try {
+      const messageRegex = /<div class="tgme_widget_message_wrap[\s\S]*?<div class="tgme_widget_message_text js-message_text[^"]*"[^>]*>([\s\S]*?)<\/div>[\s\S]*?<a class="tgme_widget_message_date" href="([^"]+)"/gi;
+      let match;
+      let synced = 0;
+      while ((match = messageRegex.exec(html)) !== null) {
+        const text = match[1];
+        const link = match[2];
+        if (/BrassB2B\s+Rate\s+Bulletin/i.test(text)) {
+          const dateMatch = text.match(/Date\s*:\s*(\d{1,2})[./](\d{1,2})[./](\d{4})/i);
+          const vilaityMatch = text.match(/(?:Brass\s+)?Vi[la]{2,3}ity(?:\.\s*\(Local\))?[\s\S]{0,40}?:\s*[^0-9]*(\d{3,4})/i);
+          const gulfMatch = text.match(/Honey\s+Gulf\.?[\s\S]{0,40}?:\s*[^0-9]*(\d{3,4})/i);
+          const europeMatch = text.match(/Honey\s+Europe(?:\/U\.?K\.?)?\.?[\s\S]{0,40}?:\s*[^0-9]*(\d{3,4})/i);
+
+          if (dateMatch && vilaityMatch) {
+            const date = `${dateMatch[3]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[1].padStart(2, '0')}`;
+            const cleanText = text.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+            upsertRate({
+              date,
+              vilaity: Number(vilaityMatch[1]),
+              honey_gulf: gulfMatch ? Number(gulfMatch[1]) : 0,
+              honey_europe: europeMatch ? Number(europeMatch[1]) : 0,
+              raw_text: cleanText,
+              source: 'brassb2b_telegram',
+              rss_link: link,
+              rss_guid: link
+            });
+            synced++;
+          }
+        }
+      }
+      if (synced > 0) {
+        console.log(`Synced ${synced} bulletins from Telegram.`);
+      }
+    } catch (err) {
+      console.warn(`Telegram parsing error (${err.message}). Using local cache.`);
+    }
+  } else {
+    console.log('Telegram channel currently unreachable; retained local rate history.');
   }
 
   regenerateXml();
