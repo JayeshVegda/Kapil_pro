@@ -65,7 +65,7 @@ if [[ "$FAIL_ZIP" == "yes" ]]; then exit 12; fi
   return { log, exitCode }
 }
 
-describe('Linux backup lifecycle with synthetic service stubs', () => {
+describe.skipIf(process.platform === 'win32')('Linux backup lifecycle with synthetic service stubs', () => {
   it('restarts direct PocketBase after a successful backup without stopping Caddy', () => {
     const { log, exitCode } = runBackup({ running: true, caddyRunning: true })
     expect(exitCode).toBe(0)
