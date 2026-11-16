@@ -31,7 +31,7 @@ export type RankedBarsProps = {
 export function RankedBars({
   rows,
   maxScale,
-  tone = 'blue',
+  tone = 'slate',
   emptyText = 'No items to display',
   actionSlot,
   className,
@@ -51,7 +51,7 @@ export function RankedBars({
           ? 'bg-amber-500'
           : tone === 'rose'
             ? 'bg-rose-500'
-            : 'bg-slate-700'
+            : 'bg-slate-800'
 
   return (
     <div className={cn('space-y-3', className)}>
@@ -63,14 +63,14 @@ export function RankedBars({
           <div key={row.id} className="group min-w-0 space-y-1">
             <div className="flex items-center justify-between gap-2 text-xs">
               <div className="flex min-w-0 items-center gap-2">
-                <span className="truncate font-medium text-slate-800 transition-colors group-hover:text-blue-700" title={row.label}>
+                <span className="truncate font-medium text-slate-800 transition-colors group-hover:text-slate-950" title={row.label}>
                   {row.label}
                 </span>
 
                 {row.ageDays != null && (
                   <span
                     className={cn(
-                      'shrink-0 rounded px-1.5 py-0.2 font-mono text-[10px] font-semibold tabular-nums',
+                      'shrink-0 rounded px-1.5 py-0.2 font-mono text-[11px] font-semibold tabular-nums',
                       row.ageLevel === 'overdue' || row.ageDays > 45
                         ? 'bg-rose-50 text-rose-700 border border-rose-200'
                         : row.ageLevel === 'due' || row.ageDays > 21
@@ -93,7 +93,7 @@ export function RankedBars({
                 ) : row.href ? (
                   <Link
                     to={row.href}
-                    className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                    className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
                   >
                     {row.actionLabel ?? 'View'}
                   </Link>
@@ -101,7 +101,7 @@ export function RankedBars({
                   <button
                     type="button"
                     onClick={row.onAction}
-                    className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                    className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
                   >
                     {row.actionLabel ?? 'Act'}
                   </button>

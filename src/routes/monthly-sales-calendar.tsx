@@ -1,25 +1,25 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, ChevronLeft, ChevronRight, CircleDollarSign, PackageCheck, ReceiptText, TrendingUp, type LucideIcon } from 'lucide-react'
+import { Activity, ChevronLeft, ChevronRight, CircleDollarSign, PackageCheck, ReceiptText, type LucideIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useModuleSettings } from '@/lib/use-module-settings'
 import { purchaseReadModelQueryOptions } from '@/data/purchase-queries'
 import { loadCastingSessions } from '@/data/casting'
 import { Link } from '@tanstack/react-router'
-import { CalendarDaySidebar, type CalendarDaySidebarData, type CalendarSidebarBill, type CalendarSidebarPayment } from '@/components/calendar/calendar-day-sidebar'
+import { type CalendarDaySidebarData, type CalendarSidebarBill, type CalendarSidebarPayment } from '@/components/calendar/calendar-day-sidebar'
 import { CalendarMonthOverview } from '@/components/calendar/calendar-month-overview'
 import { loadCalendarMonthData } from '@/data/calendar-month'
 import type { PBRecord } from '@/data/dashboard'
 import { calculateBillTotalFromBase } from '@/domain/billing-calculations'
 import { buildGasSalesReport, type GasSalesMetrics } from '@/domain/gas-sales-reporting'
 import { buildMonthlyItemComparisons, emptyMonthlyItemComparisons } from '@/domain/monthly-item-rollup'
-import { bestSalesDay, dayDotState, premiumTint } from '@/domain/calendar-visuals'
+import { bestSalesDay, dayDotState } from '@/domain/calendar-visuals'
 import type { GasSalesGroup } from '@/domain/gas-sales-reporting'
 import { GasSellingStrip } from '@/components/calendar/gas-selling-strip'
 import { formatFullDate, formatMonthYear, getLocalIsoDate } from '@/lib/date'
 import { formatCustomerDisplayName } from '@/lib/customer-display'
-import { formatInrInteger } from '@/lib/inr-format'
+import { formatInrInteger, formatPaiseInr } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/monthly-sales-calendar')({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -98,11 +98,6 @@ function mergeBillItemLines(rows: Array<{ itemName: string; qty: number; bags: n
   return [...merged.entries()].map(([itemName, qty]) => ({ itemName, qty, bags: bags.get(itemName) ?? 0 }))
 }
 
-function compactNumber(value: number, suffix: string) {
-  if (!(value > 0)) return ''
-  return `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: value >= 10 ? 0 : 1 }).format(value)} ${suffix}`
-}
-
 function formatWhole(value: number) {
   return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(value))
 }
@@ -137,14 +132,33 @@ function CalendarPage() {
   const castingQuery = useQuery({ queryKey: ['calendar-casting', monthKey], queryFn: () => loadCastingSessions({ from: `${monthKey}-01`, to: `${monthKey}-${String(new Date(Number(monthKey.slice(0, 4)), Number(monthKey.slice(5, 7)), 0).getDate()).padStart(2, '0')}` }), enabled: castingEnabled })
   const purchaseByDay = useMemo(() => {
     const result = new Map<string, number>()
-    for (const bill of purchaseQuery.data?.bills ?? []) if (!bill.cancelled && bill.date.startsWith(monthKey)) result.set(bill.date, (result.get(bill.date) ?? 0) + bill.netPaise)
+    for (const bill of purchaseQuery.data?.bills ?? []) if (!bill.cancelled && bill.date.startsWith(monthKey) && (monthKey !== today.slice(0, 7) || bill.date <= today)) result.set(bill.date, (result.get(bill.date) ?? 0) + bill.netPaise)
     return result
-  }, [purchaseQuery.data, monthKey])
+  }, [purchaseQuery.data, monthKey, today])
+  const purchasePaidByDay = useMemo(() => {
+    const result = new Map<string, number>()
+    for (const payment of purchaseQuery.data?.payments ?? []) if (!payment.cancelled && payment.date.startsWith(monthKey) && (monthKey !== today.slice(0, 7) || payment.date <= today) && (payment.kind === 'payment' || payment.kind === 'paid_on_behalf')) result.set(payment.date, (result.get(payment.date) ?? 0) + payment.amountPaise)
+    return result
+  }, [purchaseQuery.data, monthKey, today])
   const castingByDay = useMemo(() => {
     const result = new Map<string, number>()
-    for (const session of castingQuery.data ?? []) result.set(session.date, (result.get(session.date) ?? 0) + session.totalWireOut)
+    for (const session of castingQuery.data ?? []) if (monthKey !== today.slice(0, 7) || session.date <= today) result.set(session.date, (result.get(session.date) ?? 0) + session.totalWireOut)
     return result
-  }, [castingQuery.data])
+  }, [castingQuery.data, monthKey, today])
+  const castingCountByDay = useMemo(() => {
+    const result = new Map<string, number>()
+    for (const session of castingQuery.data ?? []) if (monthKey !== today.slice(0, 7) || session.date <= today) result.set(session.date, (result.get(session.date) ?? 0) + 1)
+    return result
+  }, [castingQuery.data, monthKey, today])
+  const monthPurchase = useMemo(() => {
+    const bills = (purchaseQuery.data?.bills ?? []).filter((bill) => !bill.cancelled && bill.date.startsWith(monthKey) && (monthKey !== today.slice(0, 7) || bill.date <= today))
+    const payments = (purchaseQuery.data?.payments ?? []).filter((payment) => !payment.cancelled && payment.date.startsWith(monthKey) && (monthKey !== today.slice(0, 7) || payment.date <= today) && (payment.kind === 'payment' || payment.kind === 'paid_on_behalf'))
+    return { boughtPaise: bills.reduce((sum, bill) => sum + bill.netPaise, 0), paidPaise: payments.reduce((sum, payment) => sum + payment.amountPaise, 0), weightG: bills.reduce((sum, bill) => sum + bill.lines.reduce((lineSum, line) => lineSum + line.weightG, 0), 0), bills: bills.length, payments: payments.length }
+  }, [purchaseQuery.data, monthKey, today])
+  const monthCasting = useMemo(() => {
+    const sessions = (castingQuery.data ?? []).filter((session) => monthKey !== today.slice(0, 7) || session.date <= today)
+    return { kg: sessions.reduce((sum, session) => sum + session.totalWireOut, 0), inputKg: sessions.reduce((sum, session) => sum + session.totalInputKg, 0), count: sessions.length, days: new Set(sessions.map((session) => session.date)).size }
+  }, [castingQuery.data, monthKey, today])
   useEffect(() => {
     setSelectedDay(null)
   }, [monthKey])
@@ -176,63 +190,24 @@ function CalendarPage() {
     return chunkWeeks(eachDayInclusive(startOfWeekSunday(new Date(year, month - 1, 1)), endOfWeekSaturday(new Date(year, month, 0))))
   }, [monthKey])
 
-  const monthBills = [...aggregates.dailyBillCount.values()].reduce((sum, value) => sum + value, 0)
-  const avgBillSize = monthBills > 0 ? aggregates.monthSales / monthBills : 0
-  const gas = aggregates.monthGas
-  const rateLines: Array<{ label: string; value: string }> = []
-  if (gas.nonGst) rateLines.push({ label: 'non-GST', value: formatRate(gas.nonGst.weightedSellingRate) })
-  if (gas.gst) rateLines.push({ label: 'GST incl.', value: formatRate(gas.gst.weightedSellingRateWithGst) })
-  const headlineRate = rateLines[0]?.value ?? formatRate(gas.weightedSellingRate)
-  const rateHelper = rateLines.length > 1
-    ? rateLines.map((line) => `${line.label} ${line.value}`).join(' · ')
-    : gas.premiumPerKg == null
-      ? 'Bill market comparison unavailable'
-      : `${formatPremium(gas.premiumPerKg)}/kg vs bill market`
-
-  const soldBagsDelta = Math.round(aggregates.monthGas.bags - aggregates.previousMonthGas.bags)
-  const soldBagsHelper = `${formatWhole(aggregates.monthGas.kg)} gas kg sold · ${soldBagsDelta >= 0 ? '+' : '-'}${formatWhole(Math.abs(soldBagsDelta))} vs last month`
+  const monthBills = [...aggregates.dailyBillCount.values()].reduce((sum, count) => sum + count, 0)
+  const monthPayments = [...aggregates.paymentsByDate.values()].reduce((sum, rows) => sum + rows.length, 0)
 
   const topCards = [
     {
-      label: 'Month Sales',
-      value: formatInrInteger(aggregates.monthSales),
-      helper: aggregates.topBuyer ? `${aggregates.topBuyer.customerName} · ${compactNumber(aggregates.topBuyer.bags, 'bags')} · avg ${formatInrInteger(aggregates.topBuyer.avgRate)}` : 'No buyer yet',
-      tone: 'text-slate-950',
+      label: 'Sales billed',
+      value: calendarQuery.isLoading ? 'Loading…' : calendarQuery.isError ? 'Unavailable' : formatInrInteger(aggregates.monthSales),
+      details: [{ label: 'Bills', value: formatWhole(monthBills) }, { label: 'Active days', value: formatWhole(aggregates.dailyBillCount.size) }],
       icon: ReceiptText,
-      chip: 'bg-blue-50 text-blue-700',
     },
     {
-      label: 'Collections',
-      value: formatInrInteger(aggregates.monthCollections),
-      helper: aggregates.topCollection ? `Highest: ${aggregates.topCollection.customerName} · ${formatInrInteger(aggregates.topCollection.amount)}` : 'No collection yet',
-      tone: 'text-emerald-700',
+      label: 'Sales collected',
+      value: calendarQuery.isLoading ? 'Loading…' : calendarQuery.isError ? 'Unavailable' : formatInrInteger(aggregates.monthCollections),
+      details: [{ label: 'Payments', value: formatWhole(monthPayments) }, { label: 'Top collection', value: aggregates.topCollection ? formatInrInteger(aggregates.topCollection.amount) : '—' }],
       icon: CircleDollarSign,
-      chip: 'bg-emerald-50 text-emerald-700',
     },
-    {
-      label: 'Avg Selling Rate',
-      value: headlineRate,
-      helper: rateHelper,
-      tone: 'text-blue-700',
-      icon: TrendingUp,
-      chip: 'bg-sky-50 text-sky-700',
-    },
-    {
-      label: 'Avg Bill Size',
-      value: monthBills > 0 ? formatInrInteger(Math.round(avgBillSize)) : '-',
-      helper: monthBills > 0 ? `${formatWhole(monthBills)} bills this month` : 'No bills yet',
-      tone: 'text-slate-950',
-      icon: Activity,
-      chip: 'bg-violet-50 text-violet-700',
-    },
-    {
-      label: 'Sold Bags',
-      value: formatWhole(aggregates.monthGas.bags),
-      helper: soldBagsHelper,
-      tone: 'text-amber-700',
-      icon: PackageCheck,
-      chip: 'bg-amber-50 text-amber-700',
-    },
+    ...(purchaseEnabled ? [{ label: 'Purchase bought', value: purchaseQuery.isLoading ? 'Loading…' : purchaseQuery.isError ? 'Unavailable' : formatPaiseInr(monthPurchase.boughtPaise), details: [{ label: 'Paid out', value: purchaseQuery.isLoading || purchaseQuery.isError ? '—' : formatPaiseInr(monthPurchase.paidPaise) }, { label: 'Bills · kg', value: purchaseQuery.isLoading || purchaseQuery.isError ? '—' : `${monthPurchase.bills} · ${formatWhole(monthPurchase.weightG / 1000)}` }], icon: PackageCheck }] : []),
+    ...(castingEnabled ? [{ label: 'Casting wire out', value: castingQuery.isLoading ? 'Loading…' : castingQuery.isError ? 'Unavailable' : `${formatWhole(monthCasting.kg)} kg`, details: [{ label: 'Sessions', value: castingQuery.isLoading || castingQuery.isError ? '—' : formatWhole(monthCasting.count) }, { label: 'Metal in', value: castingQuery.isLoading || castingQuery.isError ? '—' : `${formatWhole(monthCasting.inputKg)} kg` }], icon: Activity }] : []),
   ]
 
   const selectedSidebarData = selectedDay ? makeDaySidebarData(selectedDay, aggregates) : null
@@ -250,10 +225,10 @@ function CalendarPage() {
 
   return (
     <div className="w-full px-3 pb-6 pt-3 sm:px-4 lg:px-6">
-      <section className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2"><h2 className="text-sm font-semibold text-slate-900">{formatMonthYear(monthKey)} at a glance</h2><p className="text-xs text-slate-500">{monthKey === today.slice(0, 7) ? `Through ${formatFullDate(today)}` : 'Full month'}</p></div>
+      <section className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {topCards.map((card) => <TopKpiCard key={card.label} {...card} />)}
       </section>
-      <div className="mb-3 flex flex-wrap gap-2 text-xs"><span className="rounded-md border border-slate-200 bg-white px-3 py-1.5">Sales</span>{purchaseEnabled && <button type="button" aria-pressed={showPurchase} onClick={() => setShowPurchase((value) => !value)} className={`rounded-md border px-3 py-1.5 ${showPurchase ? 'border-slate-300 bg-white' : 'border-slate-200 bg-slate-100 text-slate-500'}`}>Purchase</button>}{castingEnabled && <button type="button" aria-pressed={showCasting} onClick={() => setShowCasting((value) => !value)} className={`rounded-md border px-3 py-1.5 ${showCasting ? 'border-slate-300 bg-white' : 'border-slate-200 bg-slate-100 text-slate-500'}`}>Casting</button>}</div>
 
       {calendarQuery.isLoading ? <section className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">Loading calendar...</section> : null}
       {calendarQuery.isError ? <section className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700 shadow-sm">Unable to load calendar data.</section> : null}
@@ -273,13 +248,14 @@ function CalendarPage() {
                   <ChevronRight size={17} />
                 </button>
               </div>
-              <div className="flex items-center justify-between gap-2 sm:justify-end">
-                <button type="button" className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700" onClick={selectToday}>
+              <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
+                <button type="button" className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700" onClick={selectToday}>
                   Today
                 </button>
+                {purchaseEnabled && <button type="button" aria-pressed={showPurchase} onClick={() => setShowPurchase((value) => !value)} className={`h-9 rounded-lg border px-2.5 text-xs font-semibold ${showPurchase ? 'border-slate-300 bg-white text-slate-900' : 'border-slate-200 bg-slate-100 text-slate-500'}`}>Purchase</button>}
+                {castingEnabled && <button type="button" aria-pressed={showCasting} onClick={() => setShowCasting((value) => !value)} className={`h-9 rounded-lg border px-2.5 text-xs font-semibold ${showCasting ? 'border-slate-300 bg-white text-slate-900' : 'border-slate-200 bg-slate-100 text-slate-500'}`}>Casting</button>}
               </div>
             </div>
-            <GasSellingStrip items={aggregates.gasByItem} />
             <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
               {WEEKDAYS.map((day) => <div key={day} className="py-1.5 text-center text-[11px] font-semibold tracking-[0.08em] text-slate-500">{day}</div>)}
             </div>
@@ -294,19 +270,17 @@ function CalendarPage() {
                     const sales = aggregates.dailySales.get(iso) ?? 0
                     const collections = aggregates.dailyCollections.get(iso) ?? 0
                     const purchaseAmount = showPurchase && purchaseEnabled ? purchaseByDay.get(iso) ?? 0 : 0
+                    const purchasePaid = showPurchase && purchaseEnabled ? purchasePaidByDay.get(iso) ?? 0 : 0
                     const castingKg = showCasting && castingEnabled ? castingByDay.get(iso) ?? 0 : 0
+                    const castingCount = showCasting && castingEnabled ? castingCountByDay.get(iso) ?? 0 : 0
                     const soldBags = aggregates.dailySoldBags.get(iso) ?? 0
                     const rate = aggregates.rateByDate.get(iso)
                     const gas = aggregates.dailyGasByDate.get(iso)
                     // Rates never blend across GST streams: show the dominant bucket of the day.
                     const dayBuckets = [gas?.gst, gas?.nonGst].filter((basis): basis is NonNullable<typeof basis> => !!basis && basis.kg > 0)
                     const dominant = dayBuckets.sort((a, b) => b.kg - a.kg)[0] ?? null
-                    const bucketTag = dayBuckets.length > 1 && dominant ? (dominant === gas?.gst ? ' (GST)' : ' (non-GST)') : ''
-                    const displayedMarketRate = dominant?.weightedMarketRate ?? gas?.weightedMarketRate ?? rate ?? null
-                    const premium = dominant?.premiumPerKg ?? gas?.premiumPerKg ?? null
-                    const hasActivity = sales > 0 || collections > 0 || soldBags > 0 || !!rate || (gas?.kg ?? 0) > 0 || purchaseAmount > 0 || castingKg > 0
+                    const hasActivity = sales > 0 || collections > 0 || soldBags > 0 || !!rate || (gas?.kg ?? 0) > 0 || purchaseAmount > 0 || purchasePaid > 0 || castingCount > 0
                     const dotState = dayDotState(sales, collections)
-                    const tint = inMonth && hasActivity ? premiumTint(premium) : ''
                     const bucketLine = (label: string, basis: NonNullable<typeof dominant>) =>
                       `${label}: ${formatRate(basis.weightedSellingRate)} (incl. GST ${formatRate(basis.weightedSellingRateWithGst)}) · market ${formatRate(basis.weightedMarketRate)} · premium ${formatPremium(basis.premiumPerKg)}/kg`
                     const title = `${formatFullDate(iso)}\n${dayBuckets.map((basis) => bucketLine(dayBuckets.length > 1 ? (basis === gas?.gst ? 'GST' : 'non-GST') : 'Selling rate', basis)).join('\n')}\nCollections: ${formatInrInteger(collections)}\nSales: ${formatInrInteger(sales)}\nGas: ${formatWhole(gas?.kg ?? 0)} kg`
@@ -316,8 +290,8 @@ function CalendarPage() {
                         type="button"
                         title={title}
                         onClick={() => setSelectedDay((current) => (current === iso ? null : iso))}
-                        className={`group min-h-[6.75rem] p-1.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 sm:p-2 ${
-                          isSelected ? 'bg-blue-50 ring-2 ring-inset ring-blue-500' : hasActivity ? `${tint || 'bg-white'} hover:bg-blue-50/60` : 'bg-slate-50/80 hover:bg-white'
+                        className={`group min-h-[6.25rem] min-w-0 p-1 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 sm:p-2 ${
+                          isSelected ? 'bg-blue-50 ring-2 ring-inset ring-blue-500' : hasActivity ? 'bg-white hover:bg-slate-50' : 'bg-slate-50/80 hover:bg-white'
                         } ${!inMonth ? 'opacity-45' : ''}`}
                       >
                         <div className="flex items-center justify-between">
@@ -326,31 +300,11 @@ function CalendarPage() {
                             <span className={`h-1.5 w-1.5 rounded-full ${dotState === 'covered' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
                           ) : null}
                         </div>
-                        <div className="mt-1 flex min-h-[3.6rem] flex-col">
-                          {sales > 0 ? (
-                            <p className="font-mono text-base font-bold leading-tight text-slate-950 tabular-nums" title={formatInrInteger(sales)}>₹{formatInrInteger(sales)}</p>
-                          ) : (
-                            <p className="font-mono text-base font-bold leading-tight text-slate-300">—</p>
-                          )}
-                          {(displayedMarketRate != null || premium != null) && (
-                            <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
-                              Mkt {formatRate(displayedMarketRate)}
-                              {premium != null && (
-                                <span className={`font-semibold ${premium >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}> · Prem {formatPremium(premium)}</span>
-                              )}
-                              {bucketTag && <span className="text-slate-400">{bucketTag}</span>}
-                            </p>
-                          )}
-                          <div className="mt-auto flex flex-wrap items-center gap-1 pt-1">
-                            {collections > 0 && (
-                              <span className="rounded bg-emerald-50/90 px-1 py-px text-[11px] font-semibold text-emerald-700 tabular-nums">C {formatInrInteger(collections)}</span>
-                            )}
-                            {(gas?.kg ?? 0) > 0 && (
-                              <span className="rounded bg-slate-100 px-1 py-px text-[11px] font-semibold text-slate-600 tabular-nums">{formatWhole(gas?.kg ?? 0)} kg</span>
-                            )}
-                            {purchaseAmount > 0 && <span className="rounded bg-amber-50 px-1 py-px text-[11px] font-semibold text-amber-700 tabular-nums">P ₹{formatWhole(purchaseAmount / 100)}</span>}
-                            {castingKg > 0 && <span className="rounded bg-slate-100 px-1 py-px text-[11px] font-semibold text-slate-700 tabular-nums">C {formatWhole(castingKg)} kg</span>}
-                          </div>
+                        <div className="mt-1 space-y-0.5 font-mono text-[11px] leading-tight tabular-nums">
+                          {sales > 0 && <p className="truncate text-slate-900" title={`Sales ${formatInrInteger(sales)}`}>S {formatInrInteger(sales)}</p>}
+                          {(purchaseAmount > 0 || purchasePaid > 0) && <p className="truncate text-slate-700" title={`Purchase bought ${formatPaiseInr(purchaseAmount)}; paid ${formatPaiseInr(purchasePaid)}`}>P {purchaseAmount > 0 ? formatPaiseInr(purchaseAmount) : `paid ${formatPaiseInr(purchasePaid)}`}</p>}
+                          {castingCount > 0 && <p className="truncate text-slate-700" title={`Casting ${castingKg.toFixed(2)} kg, ${castingCount} sessions`}>C {formatWhole(castingKg)} kg</p>}
+                          {!sales && !purchaseAmount && !purchasePaid && !castingCount && <p className="text-slate-400">—</p>}
                         </div>
                       </button>
                     )
@@ -362,6 +316,7 @@ function CalendarPage() {
 
           <aside className="hidden xl:block">
             <div className="sticky top-20 max-h-[calc(100dvh-6rem)] overflow-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm transition">
+              <GasSellingStrip items={aggregates.gasByItem} />
               {(
                 <CalendarMonthOverview
                   monthKey={monthKey}
@@ -376,20 +331,21 @@ function CalendarPage() {
               )}
             </div>
           </aside>
+          <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:hidden"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sales gas detail</h3><p className="mt-1 text-sm text-slate-700">Average bill market rate: <span className="font-mono font-semibold">{formatRate(aggregates.monthAvgMarketRate)}</span></p><GasSellingStrip items={aggregates.gasByItem} /></section>
 
         </div>
       ) : null}
       <Dialog open={Boolean(selectedDay)} onOpenChange={(open) => { if (!open) setSelectedDay(null) }}>
-        <DialogContent className="max-h-[85vh] max-w-2xl overflow-auto">
-          <DialogTitle className="text-sm font-semibold">{selectedDay ? formatFullDate(selectedDay) : 'Day details'}</DialogTitle>
-          {selectedSidebarData && <CalendarDaySidebar data={selectedSidebarData} />}
-          {purchaseEnabled && showPurchase && <div className="border-t border-slate-100 pt-3">
-            <h3 className="text-xs font-semibold">Purchase bills</h3>
-            {(purchaseQuery.data?.bills ?? []).filter((bill) => bill.date === selectedDay && !bill.cancelled).map((bill) => <Link key={bill.id} to="/purchase-bills/$billId" params={{ billId: bill.inNo }} className="block py-1 text-xs text-blue-700 hover:underline">{bill.inNo} · {bill.supplierName} · ₹{formatWhole(bill.netPaise / 100)}</Link>)}
-            <h3 className="mt-3 text-xs font-semibold">Purchase payments</h3>
-            {(purchaseQuery.data?.payments ?? []).filter((payment) => payment.date === selectedDay && !payment.cancelled).map((payment) => <Link key={payment.id} to="/purchase-bills" search={{ view: 'payments', from: selectedDay ?? undefined, to: selectedDay ?? undefined }} className="block py-1 text-xs text-blue-700 hover:underline">{payment.supplierName} · {payment.kind} · ₹{formatWhole(payment.amountPaise / 100)}</Link>)}
-          </div>}
-          {castingEnabled && showCasting && <div className="border-t border-slate-100 pt-3"><h3 className="text-xs font-semibold">Casting sessions</h3>{(castingQuery.data ?? []).filter((session) => session.date === selectedDay).map((session) => <Link key={session.id} to="/casting/log" className="block py-1 text-xs text-blue-700 hover:underline">{session.totalWireOut.toFixed(2)} kg wire out</Link>)}</div>}
+        <DialogContent className="flex max-h-[min(85dvh,700px)] w-[calc(100vw-1.5rem)] max-w-2xl flex-col overflow-hidden p-0">
+          <div className="shrink-0 border-b border-slate-200 px-4 py-3"><DialogTitle className="text-base font-semibold">{selectedDay ? formatFullDate(selectedDay) : 'Day details'}</DialogTitle></div>
+          <div className="min-h-0 space-y-4 overflow-y-auto overflow-x-hidden px-4 py-3">
+            {selectedSidebarData && <section className="space-y-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sales</h3><div className="grid grid-cols-2 gap-2 text-xs"><div className="rounded-lg border border-slate-200 p-2">Billed <strong className="block font-mono text-sm">{formatInrInteger(selectedSidebarData.sales)}</strong></div><div className="rounded-lg border border-slate-200 p-2">Collected <strong className="block font-mono text-sm">{formatInrInteger(selectedSidebarData.collections)}</strong></div></div>{selectedSidebarData.bills.map((bill) => <Link key={bill.id} to="/transactions" search={{ focusKind: 'bill', focusId: bill.id }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{bill.billRefDisplay} · {bill.customerName} <span className="font-mono">{formatInrInteger(bill.total)}</span></Link>)}{selectedSidebarData.payments.map((payment) => <Link key={payment.id} to="/transactions" search={{ focusKind: 'payment', focusId: payment.id }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{payment.customerName} · Collected <span className="font-mono">{formatInrInteger(payment.amount)}</span></Link>)}</section>}
+            {purchaseEnabled && showPurchase && <section className="space-y-2 border-t border-slate-200 pt-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase</h3>
+              {(purchaseQuery.data?.bills ?? []).filter((bill) => bill.date === selectedDay && !bill.cancelled).map((bill) => <Link key={bill.id} to="/purchase-bills/$billId" params={{ billId: bill.inNo }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{bill.inNo} · {bill.supplierName} · {formatPaiseInr(bill.netPaise)}</Link>)}
+              {(purchaseQuery.data?.payments ?? []).filter((payment) => payment.date === selectedDay && !payment.cancelled).map((payment) => <Link key={payment.id} to="/purchase-bills" search={{ view: 'payments', from: selectedDay ?? undefined, to: selectedDay ?? undefined }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{payment.supplierName} · {payment.kind} · {formatPaiseInr(payment.amountPaise)}</Link>)}
+            </section>}
+            {castingEnabled && showCasting && <section className="space-y-2 border-t border-slate-200 pt-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Casting</h3>{(castingQuery.data ?? []).filter((session) => session.date === selectedDay).map((session) => <Link key={session.id} to="/casting/log" className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{session.totalWireOut.toFixed(2)} kg wire out</Link>)}</section>}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
@@ -399,28 +355,22 @@ function CalendarPage() {
 function TopKpiCard({
   label,
   value,
-  helper,
-  tone,
+  details,
   icon: Icon,
-  chip,
 }: {
   label: string
   value: string
-  helper?: string
-  tone: string
+  details: Array<{ label: string; value: string }>
   icon: LucideIcon
-  chip: string
 }) {
   return (
-    <div className="min-h-[5.75rem] rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <p className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
-        <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${chip}`}>
-          <Icon size={15} />
-        </span>
+    <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+      <div className="flex items-center gap-2">
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600"><Icon size={15} /></span>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
       </div>
-      <p className={`truncate font-mono text-lg font-bold leading-tight tabular-nums ${tone}`} title={value}>{value}</p>
-      {helper ? <p className="mt-1 line-clamp-2 text-xs font-medium leading-snug text-slate-500" title={helper}>{helper}</p> : null}
+      <p className="mt-2 break-words font-mono text-xl font-bold leading-tight text-slate-950 tabular-nums" title={value}>{value}</p>
+      <dl className="mt-3 space-y-1 border-t border-slate-100 pt-2 text-xs">{details.map((detail) => <div key={detail.label} className="flex items-start justify-between gap-2"><dt className="text-slate-500">{detail.label}</dt><dd className="text-right font-mono font-semibold text-slate-800 tabular-nums">{detail.value}</dd></div>)}</dl>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
-import { LogsDateWindow, LogsPager, defaultLogFromDate, useLogsPager } from '@/components/logging/logs-shell'
+import { LogsDateWindow, LogsPager, LogsTableCard, LogsToolbarCard, defaultLogFromDate, useLogsPager } from '@/components/logging/logs-shell'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, Edit3, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
@@ -271,7 +271,7 @@ function TransactionsPage() {
           {statusText}
         </p>
       )}
-      <section className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+      <LogsToolbarCard>
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
           <div className="relative min-w-[260px] flex-1">
             <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -292,9 +292,9 @@ function TransactionsPage() {
           </div>
           <button type="button" disabled={visibleRows.length === 0} onClick={exportVisibleCsv} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 disabled:opacity-40"><Download size={14} />CSV</button>
         </div>
-      </section>
+      </LogsToolbarCard>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <LogsTableCard>
         <div className="mb-3 flex justify-end"><LogsDateWindow from={dateFrom} onFromChange={setDateFrom} /></div>
         {transactionsQuery.isLoading && <p className="text-sm text-slate-500">Loading transactions...</p>}
         {transactionsQuery.isError && <p className="text-sm text-rose-600">Unable to load transactions.</p>}
@@ -373,7 +373,7 @@ function TransactionsPage() {
             </table>
           </div>
         )}
-      </section>
+      </LogsTableCard>
 
       <LogsPager {...pager} />
 

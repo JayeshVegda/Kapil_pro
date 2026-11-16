@@ -8,15 +8,15 @@ import {
   Download,
   Edit3,
   Lock,
+  MoreHorizontal,
   Package,
   Printer,
   Trash2,
 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
-import {
-  BillChitty,
-  BillChittyKpiBox,
-} from '@/components/suppliers/bill-chitty'
+import { BillChitty } from '@/components/suppliers/bill-chitty'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { buttonClass } from '@/components/ui/form-control-classes'
 import { buildPurchaseBillPresentation } from '@/components/suppliers/purchase-bill-presentation'
 import {
   AddBardanModal,
@@ -163,66 +163,72 @@ function PurchaseBillChittyPage() {
         </div>
         <span className="mx-1 hidden h-5 w-px bg-slate-200 sm:inline" />
 
-        <ActionButton icon={<Edit3 size={13} />} label="Edit" onClick={() => void navigate({ to: '/new-purchase-bill', search: { editBillId: bill.id } })} />
         {!bill.cancelled && (
           <>
-            <ActionButton icon={<Package size={13} />} label="Add Bardan" onClick={() => setModal('bardan')} />
             <ActionButton icon={<Coins size={13} />} label="Record Payment" onClick={() => setModal('payment')} />
-            <ActionButton icon={<Coins size={13} />} label="Settle to NIL" disabled={duePaise <= 0} onClick={() => setModal('settleNil')} />
-            <ActionButton icon={<Trash2 size={13} />} label="Cancel" danger onClick={() => setModal('cancelBill')} />
+            <ActionButton icon={<Package size={13} />} label="Add Bardan" onClick={() => setModal('bardan')} />
           </>
         )}
         <span className="ml-auto inline-flex items-center gap-1.5">
-          <ActionButton icon={<Download size={13} />} label={isExporting ? 'Exporting...' : 'JPG'} onClick={() => void handleExportJpg()} />
           <ActionButton icon={<Printer size={13} />} label="Print" onClick={() => window.print()} />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button type="button" aria-label="More bill actions" className={`${buttonClass('secondary')} h-8 px-2.5 text-xs`}>
+                <MoreHorizontal size={14} /> More
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-40">
+              <DropdownMenuItem onSelect={() => void navigate({ to: '/new-purchase-bill', search: { editBillId: bill.id } })}><Edit3 size={14} /> Edit</DropdownMenuItem>
+              {!bill.cancelled && <DropdownMenuItem disabled={duePaise <= 0} onSelect={() => setModal('settleNil')}><Coins size={14} /> Settle to NIL</DropdownMenuItem>}
+              <DropdownMenuItem disabled={isExporting} onSelect={() => void handleExportJpg()}><Download size={14} /> JPG</DropdownMenuItem>
+              {!bill.cancelled && <><DropdownMenuSeparator /><DropdownMenuItem variant="destructive" onSelect={() => setModal('cancelBill')}><Trash2 size={14} /> Cancel bill</DropdownMenuItem></>}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </span>
       </div>
 
       <div className="px-3 pt-3 space-y-3 max-w-4xl mx-auto">
-        {/* Dedicated Standalone Intelligence & KPI Card */}
-        <BillChittyKpiBox data={chittyData} duePaise={duePaise} />
-
         {/* Chitty — the only exported/printed region */}
         <div ref={exportRef} className="rounded-xl bg-slate-100/60 p-2 sm:p-4">
           <BillChitty data={chittyData} mode="view" />
         </div>
 
         {/* Internal-only strip — never printed or exported */}
-        <div className="mx-auto mt-3 w-full max-w-[560px] rounded-lg border border-amber-200/70 bg-amber-50/50 px-4 py-2.5 text-xs text-amber-900">
-          <p className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-amber-800">
-            <Lock size={12} /> Internal only (not printed)
+        <div className="mx-auto mt-3 w-full max-w-4xl rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-xs text-slate-700 print:hidden">
+          <p className="flex items-center gap-1.5 font-semibold text-slate-900">
+            <Lock size={14} /> Internal only · Not printed
           </p>
-          <div className="mt-1.5 grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase text-amber-700/80">Premium vs Vilaity</p>
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-600">Premium vs Vilaity</p>
               {vilaityMatch ? (
                 <div className="mt-0.5 space-y-0.5 font-mono">
                   {chittyData.lines.map((line, index) => {
                     const diff = line.rateMilli - vilaityMatch.vilaityMilli
                     return (
-                      <p key={index} className="flex justify-between gap-2">
-                        <span className="truncate">{line.itemName}</span>
-                        <span className={diff >= 0 ? 'text-amber-800' : 'text-blue-800'}>
+                      <p key={index} className="flex min-w-0 justify-between gap-2">
+                        <span className="min-w-0 break-words">{line.itemName}</span>
+                        <span className="shrink-0 text-slate-800">
                           {diff >= 0 ? '+' : '-'}₹{milliToRateText(Math.abs(diff))}
                         </span>
                       </p>
                     )
                   })}
-                  <p className="text-[11px] text-amber-600">vilaity ₹{milliToRateText(vilaityMatch.vilaityMilli)}/kg · {formatFullDate(vilaityMatch.date)}</p>
+                  <p className="break-words text-xs text-slate-500">Vilaity ₹{milliToRateText(vilaityMatch.vilaityMilli)}/kg · {formatFullDate(vilaityMatch.date)}</p>
                 </div>
               ) : (
-                <p className="mt-0.5 text-amber-700">No vilaity rate on record.</p>
+                <p className="mt-0.5 text-slate-500">No vilaity rate on record.</p>
               )}
             </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase text-amber-700/80">Private Note</p>
-              <p className="mt-0.5 whitespace-pre-wrap text-amber-900">{userNote || <span className="italic text-amber-700/70">None</span>}</p>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-600">Private Note</p>
+              <p className="mt-1 whitespace-pre-wrap break-words text-slate-800">{userNote || <span className="italic text-slate-500">None</span>}</p>
               {bagNote != null && (
-                <p className="mt-1 text-[11px] text-blue-800">Receipt bags memo: <span className="font-mono font-bold">{bagNote} kg</span></p>
+                <p className="mt-1 break-words text-xs text-slate-600">Receipt bags memo: <span className="font-mono font-bold">{bagNote.toFixed(3)} kg</span></p>
               )}
             </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase text-amber-700/80">Photos</p>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-600">Photos</p>
               {bill.photos.length > 0 ? (
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   {bill.photos.slice(0, 6).map((photo) => {
@@ -231,14 +237,14 @@ function PurchaseBillChittyPage() {
                       photo,
                     )
                     return (
-                      <a key={photo} href={url} target="_blank" rel="noopener noreferrer" className="block h-14 w-14 overflow-hidden rounded border border-amber-200 bg-white">
+                      <a key={photo} href={url} target="_blank" rel="noopener noreferrer" className="block h-14 w-14 overflow-hidden rounded-md border border-slate-200 bg-white">
                         <img src={url} alt="Bill attachment" width={56} height={56} className="h-full w-full object-cover" />
                       </a>
                     )
                   })}
                 </div>
               ) : (
-                <p className="mt-0.5 text-amber-700">None</p>
+                <p className="mt-0.5 text-slate-500">None</p>
               )}
             </div>
           </div>

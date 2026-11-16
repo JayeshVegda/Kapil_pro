@@ -25,6 +25,7 @@ import { Route as NewPaymentRouteImport } from './routes/new-payment'
 import { Route as NewBillRouteImport } from './routes/new-bill'
 import { Route as MonthlySalesCalendarRouteImport } from './routes/monthly-sales-calendar'
 import { Route as MonthlyReportRouteImport } from './routes/monthly-report'
+import { Route as ModuleReportRouteImport } from './routes/module-report'
 import { Route as LedgerRouteImport } from './routes/ledger'
 import { Route as ItemsRouteImport } from './routes/items'
 import { Route as IssuesRouteImport } from './routes/issues'
@@ -33,6 +34,7 @@ import { Route as DraftsRouteImport } from './routes/drafts'
 import { Route as DataHealthRouteImport } from './routes/data-health'
 import { Route as CustomersRouteImport } from './routes/customers'
 import { Route as ControlRoomRouteImport } from './routes/control-room'
+import { Route as CompanyReportRouteImport } from './routes/company-report'
 import { Route as CastingRouteImport } from './routes/casting'
 import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as BardanPendingRouteImport } from './routes/bardan-pending'
@@ -131,6 +133,11 @@ const MonthlyReportRoute = MonthlyReportRouteImport.update({
   path: '/monthly-report',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ModuleReportRoute = ModuleReportRouteImport.update({
+  id: '/module-report',
+  path: '/module-report',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LedgerRoute = LedgerRouteImport.update({
   id: '/ledger',
   path: '/ledger',
@@ -169,6 +176,11 @@ const CustomersRoute = CustomersRouteImport.update({
 const ControlRoomRoute = ControlRoomRouteImport.update({
   id: '/control-room',
   path: '/control-room',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CompanyReportRoute = CompanyReportRouteImport.update({
+  id: '/company-report',
+  path: '/company-report',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CastingRoute = CastingRouteImport.update({
@@ -264,6 +276,7 @@ export interface FileRoutesByFullPath {
   '/bardan-pending': typeof BardanPendingRoute
   '/calendar': typeof CalendarRoute
   '/casting': typeof CastingRouteWithChildren
+  '/company-report': typeof CompanyReportRoute
   '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
   '/data-health': typeof DataHealthRoute
@@ -272,6 +285,7 @@ export interface FileRoutesByFullPath {
   '/issues': typeof IssuesRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
+  '/module-report': typeof ModuleReportRoute
   '/monthly-report': typeof MonthlyReportRoute
   '/monthly-sales-calendar': typeof MonthlySalesCalendarRoute
   '/new-bill': typeof NewBillRoute
@@ -306,6 +320,7 @@ export interface FileRoutesByTo {
   '/backup': typeof BackupRoute
   '/bardan-pending': typeof BardanPendingRoute
   '/calendar': typeof CalendarRoute
+  '/company-report': typeof CompanyReportRoute
   '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
   '/data-health': typeof DataHealthRoute
@@ -314,6 +329,7 @@ export interface FileRoutesByTo {
   '/issues': typeof IssuesRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
+  '/module-report': typeof ModuleReportRoute
   '/monthly-report': typeof MonthlyReportRoute
   '/monthly-sales-calendar': typeof MonthlySalesCalendarRoute
   '/new-bill': typeof NewBillRoute
@@ -350,6 +366,7 @@ export interface FileRoutesById {
   '/bardan-pending': typeof BardanPendingRoute
   '/calendar': typeof CalendarRoute
   '/casting': typeof CastingRouteWithChildren
+  '/company-report': typeof CompanyReportRoute
   '/control-room': typeof ControlRoomRoute
   '/customers': typeof CustomersRoute
   '/data-health': typeof DataHealthRoute
@@ -358,6 +375,7 @@ export interface FileRoutesById {
   '/issues': typeof IssuesRoute
   '/items': typeof ItemsRoute
   '/ledger': typeof LedgerRoute
+  '/module-report': typeof ModuleReportRoute
   '/monthly-report': typeof MonthlyReportRoute
   '/monthly-sales-calendar': typeof MonthlySalesCalendarRoute
   '/new-bill': typeof NewBillRoute
@@ -395,6 +413,7 @@ export interface FileRouteTypes {
     | '/bardan-pending'
     | '/calendar'
     | '/casting'
+    | '/company-report'
     | '/control-room'
     | '/customers'
     | '/data-health'
@@ -403,6 +422,7 @@ export interface FileRouteTypes {
     | '/issues'
     | '/items'
     | '/ledger'
+    | '/module-report'
     | '/monthly-report'
     | '/monthly-sales-calendar'
     | '/new-bill'
@@ -437,6 +457,7 @@ export interface FileRouteTypes {
     | '/backup'
     | '/bardan-pending'
     | '/calendar'
+    | '/company-report'
     | '/control-room'
     | '/customers'
     | '/data-health'
@@ -445,6 +466,7 @@ export interface FileRouteTypes {
     | '/issues'
     | '/items'
     | '/ledger'
+    | '/module-report'
     | '/monthly-report'
     | '/monthly-sales-calendar'
     | '/new-bill'
@@ -480,6 +502,7 @@ export interface FileRouteTypes {
     | '/bardan-pending'
     | '/calendar'
     | '/casting'
+    | '/company-report'
     | '/control-room'
     | '/customers'
     | '/data-health'
@@ -488,6 +511,7 @@ export interface FileRouteTypes {
     | '/issues'
     | '/items'
     | '/ledger'
+    | '/module-report'
     | '/monthly-report'
     | '/monthly-sales-calendar'
     | '/new-bill'
@@ -524,6 +548,7 @@ export interface RootRouteChildren {
   BardanPendingRoute: typeof BardanPendingRoute
   CalendarRoute: typeof CalendarRoute
   CastingRoute: typeof CastingRouteWithChildren
+  CompanyReportRoute: typeof CompanyReportRoute
   ControlRoomRoute: typeof ControlRoomRoute
   CustomersRoute: typeof CustomersRoute
   DataHealthRoute: typeof DataHealthRoute
@@ -532,6 +557,7 @@ export interface RootRouteChildren {
   IssuesRoute: typeof IssuesRoute
   ItemsRoute: typeof ItemsRoute
   LedgerRoute: typeof LedgerRoute
+  ModuleReportRoute: typeof ModuleReportRoute
   MonthlyReportRoute: typeof MonthlyReportRoute
   MonthlySalesCalendarRoute: typeof MonthlySalesCalendarRoute
   NewBillRoute: typeof NewBillRoute
@@ -671,6 +697,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MonthlyReportRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/module-report': {
+      id: '/module-report'
+      path: '/module-report'
+      fullPath: '/module-report'
+      preLoaderRoute: typeof ModuleReportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ledger': {
       id: '/ledger'
       path: '/ledger'
@@ -725,6 +758,13 @@ declare module '@tanstack/react-router' {
       path: '/control-room'
       fullPath: '/control-room'
       preLoaderRoute: typeof ControlRoomRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/company-report': {
+      id: '/company-report'
+      path: '/company-report'
+      fullPath: '/company-report'
+      preLoaderRoute: typeof CompanyReportRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/casting': {
@@ -874,6 +914,7 @@ const rootRouteChildren: RootRouteChildren = {
   BardanPendingRoute: BardanPendingRoute,
   CalendarRoute: CalendarRoute,
   CastingRoute: CastingRouteWithChildren,
+  CompanyReportRoute: CompanyReportRoute,
   ControlRoomRoute: ControlRoomRoute,
   CustomersRoute: CustomersRoute,
   DataHealthRoute: DataHealthRoute,
@@ -882,6 +923,7 @@ const rootRouteChildren: RootRouteChildren = {
   IssuesRoute: IssuesRoute,
   ItemsRoute: ItemsRoute,
   LedgerRoute: LedgerRoute,
+  ModuleReportRoute: ModuleReportRoute,
   MonthlyReportRoute: MonthlyReportRoute,
   MonthlySalesCalendarRoute: MonthlySalesCalendarRoute,
   NewBillRoute: NewBillRoute,

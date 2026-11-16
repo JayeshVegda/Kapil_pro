@@ -1,4 +1,4 @@
-import { LogsDateWindow, LogsPager, defaultLogFromDate, useLogsPager } from '@/components/logging/logs-shell'
+import { LogsPager, LogsTableCard, LogsToolbarCard, defaultLogFromDate, useLogsPager } from '@/components/logging/logs-shell'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -7,8 +7,6 @@ import {
   Download,
   Edit3,
   Eye,
-  IndianRupee,
-  Package,
   ReceiptText,
   Search,
   Wallet,
@@ -17,21 +15,18 @@ import {
 import { useMemo, useState } from 'react'
 import { z } from 'zod'
 import {
-  AddBardanModal,
   CancelBillModal,
   PaymentDetailsModal,
-  RecordPaymentModal,
-  type PaymentPinTarget,
 } from '@/components/suppliers/bill-modals'
 import {
   type EnrichedPurchaseBill,
   type EnrichedSupplierPayment,
 } from '@/data/suppliers'
 import { PurchaseBillEditDialog } from '@/components/suppliers/purchase-bill-editor'
-import { purchaseAuditQueryOptions, purchaseBillsQueryOptions, supplierPaymentsQueryOptions, suppliersSummaryQueryOptions } from '@/data/purchase-queries'
+import { purchaseAuditQueryOptions, purchaseBillsQueryOptions, supplierPaymentsQueryOptions } from '@/data/purchase-queries'
 import { formatDateTime, formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
-import { computePurchaseLogMetrics, supplierPaymentActivity } from '@/domain/purchase-log-metrics'
+import { supplierPaymentActivity } from '@/domain/purchase-log-metrics'
 
 const searchSchema = z.object({
   q: z.string().optional(),
@@ -121,24 +116,17 @@ function PurchaseLogsPage() {
   const statusFilter = searchParams.status ?? 'active'
   const [sortAsc, setSortAsc] = useState(false)
   const [dateFrom, setDateFrom] = useState(() => defaultLogFromDate(getLocalIsoDate()))
+  const [dateTo, setDateTo] = useState('')
 
   // Modals state
   const [cancelBillTarget, setCancelBillTarget] = useState<{ id: string; inNo: string } | null>(null)
   const [editBillTarget, setEditBillTarget] = useState<{ id: string; inNo: string } | null>(null)
-  const [bardanBillId, setBardanBillId] = useState<string | null>(null)
   const [paymentDetailsId, setPaymentDetailsId] = useState<string | null>(null)
-  const [recordPaymentTarget, setRecordPaymentTarget] = useState<{
-    supplierId: string
-    supplierName?: string
-    pool: 'kacha' | 'gst'
-    pins: PaymentPinTarget[]
-  } | null>(null)
 
   // Queries
   const billsQuery = useQuery(purchaseBillsQueryOptions())
   const paymentsQuery = useQuery(supplierPaymentsQueryOptions())
-  const auditQuery = useQuery(purchaseAuditQueryOptions(dateFrom))
-  const summaryQuery = useQuery(suppliersSummaryQueryOptions())
+  const auditQuery = useQuery({ ...purchaseAuditQueryOptions(dateFrom), enabled: typeFilter === 'audit' })
 
   const allBills = useMemo(() => billsQuery.data ?? [], [billsQuery.data])
   const allPayments = useMemo(() => paymentsQuery.data ?? [], [paymentsQuery.data])
@@ -224,7 +212,7 @@ function PurchaseLogsPage() {
     const needle = query.trim().toLowerCase()
 
     return transactionRows
-      .filter((row) => row.date >= dateFrom)
+      .filter((row) => row.date >= dateFrom && (!dateTo || row.date <= dateTo))
       .filter((row) => {
         if (typeFilter === 'bills') return row.kind === 'bill'
         if (typeFilter === 'payments') return row.kind === 'payment'
@@ -249,26 +237,23 @@ function PurchaseLogsPage() {
         const cmp = a.date.localeCompare(b.date) || a.created.localeCompare(b.created) || a.id.localeCompare(b.id)
         return sortAsc ? cmp : -cmp
       })
-  }, [transactionRows, query, typeFilter, poolFilter, statusFilter, sortAsc, dateFrom])
+  }, [transactionRows, query, typeFilter, poolFilter, statusFilter, sortAsc, dateFrom, dateTo])
 
   // Filtered rows for audit trail view
   const filteredAudit = useMemo(() => {
     const needle = query.trim().toLowerCase()
     return allAudit
-      .filter((entry) => entry.created.slice(0, 10) >= dateFrom)
+      .filter((entry) => entry.created.slice(0, 10) >= dateFrom && (!dateTo || entry.created.slice(0, 10) <= dateTo))
       .filter((entry) => {
         if (!needle) return true
         const hay = `${entry.title} ${entry.detail} ${entry.action} ${entry.collection} ${entry.actor}`.toLowerCase()
         return hay.includes(needle)
       })
       .sort((a, b) => (sortAsc ? a.created.localeCompare(b.created) : b.created.localeCompare(a.created)))
-  }, [allAudit, query, sortAsc, dateFrom])
+  }, [allAudit, query, sortAsc, dateFrom, dateTo])
 
   const transactionPager = useLogsPager(filteredTransactions)
   const auditPager = useLogsPager(filteredAudit)
-
-  // Summary Metrics
-  const summaryKpi = useMemo(() => computePurchaseLogMetrics(allBills, allPayments, summaryQuery.data ?? []), [allBills, allPayments, summaryQuery.data])
 
   const handleExportCsv = () => {
     if (typeFilter === 'audit') {
@@ -293,94 +278,26 @@ function PurchaseLogsPage() {
       r.supplierName,
       r.reference,
       r.pool.toUpperCase(),
-      (r.amountPaise / 100).toFixed(2),
-      (r.duePaise / 100).toFixed(2),
+      formatPaiseInr(r.amountPaise),
+      formatPaiseInr(r.duePaise),
       r.status.toUpperCase(),
     ])
     downloadCsv(`purchase-transactions-${getLocalIsoDate()}.csv`, toCsv([headers, ...body]))
   }
 
-  const isLoading = billsQuery.isLoading || paymentsQuery.isLoading || auditQuery.isLoading || summaryQuery.isLoading
-  const hasActiveFilters = Boolean(query || typeFilter !== 'all' || poolFilter !== 'all' || statusFilter !== 'active')
+  const isLoading = billsQuery.isLoading || paymentsQuery.isLoading || auditQuery.isLoading
+  const hasActiveFilters = Boolean(query || typeFilter !== 'all' || poolFilter !== 'all' || statusFilter !== 'active' || dateTo || dateFrom !== defaultLogFromDate(getLocalIsoDate()))
 
   return (
-    <div className="w-full space-y-4 p-3 sm:p-5 max-w-[1600px] mx-auto">
-      {/* 1. TOP KPI STRIP (4 Dense Cards) */}
-      <section className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
-        {/* Metric 1: Total Volume */}
-        <div className="rounded-xl border border-border bg-card p-3 sm:p-4 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <ReceiptText size={14} className="text-primary" /> Activity Records
-            </span>
-            <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] font-bold text-muted-foreground">
-              {summaryKpi.activeCount} active
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
-            {allBills.length} <span className="text-xs font-semibold text-muted-foreground font-sans">bills · {allPayments.length} payments</span>
-          </p>
-        </div>
-
-        {/* Metric 2: Bills Spend */}
-        <div className="rounded-xl border border-border bg-card p-3 sm:p-4 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <Package size={14} className="text-blue-600" /> Total Purchases
-            </span>
-            <span className="rounded bg-blue-50 border border-blue-200 px-1.5 py-0.5 text-[11px] font-bold text-blue-700 font-mono">
-              Bills
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
-            {formatPaiseInr(summaryKpi.totalBillsPaise)}
-          </p>
-        </div>
-
-        {/* Metric 3: Payments Settled */}
-        <div className="rounded-xl border border-border bg-card p-3 sm:p-4 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <Wallet size={14} className="text-emerald-600" /> Total Paid Out
-            </span>
-            <span className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[11px] font-bold text-emerald-700 font-mono">
-              Settled
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-emerald-700">
-            {formatPaiseInr(summaryKpi.totalPaymentsPaise)}
-          </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">Refunds received {formatPaiseInr(summaryKpi.refundsReceivedPaise)} · Non-cash credits {formatPaiseInr(summaryKpi.nonCashCreditsPaise)}</p>
-        </div>
-
-        {/* Metric 4: Net Payables Outstanding */}
-        <div className="rounded-xl border border-border bg-card p-3 sm:p-4 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <IndianRupee size={14} className="text-rose-600" /> Amount Owed
-            </span>
-            {summaryKpi.bardanCount > 0 && (
-              <span className="rounded bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[11px] font-bold text-amber-800 font-mono">
-                {summaryKpi.bardanCount} bardan
-              </span>
-            )}
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-rose-600">
-            {formatPaiseInr(summaryKpi.totalDuePaise)}
-          </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">Available advance {formatPaiseInr(summaryKpi.availableAdvancePaise)}</p>
-        </div>
-      </section>
-
-      {/* 2. FILTER & ACTION CARD (Strictly Enclosed Inside Card) */}
-      <section className="rounded-xl border border-border bg-card p-3 shadow-xs space-y-2.5">
-        <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+    <div className="w-full space-y-5 px-3 pb-8 pt-3 sm:px-4 lg:px-6">
+      <LogsToolbarCard>
+        <div className="flex flex-wrap items-center gap-2">
           {/* Search Input */}
-          <div className="relative min-w-[240px] flex-1">
+          <div className="relative min-w-[220px] flex-1">
             <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
               type="search"
-              className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-xs text-foreground shadow-2xs outline-none transition placeholder:text-muted-foreground focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
+              className="h-9 w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-900 outline-none transition focus:border-slate-500"
               placeholder="Search supplier, IN number, reference, scrap grade, note…"
               value={query}
               onChange={(e) => updateSearch({ q: e.target.value })}
@@ -389,7 +306,7 @@ function PurchaseLogsPage() {
 
           {/* Type Dropdown */}
           <select
-            className="h-9 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30 lg:w-44 lg:flex-none"
+            className="h-9 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-900 lg:w-44 lg:flex-none"
             value={typeFilter}
             onChange={(e) => updateSearch({ type: e.target.value as LogType })}
           >
@@ -399,6 +316,9 @@ function PurchaseLogsPage() {
             <option value="bardan">Bardan Pending</option>
             <option value="audit">System Audit Log</option>
           </select>
+
+          <label className="inline-flex items-center gap-1 text-xs text-slate-600">From <input aria-label="From date" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-9 rounded-md border border-slate-300 bg-white px-2 text-xs" /></label>
+          <label className="inline-flex items-center gap-1 text-xs text-slate-600">To <input aria-label="To date" type="date" min={dateFrom || undefined} value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-9 rounded-md border border-slate-300 bg-white px-2 text-xs" /></label>
 
           {/* Pool Toggle (Kacha vs GST) */}
           {typeFilter !== 'audit' && (
@@ -492,7 +412,7 @@ function PurchaseLogsPage() {
           {hasActiveFilters && (
             <button
               type="button"
-              onClick={() => updateSearch({ q: undefined, type: undefined, pool: undefined, status: undefined })}
+              onClick={() => { updateSearch({ q: undefined, type: undefined, pool: undefined, status: undefined }); setDateFrom(defaultLogFromDate(getLocalIsoDate())); setDateTo('') }}
               className="inline-flex h-9 items-center gap-1 rounded-md border border-border bg-secondary/50 px-2.5 text-xs font-medium text-foreground hover:bg-secondary transition shrink-0"
               title="Clear all filters"
             >
@@ -500,10 +420,10 @@ function PurchaseLogsPage() {
             </button>
           )}
         </div>
-      </section>
+      </LogsToolbarCard>
 
       {/* 3. MAIN TABLE CARD (Inspired by /transactions with rich columns) */}
-      <section className="rounded-xl border border-border bg-card p-4 sm:p-5 shadow-xs overflow-hidden">
+      <LogsTableCard>
         {isLoading ? (
           <div className="py-16 text-center text-sm text-muted-foreground animate-pulse">
             Loading purchases transactions log…
@@ -688,18 +608,18 @@ function PurchaseLogsPage() {
                           )}
                         </td>
 
-                        {/* Actions (View, Edit, Pay/Cancel) */}
+                        {/* Bill actions match Purchase Bills; accounting actions live on the chitty. */}
                         <td className="whitespace-nowrap px-3.5 py-3 text-right">
                           <div className="flex items-center justify-end gap-1">
                             {isBill ? (
                               <>
                                 <Link
-                                  to="/purchase-bills"
-                                  search={{ billId: row.id }}
+                                  to="/purchase-bills/$billId"
+                                  params={{ billId: row.reference }}
                                   className="inline-flex h-7 items-center gap-1 rounded border border-border bg-card px-2 text-[11px] font-semibold text-foreground hover:bg-secondary transition"
-                                  title="View bill & chitty preview"
+                                  title="View bill and chitty"
                                 >
-                                  <Eye size={12} /> Chitty
+                                  <Eye size={12} /> View
                                 </Link>
                                 {!row.cancelled && (
                                   <button
@@ -711,32 +631,15 @@ function PurchaseLogsPage() {
                                     <Edit3 size={12} /> Edit
                                   </button>
                                 )}
-                                {!row.cancelled && row.duePaise > 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setRecordPaymentTarget({
-                                        supplierId: row.supplierId,
-                                        supplierName: row.supplierName,
-                                        pool: row.pool,
-                                        pins: [{ billId: row.id, inNo: row.reference, duePaise: row.duePaise }],
-                                      })
-                                    }
-                                    className="inline-flex h-7 items-center gap-1 rounded bg-emerald-600 px-2 text-[11px] font-semibold text-white hover:bg-emerald-700 transition"
-                                    title="Record payment for this bill"
-                                  >
-                                    Pay
-                                  </button>
-                                )}
                                 {!row.cancelled && (
                                   <button
                                     type="button"
                                     onClick={() => setCancelBillTarget({ id: row.id, inNo: row.reference })}
                                     className="inline-flex h-7 items-center rounded border border-border bg-card px-1.5 text-[11px] text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition"
-                                    title="Cancel bill"
-                                    aria-label="Cancel bill"
+                                    title="Void bill"
+                                    aria-label="Void bill"
                                   >
-                                    ✕
+                                    Void
                                   </button>
                                 )}
                               </>
@@ -750,14 +653,6 @@ function PurchaseLogsPage() {
                                 >
                                   <Eye size={12} /> View
                                 </button>
-                                <Link
-                                  to="/new-supplier-payment"
-                                  search={{ supplierId: row.supplierId }}
-                                  className="inline-flex h-7 items-center gap-1 rounded border border-border bg-card px-2 text-[11px] font-semibold text-blue-700 hover:bg-blue-50 transition"
-                                  title="New payment to this supplier"
-                                >
-                                  <Edit3 size={12} /> Pay
-                                </Link>
                               </>
                             )}
                           </div>
@@ -771,22 +666,8 @@ function PurchaseLogsPage() {
           </div>
         )}
 
-        <div className="flex justify-end px-3 py-2"><LogsDateWindow from={dateFrom} onFromChange={setDateFrom} /></div>
-        <LogsPager {...(typeFilter === 'audit' ? auditPager : transactionPager)} />
-        {/* Footer record count */}
-        <div className="mt-3 border-t border-border pt-3 flex flex-wrap items-center justify-between text-xs text-muted-foreground">
-          <span>
-            Showing{' '}
-            <strong className="text-foreground">
-              {typeFilter === 'audit' ? filteredAudit.length : filteredTransactions.length}
-            </strong>{' '}
-            of {typeFilter === 'audit' ? allAudit.length : transactionRows.length} records
-          </span>
-          <span className="font-mono text-[11px]">
-            Real-time ledger updates
-          </span>
-        </div>
-      </section>
+      </LogsTableCard>
+      <LogsPager {...(typeFilter === 'audit' ? auditPager : transactionPager)} />
 
       {/* MODALS */}
       {cancelBillTarget && (
@@ -797,12 +678,6 @@ function PurchaseLogsPage() {
         />
       )}
 
-      {bardanBillId && (
-        <AddBardanModal
-          billId={bardanBillId}
-          onClose={() => setBardanBillId(null)}
-        />
-      )}
 
       {paymentDetailsId && (
         <PaymentDetailsModal
@@ -819,15 +694,6 @@ function PurchaseLogsPage() {
         />
       )}
 
-      {recordPaymentTarget && (
-        <RecordPaymentModal
-          supplierId={recordPaymentTarget.supplierId}
-          supplierName={recordPaymentTarget.supplierName}
-          pool={recordPaymentTarget.pool}
-          pins={recordPaymentTarget.pins}
-          onClose={() => setRecordPaymentTarget(null)}
-        />
-      )}
     </div>
   )
 }

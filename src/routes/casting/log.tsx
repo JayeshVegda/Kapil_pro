@@ -1,5 +1,5 @@
 import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
-import { LogsPager, defaultLogFromDate, useLogsPager } from '@/components/logging/logs-shell'
+import { LogsPager, LogsTableCard, LogsToolbarCard, defaultLogFromDate, useLogsPager } from '@/components/logging/logs-shell'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Edit3, Eye, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
@@ -428,7 +428,7 @@ export function CastingLogPage() {
       {/* Section 1: one short card toolbar (operational redesign Phase 4) —
           the Active/Trash switch, search, date range, and quick ranges all
           share a single wrap row instead of a stacked multi-row panel. */}
-      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+      <LogsToolbarCard>
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold" role="group" aria-label="Casting log view">
             <button type="button" aria-pressed={viewMode === 'active'} className={`rounded-md px-3 py-1.5 transition ${viewMode === 'active' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`} onClick={() => setViewMode('active')}>
@@ -493,10 +493,10 @@ export function CastingLogPage() {
             </button>
           </div>
         </div>
-      </section>
+      </LogsToolbarCard>
 
       {/* Section 2: Session Data Grid */}
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <LogsTableCard>
         <h3 className="text-sm font-bold text-slate-900 mb-4">Session Log Records</h3>
         {sessionsQuery.isLoading && <p className="text-sm text-slate-550 py-4">Loading casting sessions...</p>}
         {sessionsQuery.isError && <p className="text-sm text-rose-600 py-4 font-semibold">Unable to load casting sessions.</p>}
@@ -585,7 +585,7 @@ export function CastingLogPage() {
             </table>
           </div>
         )}
-      </section>
+      </LogsTableCard>
 
       <LogsPager {...pager} />
 

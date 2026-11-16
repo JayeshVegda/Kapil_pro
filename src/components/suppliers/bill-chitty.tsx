@@ -148,11 +148,12 @@ export function BillChitty({
 }: {
   data: BillChittyData
   mode?: 'view' | 'preview'
-  density?: 'regular' | 'comfortable'
+  density?: 'regular' | 'comfortable' | 'dialog'
 }) {
   const t = computeChittyTotals(data, mode)
   const preview = mode === 'preview'
   const comfortable = density === 'comfortable'
+  const inDialog = density === 'dialog'
   const isGst = data.pool === 'gst' || data.taxMode === 'gst'
   const brandColor = isGst ? '#dc2626' : '#0f172a'
 
@@ -173,15 +174,15 @@ export function BillChitty({
 
   return (
     <div
-      className={`print-chitty mx-auto w-full max-w-[530px] rounded-xl border border-slate-200 bg-white ${
-        comfortable ? 'p-8 text-[14px]' : 'p-5 sm:p-6 text-[13px]'
+      className={`print-chitty mx-auto w-full rounded-xl border border-slate-200 bg-white ${
+        inDialog ? '@container max-w-3xl p-4 text-sm sm:p-5' : comfortable ? 'max-w-[530px] p-8 text-[14px]' : 'max-w-[530px] p-5 text-[13px] sm:p-6'
       } text-slate-800 shadow-sm`}
     >
       {/* 1. HEADER: Firm Name + Jamnagar (Left) | Bill No & Date (Right) */}
-      <div className="flex items-start justify-between border-b border-slate-900 pb-3">
-        <div>
+      <div className={`flex items-start justify-between gap-3 border-b border-slate-900 pb-3 ${inDialog ? '@max-md:flex-col' : ''}`}>
+        <div className="min-w-0 shrink-0">
           <h1
-            className="text-xl sm:text-2xl font-black tracking-tight"
+            className={`text-xl font-black tracking-tight sm:text-2xl ${inDialog ? 'whitespace-nowrap' : ''}`}
             style={{ color: brandColor }}
           >
             {FIRM_NAME}
@@ -191,8 +192,8 @@ export function BillChitty({
           </p>
         </div>
 
-        <div className="text-right">
-          <div>
+        <div className="shrink-0 text-right">
+          <div className={inDialog ? 'whitespace-nowrap' : ''}>
             <span className="text-[11px] font-semibold text-slate-400 mr-1.5">Bill No:</span>
             <span
               className={`font-mono text-base font-extrabold ${
@@ -203,7 +204,7 @@ export function BillChitty({
               {preview && !data.inNo ? <Blank /> : null}
             </span>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5 font-medium">
+          <p className={`mt-0.5 text-xs font-medium text-slate-500 ${inDialog ? 'whitespace-nowrap' : ''}`}>
             <span className="text-[11px] font-semibold text-slate-400 mr-1">Date:</span>
             {data.date ? formatFullDate(data.date) : preview ? <Blank /> : '—'}
           </p>
@@ -226,7 +227,7 @@ export function BillChitty({
       </div>
 
       {/* 3. MATERIAL LINES TABLE: #, Item Description, Bardan, Weight, Rate, Amount */}
-      <div className="hidden py-2.5 sm:block print:block">
+      <div className={`py-2.5 print:block ${inDialog ? 'hidden @3xl:block' : 'hidden sm:block'}`}>
         <table className="w-full border-collapse text-left text-xs">
           <thead>
             <tr className="border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-400">
@@ -287,7 +288,7 @@ export function BillChitty({
       </div>
 
       {/* 3b. STACKED LINES: phone fallback for the same table above; print keeps the table */}
-      <ol className="divide-y divide-slate-100 py-2.5 sm:hidden print:hidden">
+      <ol className={`divide-y divide-slate-100 py-2.5 print:hidden ${inDialog ? '@3xl:hidden' : 'sm:hidden'}`}>
         {data.lines.length === 0 && (
           <li className="py-2">
             <div className="flex items-baseline justify-between gap-2">
@@ -406,16 +407,16 @@ export function BillChitty({
         )}
 
         {/* 3. TOTAL: Bill Net Amount (Bold and Bigger — no duplicate gross subtotal) */}
-        <div className="flex justify-between items-baseline py-1 text-slate-900">
-          <span className="font-black text-sm sm:text-base tracking-tight">
+        <div className="flex items-baseline justify-between gap-3 py-1 text-slate-900">
+          <span className="min-w-0 whitespace-nowrap text-sm font-black tracking-tight sm:text-base">
             Bill Net Amount
-            {totalWeightG > 0 && (
+            {totalWeightG > 0 && !inDialog && (
               <span className="text-slate-400 font-mono ml-1.5 font-normal text-xs">
                 ({gramsToKgText(totalWeightG)} kg)
               </span>
             )}
           </span>
-          <span className="font-mono font-black text-sm sm:text-base tabular-nums">
+          <span className="shrink-0 whitespace-nowrap font-mono text-sm font-black tabular-nums sm:text-base">
             {formatPaiseInr(t.netPaise)}
           </span>
         </div>
@@ -484,26 +485,26 @@ export function BillChitty({
       </div>
 
       {/* 6. FINAL TOTAL: BALANCE DUE (ALWAYS AT THE VERY BOTTOM — NOTHING FOLLOWS) */}
-      <div className="mt-4 pt-3 border-t-2 border-slate-900 flex items-baseline justify-between">
+      <div className={`mt-4 flex items-baseline justify-between gap-3 border-t-2 border-slate-900 pt-3 ${inDialog ? '@max-md:flex-col @max-md:items-start' : ''}`}>
         <div>
-          <span className="text-xs font-black uppercase tracking-wider text-slate-900">
+          <span className="whitespace-nowrap text-xs font-black uppercase tracking-wider text-slate-900">
             Balance Due
           </span>
         </div>
 
-        <div className="text-right">
+        <div className="min-w-0 text-right">
           {t.duePaise <= 0 ? (
             <span
-              className={`font-mono ${
-                comfortable ? 'text-3xl sm:text-4xl' : 'text-2xl sm:text-3xl'
+              className={`whitespace-nowrap font-mono ${
+                inDialog ? 'text-lg @xl:text-2xl @3xl:text-3xl' : comfortable ? 'text-3xl sm:text-4xl' : 'text-2xl sm:text-3xl'
               } font-black uppercase tracking-wider text-emerald-700`}
             >
               nil
             </span>
           ) : (
             <span
-              className={`font-mono ${
-                comfortable ? 'text-3xl sm:text-4xl' : 'text-2xl sm:text-3xl'
+              className={`whitespace-nowrap font-mono ${
+                inDialog ? 'text-lg tracking-tight @xl:text-2xl @3xl:text-3xl' : comfortable ? 'text-3xl sm:text-4xl' : 'text-2xl sm:text-3xl'
               } font-black tabular-nums text-rose-600`}
             >
               {formatPaiseInr(t.duePaise)}

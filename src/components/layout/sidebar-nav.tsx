@@ -60,10 +60,8 @@ const navGroups: NavGroup[] = [
     collapsible: true,
     items: [
       { to: '/monthly-sales-calendar', title: 'Calendar', icon: Calendar },
-      { to: '/monthly-report', title: 'Company Report', icon: CalendarDays },
-      { to: '/reports/sales', title: 'Sales Report', icon: ScrollText },
-      { to: '/reports/purchase', title: 'Purchase Report', icon: ScrollText },
-      { to: '/reports/casting', title: 'Casting Report', icon: ScrollText },
+      { to: '/company-report', title: 'Company Report', icon: CalendarDays },
+      { to: '/module-report', title: 'Module Report', icon: ScrollText },
       { to: '/export-reports', title: 'Exports', icon: Download },
     ],
   },

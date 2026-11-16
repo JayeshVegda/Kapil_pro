@@ -1,6 +1,6 @@
 import { useIsFetching, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
-import { AlertTriangle, CheckCircle2, Clock3, Command, FileText, HelpCircle, IndianRupee, Loader2, Menu, RefreshCw, Search, TerminalSquare, TrendingUp, UserRound } from 'lucide-react'
+import { Clock3, Command, FileText, HelpCircle, IndianRupee, Loader2, Menu, Search, TerminalSquare, TrendingUp, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { pb } from '@/data/pocketbase'
 import { loadQuickSearchResults, type QuickSearchResult } from '@/data/quick-search'
@@ -32,7 +32,9 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   '/new-payment': { title: 'Sales Payment', subtitle: 'Record collections and adjustments' },
   '/transactions': { title: 'Sales Logs', subtitle: 'Manage recent bills and payments with CRUD actions' },
   '/ledger': { title: 'Party Ledger', subtitle: 'Single-party ledger and analytics' },
-  '/monthly-report': { title: 'Company Report', subtitle: 'Company-level sales, collections, and gas performance' },
+  '/monthly-report': { title: 'Company Report', subtitle: 'Sales, purchase, and casting overview' },
+  '/company-report': { title: 'Company Report', subtitle: 'Sales, purchase, and casting overview' },
+  '/module-report': { title: 'Module Report', subtitle: 'Module activity, balances, and trends' },
   '/reports/sales': { title: 'Sales Report', subtitle: 'Customers, items, trend and receivable ageing' },
   '/reports/purchase': { title: 'Purchase Report', subtitle: 'Suppliers, scrap rates, payable ageing and RCM' },
   '/reports/casting': { title: 'Casting Report', subtitle: 'Sessions, wastage, recovery and material costs' },
@@ -86,9 +88,8 @@ const commandRoutes = [
   { label: 'New Purchase Payment', path: '/new-supplier-payment' },
   { label: 'Purchase Logs', path: '/purchase-logs' },
   { label: 'Calendar', path: '/monthly-sales-calendar' },
-  { label: 'Sales Report', path: '/reports/sales' },
-  { label: 'Purchase Report', path: '/reports/purchase' },
-  { label: 'Casting Report', path: '/reports/casting' },
+  { label: 'Company Report', path: '/company-report' },
+  { label: 'Module Report', path: '/module-report' },
   { label: 'Purchase Bills', path: '/purchase-bills' },
   { label: 'New Purchase Bill', path: '/new-purchase-bill' },
   { label: 'Items', path: '/items' },
@@ -149,7 +150,7 @@ function AppShellContent() {
   const [billSession, setBillSession] = useState<BillSession | null>(null)
   const [commandHistory, setCommandHistory] = useState<string[]>(() => loadCommandHistory())
   const [adminSettings, setAdminSettings] = useState(getAdminControlSettings)
-  const quickSearchRef = useRef<HTMLLabelElement | null>(null)
+  const quickSearchRef = useRef<HTMLButtonElement | null>(null)
   const quickSearchPaletteRef = useRef<HTMLDivElement | null>(null)
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
@@ -722,63 +723,30 @@ function AppShellContent() {
               <p className="hidden truncate text-xs text-slate-500 sm:block">{meta.subtitle}</p>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-1.5 md:gap-3">
-            <label ref={quickSearchRef} className="relative hidden lg:block">
-              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search site..."
-                value={quickSearch}
-                onChange={(event) => {
-                  setQuickSearch(event.target.value)
-                  setQuickSearchOpen(true)
-                }}
-                onFocus={() => setQuickSearchOpen(true)}
-                onKeyDown={handleQuickSearchKeyDown}
-                className="h-9 w-[250px] rounded-full border border-slate-200 bg-white pl-9 pr-20 text-sm text-slate-700 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-slate-500 xl:w-[300px]"
-              />
-              <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold text-slate-500 xl:block">Ctrl /</span>
-            </label>
+          <div className="flex shrink-0 items-center gap-2">
             <button
+              ref={quickSearchRef}
               type="button"
-              className="grid h-10 w-10 place-items-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50 lg:hidden"
-              onClick={() => {
-                setQuickSearchOpen(true)
-              }}
+              className="grid size-8 place-items-center rounded-md border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-50"
+              onClick={() => setQuickSearchOpen(true)}
+              title="Search (Ctrl+/)"
               aria-label="Search customers, bills, payments, and market rates"
+              aria-keyshortcuts="Control+/"
             >
-              <Search size={17} />
+              <Search size={16} />
             </button>
             <button
               type="button"
-              className="grid h-10 w-10 place-items-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 lg:h-9 lg:w-9"
-              onClick={() => {
-                if (adminSettings.controlKEnabled) setCommandOpen(true)
-              }}
-              title={adminSettings.controlKEnabled ? 'Command bar (Ctrl+K)' : 'Command bar disabled in Control Room'}
-              aria-label="Open command bar"
-              aria-keyshortcuts="Control+K Meta+K"
-              disabled={!adminSettings.controlKEnabled}
-            >
-              <Command size={15} />
-            </button>
-            <button
-              type="button"
-              className="hidden min-h-9 items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 text-xs font-semibold text-amber-800 shadow-sm transition hover:bg-amber-100 sm:inline-flex"
+              className="inline-flex h-8 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
               title={`${marketRate.status}${marketRate.rateDate ? ` | ${marketRate.rateDate}` : ''}${mktDelta ? ` | ${mktDelta.delta >= 0 ? '+' : '-'}₹${Math.abs(mktDelta.delta)} vs previous saved rate` : ''}`}
               onClick={() => void refreshMarketRate()}
             >
-              <span className="text-[11px] uppercase tracking-[0.08em] text-amber-600">MKT</span>
+              <span>MKT</span>
               <span className="font-mono tabular-nums">{marketRate.rate > 0 ? formatInrInteger(Math.round(marketRate.rate)) : '—'}</span>
-              {mktDelta && (
-                <span className={`font-mono text-[11px] tabular-nums ${mktDelta.delta >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                  {mktDelta.delta >= 0 ? '▲' : '▼'}{Math.abs(mktDelta.delta)}
-                </span>
-              )}
             </button>
             <button
               type="button"
-              className="inline-flex min-h-10 items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-9 lg:px-3"
+              className="grid size-8 place-items-center rounded-md border border-slate-200 bg-white transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               onClick={() => {
                 queryClient.getQueryCache().getAll().forEach((q) => {
                   if (q.state.status === 'error') {
@@ -789,37 +757,12 @@ function AppShellContent() {
                   refetchType: 'all',
                 })
               }}
-              title={syncState === 'syncing' ? 'Sync in progress' : syncState === 'error' ? syncErrorMessage : 'Refresh now'}
-              aria-label="Refresh app data"
+              title={`${syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? syncErrorMessage || 'Sync error' : syncState === 'outdated' ? 'Outdated' : 'Synced'} · ${hasSynced ? `Updated ${new Date(lastUpdatedAt).toLocaleTimeString()}` : 'Waiting for first sync'} · Click to refresh`}
+              aria-label="Refresh app data and view sync status"
               disabled={syncState === 'syncing'}
             >
-              <span
-                className={`grid h-5 w-5 place-items-center rounded-full ${
-                  syncState === 'error' ? 'bg-rose-100 text-rose-700' : syncState === 'outdated' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
-                }`}
-              >
-                {syncState === 'syncing' && <Loader2 size={13} className="animate-spin" />}
-                {syncState === 'synced' && <CheckCircle2 size={13} />}
-                {syncState === 'error' && <AlertTriangle size={13} />}
-                {syncState === 'outdated' && <Clock3 size={13} />}
-              </span>
-              <span className="hidden md:inline-flex md:flex-col md:items-start md:leading-tight">
-                <span className="text-xs font-semibold text-slate-700">
-                  {syncState === 'syncing' ? 'Syncing' : syncState === 'error' ? 'Sync Error' : syncState === 'outdated' ? 'Outdated' : 'Synced'}
-                </span>
-                <span className="max-w-48 truncate text-[11px] text-slate-500">
-                  {syncState === 'syncing'
-                    ? 'Updating data...'
-                    : syncState === 'error'
-                      ? syncErrorMessage || 'Error syncing data'
-                      : hasSynced
-                        ? `Updated ${new Date(lastUpdatedAt).toLocaleTimeString()}`
-                        : 'Waiting for first sync'}
-                </span>
-              </span>
-              <span className="grid h-5 w-5 place-items-center text-slate-500">
-                <RefreshCw size={13} className={syncState === 'syncing' ? 'animate-spin' : ''} />
-              </span>
+              {syncState === 'syncing' ? <Loader2 size={14} className="animate-spin text-slate-500" /> :
+                <span className={`size-2 rounded-full ${syncState === 'error' ? 'bg-rose-600' : syncState === 'outdated' ? 'bg-amber-500' : 'bg-emerald-600'}`} />}
             </button>
           </div>
         </header>

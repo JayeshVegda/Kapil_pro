@@ -1,4 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
+
+export function LogsToolbarCard({ children }: { children: ReactNode }) {
+  return <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">{children}</section>
+}
+
+export function LogsTableCard({ children }: { children: ReactNode }) {
+  return <section className="overflow-hidden rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-5">{children}</section>
+}
 
 export function defaultLogFromDate(today: string, days = 90) {
   const date = new Date(`${today}T12:00:00Z`)

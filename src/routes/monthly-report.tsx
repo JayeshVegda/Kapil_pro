@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, redirect } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -36,7 +36,7 @@ import { CHART_THEME } from '@/components/charts/chart-theme'
 import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/monthly-report')({
-  component: CompanyReportPage,
+  beforeLoad: () => { throw redirect({ to: '/company-report' }) },
 })
 
 export type ReportPeriodMode = 'month' | 'last_month' | 'fy' | 'prev_fy'
@@ -651,13 +651,17 @@ export function CompanyReportPage() {
       ['Collections Realized', salesData?.collectionsRealized ?? 0, 'INR', `${salesData?.periodPayments.length ?? 0} payments`],
       ['Collection Efficiency', `${(salesData?.realizationRate ?? 0).toFixed(1)}%`, '%', 'Collections / Sales'],
       ['Ending Receivables', salesData?.totalReceivable ?? 0, 'INR', 'Open customer dues'],
-      ['Scrap Purchases', (purchaseData?.totalBoughtPaise ?? 0) / 100, 'INR', `${purchaseData?.totalBoughtKg ?? 0} kg`],
-      ['Supplier Payouts', (purchaseData?.totalPaidPaise ?? 0) / 100, 'INR', `${purchaseData?.periodPayments.length ?? 0} payments`],
-      ['Ending Payables (We Owe)', (purchaseData?.totalWeOwePaise ?? 0) / 100, 'INR', 'Open supplier dues'],
-      ['Finished Wire Output', castingData?.wireOutKg ?? 0, 'kg', 'Manufacturing output'],
-      ['Foundry Metal Recovery', castingData?.safeYield.recoveryPct != null ? `${castingData.safeYield.recoveryPct}%` : '—', '%', 'Mass conservation recovery'],
-      ['Foundry Loaded Cost', (castingData?.loadedCostPerKg ?? 0).toFixed(2), 'INR/kg', 'Metal + Coal + Labour'],
-      ['Net Operating Cash Flow', cashFlow.netCash, 'INR', 'Collections In - Payouts Out'],
+      ...(purchaseEnabled ? [
+        ['Scrap Purchases', (purchaseData?.totalBoughtPaise ?? 0) / 100, 'INR', `${purchaseData?.totalBoughtKg ?? 0} kg`],
+        ['Supplier Payouts', (purchaseData?.totalPaidPaise ?? 0) / 100, 'INR', `${purchaseData?.periodPayments.length ?? 0} payments`],
+        ['Ending Payables (We Owe)', (purchaseData?.totalWeOwePaise ?? 0) / 100, 'INR', 'Open supplier dues'],
+        ['Net Operating Cash Flow', cashFlow.netCash, 'INR', 'Collections In - Payouts Out'],
+      ] : []),
+      ...(castingEnabled ? [
+        ['Finished Wire Output', castingData?.wireOutKg ?? 0, 'kg', 'Manufacturing output'],
+        ['Foundry Metal Recovery', castingData?.safeYield.recoveryPct != null ? `${castingData.safeYield.recoveryPct}%` : '—', '%', 'Mass conservation recovery'],
+        ['Foundry Loaded Cost', (castingData?.loadedCostPerKg ?? 0).toFixed(2), 'INR/kg', 'Metal + Coal + Labour'],
+      ] : []),
     ]
 
     const csvContent = 'data:text/csv;charset=utf-8,' + rows.map((e) => e.map((c) => `"${c}"`).join(',')).join('\n')
@@ -673,8 +677,8 @@ export function CompanyReportPage() {
   if (isLoading) {
     return (
       <div className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
-        <Panel className="rounded-xl border border-blue-100 bg-white p-12 text-center shadow-sm">
-          <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+        <Panel className="rounded-xl border border-slate-200 bg-white p-12 text-center shadow-sm">
+          <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-slate-800 border-t-transparent" />
           <p className="mt-3 text-xs font-semibold text-slate-700">Loading consolidated Company Report...</p>
         </Panel>
       </div>
@@ -696,19 +700,19 @@ export function CompanyReportPage() {
   return (
     <div ref={reportRef} className="space-y-4 px-3 pb-10 pt-3 sm:px-4 lg:px-6">
       {/* 1. Executive Toolbar & Period Controller (Cards Rule compliant) */}
-      <Panel className="rounded-xl border border-blue-100/80 bg-gradient-to-r from-blue-50/40 via-white to-slate-50/40 p-3.5 shadow-sm">
+      <Panel className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
         <div className="flex flex-col gap-3.5 lg:flex-row lg:items-center lg:justify-between">
           {/* Left: Brand Executive Badge & Title */}
           <div className="flex items-center gap-3">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white shadow-sm">
               <Building2 size={16} />
             </span>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-sm font-bold tracking-tight text-slate-900 sm:text-base">
+                <h2 className="text-sm font-semibold tracking-tight text-slate-950 sm:text-base">
                   Company Performance Report
-                </h1>
-                <span className="rounded-md border border-blue-200 bg-blue-50/80 px-2 py-0.5 font-mono text-[10px] font-semibold text-blue-700">
+                </h2>
+                <span className="rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
                   {range.label}
                 </span>
               </div>
@@ -723,7 +727,7 @@ export function CompanyReportPage() {
             <div
               role="tablist"
               aria-label="Report period"
-              className="inline-flex rounded-lg border border-blue-200/60 bg-blue-50/40 p-0.5 text-xs font-semibold"
+              className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold"
             >
               <button
                 type="button"
@@ -733,8 +737,8 @@ export function CompanyReportPage() {
                 className={cn(
                   'rounded-md px-2.5 py-1.5 transition-all text-xs font-medium',
                   mode === 'month'
-                    ? 'bg-blue-600 text-white shadow-sm font-semibold'
-                    : 'text-slate-600 hover:text-blue-900 hover:bg-white/80',
+                    ? 'bg-slate-900 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100',
                 )}
               >
                 This Month
@@ -747,8 +751,8 @@ export function CompanyReportPage() {
                 className={cn(
                   'rounded-md px-2.5 py-1.5 transition-all text-xs font-medium',
                   mode === 'last_month'
-                    ? 'bg-blue-600 text-white shadow-sm font-semibold'
-                    : 'text-slate-600 hover:text-blue-900 hover:bg-white/80',
+                    ? 'bg-slate-900 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100',
                 )}
               >
                 Last Month
@@ -761,8 +765,8 @@ export function CompanyReportPage() {
                 className={cn(
                   'rounded-md px-2.5 py-1.5 transition-all text-xs font-medium',
                   mode === 'fy'
-                    ? 'bg-blue-600 text-white shadow-sm font-semibold'
-                    : 'text-slate-600 hover:text-blue-900 hover:bg-white/80',
+                    ? 'bg-slate-900 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100',
                 )}
               >
                 FY to Date
@@ -775,8 +779,8 @@ export function CompanyReportPage() {
                 className={cn(
                   'rounded-md px-2.5 py-1.5 transition-all text-xs font-medium',
                   mode === 'prev_fy'
-                    ? 'bg-blue-600 text-white shadow-sm font-semibold'
-                    : 'text-slate-600 hover:text-blue-900 hover:bg-white/80',
+                    ? 'bg-slate-900 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100',
                 )}
               >
                 Last FY
@@ -789,14 +793,14 @@ export function CompanyReportPage() {
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
                 aria-label="Select report month"
-                className="h-8 rounded-md border border-blue-200 bg-white px-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400/40"
+                className="h-8 rounded-md border border-slate-200 bg-slate-50 px-2 text-xs font-medium text-slate-800 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-400/30"
               />
             )}
 
             <button
               type="button"
               onClick={handleExportCsv}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-700"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 hover:text-slate-900"
             >
               <Download size={13} /> Summary CSV
             </button>
@@ -805,7 +809,7 @@ export function CompanyReportPage() {
               type="button"
               onClick={handleExportJpg}
               disabled={exporting}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:opacity-50"
             >
               <Download size={13} /> {exporting ? 'Generating...' : 'Export JPG'}
             </button>
@@ -844,7 +848,7 @@ export function CompanyReportPage() {
         />
 
         {/* Pillar 2: Procurement Spend */}
-        <KpiCard
+        {purchaseEnabled && <KpiCard
           label="Procurement Spend"
           hint="Supply Chain"
           value={purchaseData ? formatCompactInr(purchaseData.totalBoughtPaise / 100) : '—'}
@@ -863,10 +867,10 @@ export function CompanyReportPage() {
               : 'Module not active'
           }
           href="/purchase-dashboard"
-        />
+        />}
 
         {/* Pillar 3: Foundry Production */}
-        <KpiCard
+        {castingEnabled && <KpiCard
           label="Foundry Production"
           hint="Manufacturing"
           value={castingData ? formatCompactKg(castingData.wireOutKg) : '—'}
@@ -885,10 +889,10 @@ export function CompanyReportPage() {
               : 'Module not active'
           }
           href="/casting"
-        />
+        />}
 
         {/* Pillar 4: Working Capital Liquidity */}
-        <KpiCard
+        {purchaseEnabled && <KpiCard
           label="Net Operating Cash"
           hint="Cash Realization"
           value={formatCompactInr(cashFlow.netCash)}
@@ -904,7 +908,7 @@ export function CompanyReportPage() {
           }
           subtext={`In: ₹${formatCompactInr(cashFlow.cashIn)} · Out: ₹${formatCompactInr(cashFlow.cashOut)}`}
           href="/ledger"
-        />
+        />}
       </div>
 
       {/* 3. Three Operating Engines Side by Side */}
@@ -915,7 +919,7 @@ export function CompanyReportPage() {
           actions={
             <Link
               to="/sales-dashboard"
-              className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 transition hover:text-blue-800"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 transition hover:text-slate-900"
             >
               Sales Dashboard <ArrowRight size={12} />
             </Link>
@@ -940,45 +944,51 @@ export function CompanyReportPage() {
             <div>
               <div className="flex items-center justify-between text-xs">
                 <span className="font-medium text-slate-600">Collection Realization</span>
-                <span className="font-mono font-bold text-blue-700 tabular-nums">
+                <span className={cn(
+                  'font-mono font-bold tabular-nums',
+                  salesData && salesData.realizationRate >= 100 ? 'text-emerald-700' : 'text-slate-900',
+                )}>
                   {salesData ? `${salesData.realizationRate.toFixed(1)}%` : '0%'}
                 </span>
               </div>
               <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-100">
                 <div
-                  className="h-full rounded-full bg-blue-600 transition-all duration-500"
+                  className={cn(
+                    'h-full rounded-full transition-all duration-500',
+                    salesData && salesData.realizationRate >= 100 ? 'bg-emerald-600' : 'bg-slate-900',
+                  )}
                   style={{ width: `${Math.min(100, salesData?.realizationRate ?? 0)}%` }}
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 rounded-lg border border-blue-50/70 bg-blue-50/20 p-2.5 text-xs">
+            <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-2.5 text-xs">
               <div>
                 <p className="text-[11px] text-slate-500">Open Receivables</p>
                 <p className="font-mono font-bold text-slate-900 tabular-nums">
                   {salesData ? formatCompactInr(salesData.totalReceivable) : '—'}
                 </p>
-                <p className="text-[10px] text-slate-400">{salesData?.debtorList.length ?? 0} debtors</p>
+                <p className="text-[11px] text-slate-400">{salesData?.debtorList.length ?? 0} debtors</p>
               </div>
               <div>
                 <p className="text-[11px] text-slate-500">Risk Overdue (&gt;60d)</p>
                 <p className="font-mono font-bold text-rose-600 tabular-nums">
                   {salesData ? formatCompactInr(salesData.ageingBuckets.days61to90 + salesData.ageingBuckets.above90) : '—'}
                 </p>
-                <p className="text-[10px] text-slate-400">High priority collection</p>
+                <p className="text-[11px] font-medium text-rose-600">High priority collection</p>
               </div>
             </div>
           </div>
         </SectionCard>
 
         {/* Engine 2: Purchase Position */}
-        <SectionCard
+        {purchaseEnabled && <SectionCard
           title="Purchase Position"
           actions={
             purchaseEnabled ? (
               <Link
                 to="/purchase-dashboard"
-                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 transition hover:text-blue-800"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 transition hover:text-slate-900"
               >
                 Purchase Dashboard <ArrowRight size={12} />
               </Link>
@@ -993,24 +1003,24 @@ export function CompanyReportPage() {
                   <p className="font-mono text-lg font-bold text-slate-900 tabular-nums">
                     {formatCompactInr(purchaseData.totalBoughtPaise / 100)}
                   </p>
-                  <p className="text-[10px] font-mono text-slate-400">{formatCompactKg(purchaseData.totalBoughtKg)} scrap</p>
+                  <p className="text-[11px] font-mono text-slate-400">{formatCompactKg(purchaseData.totalBoughtKg)} scrap</p>
                 </div>
                 <div className="text-right">
                   <p className="text-[11px] text-slate-500">Paid Out</p>
                   <p className="font-mono text-lg font-bold text-emerald-700 tabular-nums">
                     {formatCompactInr(purchaseData.totalPaidPaise / 100)}
                   </p>
-                  <p className="text-[10px] text-slate-400">{purchaseData.periodPayments.length} disbursements</p>
+                  <p className="text-[11px] text-slate-400">{purchaseData.periodPayments.length} disbursements</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div>
                   <p className="text-[11px] text-slate-500">We Owe Suppliers</p>
-                  <p className="font-mono font-bold text-blue-700 tabular-nums">
+                  <p className="font-mono font-bold text-slate-900 tabular-nums">
                     {formatCompactInr(purchaseData.totalWeOwePaise / 100)}
                   </p>
-                  <p className="text-[10px] text-slate-400">
+                  <p className="text-[11px] text-slate-400">
                     K: {formatCompactInr(purchaseData.positions.kachaPayablePaise / 100)} · G: {formatCompactInr(purchaseData.positions.gstPayablePaise / 100)}
                   </p>
                 </div>
@@ -1019,11 +1029,11 @@ export function CompanyReportPage() {
                   <p className="font-mono font-bold text-slate-900 tabular-nums">
                     {formatCompactInr(purchaseData.positions.totalAdvancePaise / 100)}
                   </p>
-                  <p className="text-[10px] text-slate-400">With suppliers</p>
+                  <p className="text-[11px] text-slate-400">With suppliers</p>
                 </div>
               </div>
 
-              <div className="rounded-lg border border-blue-50/70 bg-blue-50/20 p-2.5 text-xs">
+              <div className="rounded-lg border border-slate-100 bg-slate-50 p-2.5 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] text-slate-600 font-medium">Bardan Accountability</span>
                   <span className={cn(
@@ -1033,7 +1043,7 @@ export function CompanyReportPage() {
                     {purchaseData.bardanSummary.pendingLots} lots ({purchaseData.bardanSummary.totalBags} bags)
                   </span>
                 </div>
-                <p className="mt-0.5 text-[10px] text-slate-400">
+                <p className="mt-0.5 text-[11px] text-slate-400">
                   {purchaseData.bardanSummary.oldestDays > 0 ? `Oldest unreturned lot: ${purchaseData.bardanSummary.oldestDays} days old` : 'All bardan reconciled'}
                 </p>
               </div>
@@ -1043,16 +1053,16 @@ export function CompanyReportPage() {
               Purchase module is disabled in settings.
             </div>
           )}
-        </SectionCard>
+        </SectionCard>}
 
         {/* Engine 3: Casting Position */}
-        <SectionCard
+        {castingEnabled && <SectionCard
           title="Casting Position"
           actions={
             castingEnabled ? (
               <Link
                 to="/casting"
-                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 transition hover:text-blue-800"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 transition hover:text-slate-900"
               >
                 Casting Dashboard <ArrowRight size={12} />
               </Link>
@@ -1067,14 +1077,14 @@ export function CompanyReportPage() {
                   <p className="font-mono text-lg font-bold text-slate-900 tabular-nums">
                     {formatCompactKg(castingData.metalChargedKg)}
                   </p>
-                  <p className="text-[10px] text-slate-400">{castingData.totalBatches} heats in period</p>
+                  <p className="text-[11px] text-slate-400">{castingData.totalBatches} heats in period</p>
                 </div>
                 <div className="text-right">
                   <p className="text-[11px] text-slate-500">Finished Wire Out</p>
-                  <p className="font-mono text-lg font-bold text-blue-700 tabular-nums">
+                  <p className="font-mono text-lg font-bold text-slate-900 tabular-nums">
                     {formatCompactKg(castingData.wireOutKg)}
                   </p>
-                  <p className="text-[10px] text-slate-400">{castingData.foundryActiveDays} operating days</p>
+                  <p className="text-[11px] text-slate-400">{castingData.foundryActiveDays} operating days</p>
                 </div>
               </div>
 
@@ -1091,25 +1101,25 @@ export function CompanyReportPage() {
                     style={{ width: `${Math.min(100, castingData.safeYield.recoveryPct ?? 0)}%` }}
                   />
                 </div>
-                <p className="mt-1 text-[10px] text-slate-400">
+                <p className="mt-1 text-[11px] text-slate-400">
                   Melting loss: {castingData.safeYield.wastagePct != null ? `${castingData.safeYield.wastagePct}%` : '—'} ({formatCompactKg(castingData.totalMelWastageKg)})
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 rounded-lg border border-blue-50/70 bg-blue-50/20 p-2.5 text-xs">
+              <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-2.5 text-xs">
                 <div>
                   <p className="text-[11px] text-slate-500">Loaded Cost / kg</p>
                   <p className="font-mono font-bold text-slate-900 tabular-nums">
                     {castingData.loadedCostPerKg > 0 ? `₹${castingData.loadedCostPerKg.toFixed(2)}` : '—'}
                   </p>
-                  <p className="text-[10px] text-slate-400">Metal + Coal + Labour</p>
+                  <p className="text-[11px] text-slate-400">Metal + Coal + Labour</p>
                 </div>
                 <div>
                   <p className="text-[11px] text-slate-500">Lowest Heat Run</p>
                   <p className="font-mono font-bold text-emerald-700 tabular-nums">
                     {castingData.bestSession ? `₹${castingData.bestSession.costPerKg.toFixed(2)}/kg` : '—'}
                   </p>
-                  <p className="text-[10px] text-slate-400">Peak heat efficiency</p>
+                  <p className="text-[11px] text-slate-400">Peak heat efficiency</p>
                 </div>
               </div>
             </div>
@@ -1118,7 +1128,7 @@ export function CompanyReportPage() {
               Casting module is disabled in settings.
             </div>
           )}
-        </SectionCard>
+        </SectionCard>}
       </div>
 
       {/* 4. 12-Month Multi-Stream Company Rhythm */}
@@ -1137,9 +1147,9 @@ export function CompanyReportPage() {
             xKey="month"
             series={[
               { dataKey: 'sales', name: 'Sales Billed (₹)', color: '#2563eb', type: 'bar' },
-              { dataKey: 'purchases', name: 'Scrap Bought (₹)', color: '#f59e0b', type: 'bar' },
+              ...(purchaseEnabled ? [{ dataKey: 'purchases', name: 'Scrap Bought (₹)', color: '#f59e0b', type: 'bar' as const }] : []),
               { dataKey: 'collections', name: 'Collections In (₹)', color: '#059669', type: 'line' },
-              { dataKey: 'paidOut', name: 'Disbursed Out (₹)', color: '#e11d48', type: 'line' },
+              ...(purchaseEnabled ? [{ dataKey: 'paidOut', name: 'Disbursed Out (₹)', color: '#e11d48', type: 'line' as const }] : []),
             ]}
             height={260}
             formatY={(v) => formatCompactInr(v)}
@@ -1155,39 +1165,39 @@ export function CompanyReportPage() {
                   <th className="px-3 py-2">Month</th>
                   <th className="px-3 py-2 text-right">Sales Billed</th>
                   <th className="px-3 py-2 text-right">Collections</th>
-                  <th className="px-3 py-2 text-right">Scrap Purchases</th>
-                  <th className="px-3 py-2 text-right">Payouts</th>
-                  <th className="px-3 py-2 text-right">Wire Output</th>
-                  <th className="px-3 py-2 text-right">Net Cash Flow</th>
+                  {purchaseEnabled && <th className="px-3 py-2 text-right">Scrap Purchases</th>}
+                  {purchaseEnabled && <th className="px-3 py-2 text-right">Payouts</th>}
+                  {castingEnabled && <th className="px-3 py-2 text-right">Wire Output</th>}
+                  {purchaseEnabled && <th className="px-3 py-2 text-right">Net Cash Flow</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                 {company12MTrend.map((row) => (
-                  <tr key={row.month} className="hover:bg-blue-50/40 transition-colors">
+                  <tr key={row.month} className="hover:bg-slate-50/80 transition-colors">
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-900 font-semibold">
                       {formatMonthYear(row.month)}
                     </td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-blue-700">
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-900">
                       {formatInrInteger(row.sales)}
                     </td>
                     <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-700">
                       {formatInrInteger(row.collections)}
                     </td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-amber-700">
+                    {purchaseEnabled && <td className="px-3 py-2 text-right font-mono tabular-nums text-amber-700">
                       {formatInrInteger(row.purchases)}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-700">
+                    </td>}
+                    {purchaseEnabled && <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-700">
                       {formatInrInteger(row.paidOut)}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-600">
+                    </td>}
+                    {castingEnabled && <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-600">
                       {formatCompactKg(row.wireOut)}
-                    </td>
-                    <td className={cn(
+                    </td>}
+                    {purchaseEnabled && <td className={cn(
                       'px-3 py-2 text-right font-mono tabular-nums font-bold',
                       row.netCash >= 0 ? 'text-emerald-700' : 'text-rose-600'
                     )}>
                       {row.netCash >= 0 ? `+${formatInrInteger(row.netCash)}` : `-${formatInrInteger(Math.abs(row.netCash))}`}
-                    </td>
+                    </td>}
                   </tr>
                 ))}
               </tbody>
@@ -1206,7 +1216,7 @@ export function CompanyReportPage() {
             <Link
               to="/ledger"
               search={{ tab: 'customers' }}
-              className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
+              className="text-xs font-semibold text-slate-600 transition hover:text-slate-900"
             >
               Customer ledger →
             </Link>
@@ -1225,7 +1235,7 @@ export function CompanyReportPage() {
                   subLabel: `${c.bags} bags billed`,
                   href: `/ledger?customerId=${c.id}&tab=customers`,
                 })) ?? []}
-                tone="blue"
+                tone="slate"
                 emptyText="No customer sales recorded for this period."
               />
             </div>
@@ -1243,13 +1253,13 @@ export function CompanyReportPage() {
                   ageLevel: d.days > 60 ? 'overdue' : d.days > 30 ? 'due' : 'watch',
                   href: `/ledger?customerId=${d.id}&tab=customers`,
                 })) ?? []}
-                tone="blue"
+                tone="slate"
                 emptyText="All customer balances are clear."
               />
             </div>
 
             {salesData && salesData.gasMetrics.totalKg > 0 && (
-              <div className="rounded-lg border border-blue-100 bg-blue-50/30 p-3 text-xs">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-slate-900">Gas Selling Margin vs Vilaity</span>
                   <span className={cn(
@@ -1268,7 +1278,7 @@ export function CompanyReportPage() {
         </SectionCard>
 
         {/* Supply Chain & Supplier Intelligence */}
-        <SectionCard
+        {purchaseEnabled && <SectionCard
           title="Procurement & Supplier Settlements"
           subtitle="Top inward scrap vendors and outstanding payout priorities"
           actions={
@@ -1276,7 +1286,7 @@ export function CompanyReportPage() {
               <Link
                 to="/ledger"
                 search={{ tab: 'suppliers' }}
-                className="text-xs font-semibold text-blue-600 transition hover:text-blue-800"
+                className="text-xs font-semibold text-slate-600 transition hover:text-slate-900"
               >
                 Supplier ledger →
               </Link>
@@ -1297,7 +1307,7 @@ export function CompanyReportPage() {
                     subLabel: `${formatCompactKg(s.kg)} scrap inward`,
                     href: `/supplier-ledger/${s.id}`,
                   }))}
-                  tone="blue"
+                  tone="slate"
                   emptyText="No scrap procurement recorded this period."
                 />
               </div>
@@ -1314,7 +1324,7 @@ export function CompanyReportPage() {
                     subLabel: `Kacha ₹${formatCompactInr(s.kacha)} · GST ₹${formatCompactInr(s.gst)}`,
                     href: `/supplier-ledger/${s.id}`,
                   }))}
-                  tone="blue"
+                  tone="slate"
                   emptyText="No supplier dues pending."
                 />
               </div>
@@ -1338,7 +1348,7 @@ export function CompanyReportPage() {
               Purchase module is disabled in settings.
             </div>
           )}
-        </SectionCard>
+        </SectionCard>}
       </div>
 
       {/* 6. Working Capital Ageing Audit & Debtor Drilldown */}
@@ -1346,7 +1356,7 @@ export function CompanyReportPage() {
         title="Receivable Ageing & Debtor Audit"
         subtitle="Distribution of outstanding customer balances by invoice maturity date"
         actions={
-          <span className="text-xs font-semibold text-blue-700 font-mono">
+          <span className="text-xs font-semibold text-slate-900 font-mono">
             Total Outstanding: ₹{formatInrInteger(salesData?.totalReceivable ?? 0)}
           </span>
         }
@@ -1371,7 +1381,7 @@ export function CompanyReportPage() {
               { key: 'above90', label: '90d+ (Risk)', count: salesData?.ageingDebtors.above90.length ?? 0, color: 'text-rose-700 border-rose-200 bg-rose-50' },
               { key: 'days61to90', label: '61–90d', count: salesData?.ageingDebtors.days61to90.length ?? 0, color: 'text-orange-700 border-orange-200 bg-orange-50' },
               { key: 'days31to60', label: '31–60d', count: salesData?.ageingDebtors.days31to60.length ?? 0, color: 'text-amber-700 border-amber-200 bg-amber-50' },
-              { key: 'current', label: '0–30d', count: salesData?.ageingDebtors.current.length ?? 0, color: 'text-blue-700 border-blue-200 bg-blue-50' },
+              { key: 'current', label: '0–30d', count: salesData?.ageingDebtors.current.length ?? 0, color: 'text-slate-700 border-slate-200 bg-slate-50' },
             ].map((b) => (
               <button
                 key={b.key}
@@ -1380,7 +1390,7 @@ export function CompanyReportPage() {
                 className={cn(
                   'rounded-lg border px-2.5 py-1 text-xs font-medium transition-all',
                   selectedAgingBucket === b.key
-                    ? `${b.color} font-bold shadow-sm ring-1 ring-blue-300`
+                    ? `${b.color} font-bold shadow-sm ring-1 ring-slate-300`
                     : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
                 )}
               >
@@ -1403,11 +1413,11 @@ export function CompanyReportPage() {
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                 {(salesData?.ageingDebtors[selectedAgingBucket] ?? []).slice(0, 10).map((row) => (
-                  <tr key={row.id} className="hover:bg-blue-50/40 transition-colors">
+                  <tr key={row.id} className="hover:bg-slate-50/80 transition-colors">
                     <td className="px-3 py-2 text-slate-900 font-semibold">{row.name}</td>
                     <td className="px-3 py-2 text-right font-mono tabular-nums">
                       <span className={cn(
-                        'rounded px-1.5 py-0.5 text-[10px] font-bold',
+                        'rounded px-1.5 py-0.5 text-[11px] font-bold',
                         row.days > 90 ? 'bg-rose-50 text-rose-700 border border-rose-200' :
                         row.days > 60 ? 'bg-orange-50 text-orange-700 border border-orange-200' :
                         row.days > 30 ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-600'
@@ -1418,14 +1428,14 @@ export function CompanyReportPage() {
                     <td className="px-3 py-2 text-right font-mono text-slate-500 text-[11px]">
                       {formatFullDate(row.lastDate)}
                     </td>
-                    <td className="px-3 py-2 text-right font-mono font-bold tabular-nums text-blue-700">
+                    <td className="px-3 py-2 text-right font-mono font-bold tabular-nums text-slate-900">
                       {formatInrInteger(row.amount)}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <Link
                         to="/ledger"
                         search={{ tab: 'customers' }}
-                        className="rounded border border-blue-200 bg-white px-2 py-0.5 text-[11px] font-medium text-blue-700 transition hover:bg-blue-50"
+                        className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50 hover:text-slate-900"
                       >
                         Ledger
                       </Link>
@@ -1461,19 +1471,19 @@ export function CompanyReportPage() {
                 <th className="px-3 py-2.5 text-right">Sales Billed</th>
                 <th className="px-3 py-2.5 text-right">Collections</th>
                 <th className="px-3 py-2.5 text-right">Realization</th>
-                <th className="px-3 py-2.5 text-right">Scrap Purchases</th>
-                <th className="px-3 py-2.5 text-right">Supplier Payouts</th>
-                <th className="px-3 py-2.5 text-right">Net Operating Cash</th>
-                <th className="px-3 py-2.5 text-right">Finished Wire</th>
+                {purchaseEnabled && <th className="px-3 py-2.5 text-right">Scrap Purchases</th>}
+                {purchaseEnabled && <th className="px-3 py-2.5 text-right">Supplier Payouts</th>}
+                {purchaseEnabled && <th className="px-3 py-2.5 text-right">Net Operating Cash</th>}
+                {castingEnabled && <th className="px-3 py-2.5 text-right">Finished Wire</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
               {fy3YearBenchmark.map((fy) => (
-                <tr key={fy.label} className={cn('transition-colors', fy.isCurrent ? 'bg-blue-50/20 hover:bg-blue-50/50' : 'hover:bg-slate-50/60')}>
+                <tr key={fy.label} className={cn('transition-colors', fy.isCurrent ? 'bg-slate-50/70 hover:bg-slate-100/70' : 'hover:bg-slate-50/60')}>
                   <td className="whitespace-nowrap px-3 py-3 font-mono font-bold text-slate-900">
-                    {fy.label} {fy.isCurrent && <span className="ml-1 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">Current</span>}
+                    {fy.label} {fy.isCurrent && <span className="ml-1 rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold text-slate-700">Current</span>}
                   </td>
-                  <td className="px-3 py-3 text-right font-mono font-semibold tabular-nums text-blue-700">
+                  <td className="px-3 py-3 text-right font-mono font-semibold tabular-nums text-slate-900">
                     {formatInrInteger(fy.sales)}
                   </td>
                   <td className="px-3 py-3 text-right font-mono font-semibold tabular-nums text-emerald-700">
@@ -1482,21 +1492,21 @@ export function CompanyReportPage() {
                   <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-700">
                     {fy.efficiency.toFixed(1)}%
                   </td>
-                  <td className="px-3 py-3 text-right font-mono tabular-nums text-amber-700">
+                  {purchaseEnabled && <td className="px-3 py-3 text-right font-mono tabular-nums text-amber-700">
                     {formatInrInteger(fy.purchases)}
-                  </td>
-                  <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-700">
+                  </td>}
+                  {purchaseEnabled && <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-700">
                     {formatInrInteger(fy.paidOut)}
-                  </td>
-                  <td className={cn(
+                  </td>}
+                  {purchaseEnabled && <td className={cn(
                     'px-3 py-3 text-right font-mono font-bold tabular-nums',
                     fy.netCash >= 0 ? 'text-emerald-700' : 'text-rose-600'
                   )}>
                     {fy.netCash >= 0 ? `+${formatInrInteger(fy.netCash)}` : `-${formatInrInteger(Math.abs(fy.netCash))}`}
-                  </td>
-                  <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">
+                  </td>}
+                  {castingEnabled && <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">
                     {formatCompactKg(fy.wireOut)}
-                  </td>
+                  </td>}
                 </tr>
               ))}
             </tbody>

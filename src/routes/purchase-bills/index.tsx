@@ -12,10 +12,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { LogsPager, defaultLogFromDate, useLogsPager } from '@/components/logging/logs-shell'
 import { z } from 'zod'
 import { PurchasesShell } from '@/components/suppliers/purchases-shell'
-import {
-  BillChitty,
-  BillChittyKpiBox,
-} from '@/components/suppliers/bill-chitty'
+import { BillChitty } from '@/components/suppliers/bill-chitty'
 import { buildPurchaseBillPresentation } from '@/components/suppliers/purchase-bill-presentation'
 import { CancelBillModal } from '@/components/suppliers/bill-modals'
 import { PurchaseBillEditDialog } from '@/components/suppliers/purchase-bill-editor'
@@ -261,10 +258,7 @@ function PurchaseBillsPage() {
     () => buildPurchaseBillPresentation(detail, bundleQuery.data),
     [detail, bundleQuery.data],
   )
-  const settlementBillRow = presentation?.settlementBillRow
   const chittyData = presentation?.chitty
-
-  const duePaise = settlementBillRow?.duePaise ?? selected?.duePaise ?? 0
 
   const goto = (delta: number) => {
     const next = filteredBills[selectedIndex + delta]
@@ -700,10 +694,7 @@ function PurchaseBillsPage() {
             </div>
           ) : (
             <>
-              {/* SEPARATE CARD 1: PURCHASE INTELLIGENCE & BILL STATUS */}
-              <BillChittyKpiBox data={chittyData} duePaise={duePaise} />
-
-              {/* SEPARATE CARD 2: BILL CHITTY VOUCHER CARD */}
+              {/* Bill detail remains in the chitty; no duplicate settlement panel. */}
               <div className="flex-1 flex flex-col rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm min-h-0">
                 {/* Header Action Bar */}
                 <div className="mb-2.5 flex flex-wrap items-center justify-between gap-1.5 border-b border-slate-100 pb-2">

@@ -1,10 +1,9 @@
-import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
+import { buttonClass, inputClass as baseInputClass } from '@/components/ui/form-control-classes'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, isRedirect, redirect, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import { loadModuleSettingsForGuard } from '@/data/module-settings'
 import {
-  Boxes,
   Check,
   Download,
   Edit3,
@@ -13,19 +12,18 @@ import {
   Plus,
   Search,
   ShoppingBag,
-  Tag,
   ToggleLeft,
   ToggleRight,
-  Trash2,
   X,
-  Zap,
 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { invalidateAfterSupplierPurchaseWrite } from '@/app/query-invalidation'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { CastingItemsView } from '@/components/items/casting-items-view'
+import { ItemRowActions } from '@/components/items/item-row-actions'
 import { useModuleSettings } from '@/lib/use-module-settings'
 import {
   createItem,
@@ -47,7 +45,7 @@ import { purchaseBillsQueryOptions } from '@/data/purchase-queries'
 import { itemNameKey } from '@/domain/purchase-item-name'
 import { milliToRateText } from '@/domain/supplier-units'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
-import { formatInrInteger, formatPaiseInr, parseNonNegativeNumber } from '@/lib/inr-format'
+import { formatInrInteger, parseNonNegativeNumber } from '@/lib/inr-format'
 
 const searchSchema = z.object({
   tab: z.enum(['selling', 'purchase', 'casting']).optional(),
@@ -163,28 +161,19 @@ function UnifiedItemsPage() {
 
   const sellingCount = (sellingItemsQuery.data ?? []).length
   const purchaseCount = (purchaseItemsQuery.data ?? []).length
+  const sellingActiveCount = (sellingItemsQuery.data ?? []).filter((item) => item.active).length
+  const purchaseActiveCount = (purchaseItemsQuery.data ?? []).filter((item) => item.active).length
+  const sellingUsageCount = (sellingItemsQuery.data ?? []).reduce((total, item) => total + item.usageCount, 0)
 
   return (
-    <div className="w-full space-y-4 p-3 sm:p-5 max-w-[1600px] mx-auto">
-      {/* 1. TOP UNIFIED MODULE SWITCHER (Strictly Enclosed Inside Card) */}
-      <section className="rounded-xl border border-border bg-card p-3 sm:p-4 shadow-xs">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-950 flex items-center gap-2">
-              <Boxes size={20} className="text-primary" />
-              Unified Items Master
-            </h2>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Sale products, purchase scrap and casting materials in separate catalogs.
-            </p>
-          </div>
-
-          {/* Segmented Switcher Pill */}
-          <div className="inline-flex rounded-lg border border-border bg-secondary/50 p-1 text-xs">
+    <div className="mx-auto w-full max-w-screen-2xl space-y-3 p-3 sm:p-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-2 shadow-sm sm:p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="inline-flex max-w-full overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-1 text-xs">
             <button
               type="button"
               onClick={() => updateSearch({ tab: 'selling', q: undefined })}
-              className={`inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-xs font-semibold transition ${
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition ${
                 activeTab === 'selling'
                   ? 'bg-card text-foreground shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
@@ -193,7 +182,7 @@ function UnifiedItemsPage() {
               <ShoppingBag size={14} className={activeTab === 'selling' ? 'text-primary' : 'text-muted-foreground'} />
               <span>Sale Items</span>
               <span
-                className={`rounded-full px-2 py-0.2 text-[11px] font-bold ${
+                className={`rounded-full px-1.5 py-0.5 text-[11px] font-bold ${
                   activeTab === 'selling' ? 'bg-primary/10 text-primary' : 'bg-secondary text-muted-foreground'
                 }`}
               >
@@ -204,7 +193,7 @@ function UnifiedItemsPage() {
             {purchaseEnabled && <button
               type="button"
               onClick={() => updateSearch({ tab: 'purchase', q: undefined })}
-              className={`inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-xs font-semibold transition ${
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition ${
                 activeTab === 'purchase'
                   ? 'bg-card text-foreground shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
@@ -213,15 +202,18 @@ function UnifiedItemsPage() {
               <Package size={14} className={activeTab === 'purchase' ? 'text-blue-600' : 'text-muted-foreground'} />
               <span>Purchase Items</span>
               <span
-                className={`rounded-full px-2 py-0.2 text-[11px] font-bold ${
+                className={`rounded-full px-1.5 py-0.5 text-[11px] font-bold ${
                   activeTab === 'purchase' ? 'bg-blue-100 text-blue-800' : 'bg-secondary text-muted-foreground'
                 }`}
               >
                 {purchaseCount}
               </span>
             </button>}
-            {castingEnabled && <button type="button" onClick={() => updateSearch({ tab: 'casting', q: undefined })} className={`inline-flex items-center gap-2 rounded-md px-3.5 py-1.5 text-xs font-semibold ${activeTab === 'casting' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}><Flame size={14} /><span>Casting Items</span></button>}
+            {castingEnabled && <button type="button" onClick={() => updateSearch({ tab: 'casting', q: undefined })} className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold ${activeTab === 'casting' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}><Flame size={14} /><span>Casting</span></button>}
           </div>
+          <p className="font-mono text-xs tabular-nums text-slate-500">
+            {activeTab === 'selling' ? `${sellingActiveCount} active · ${sellingUsageCount} bill lines` : activeTab === 'purchase' ? `${purchaseActiveCount} active · ${purchaseCount} total` : 'Casting materials'}
+          </p>
         </div>
       </section>
 
@@ -250,6 +242,7 @@ function SellingItemsView() {
   const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'inactive'>('all')
 
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [formOpen, setFormOpen] = useState(false)
   const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; usageCount: number } | null>(null)
   const [name, setName] = useState('')
   const [defaultRateInput, setDefaultRateInput] = useState('0')
@@ -320,6 +313,7 @@ function SellingItemsView() {
     onSuccess: async () => {
       setStatusText(editingId ? 'Product item updated.' : 'Product item created.')
       resetForm()
+      setFormOpen(false)
       await queryClient.invalidateQueries({ queryKey: ITEMS_QUERY_KEY })
       await queryClient.invalidateQueries({ queryKey: ['items-options'] })
     },
@@ -374,8 +368,7 @@ function SellingItemsView() {
     groupManuallyEditedRef.current = true
     setUnit(item.unit)
     setBagWeightInput(String(item.bagWeight || 50))
-    // Scroll form into view
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    setFormOpen(true)
   }
 
   function updateType(nextType: string) {
@@ -400,109 +393,11 @@ function SellingItemsView() {
   }
 
   return (
-    <div className="space-y-4">
-      {/* 1. SELLING ITEMS KPI STRIP */}
-      <section className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
-        <button
-          type="button"
-          onClick={() => setTypeFilter('all')}
-          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
-            typeFilter === 'all'
-              ? 'border-primary bg-primary/5 ring-1 ring-primary'
-              : 'border-border bg-card'
-          }`}
-        >
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <ShoppingBag size={14} className="text-primary" /> Total Products
-            </span>
-            <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] font-bold text-muted-foreground">
-              Master
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
-            {kpis.total} <span className="text-xs font-semibold text-muted-foreground font-sans">items</span>
-          </p>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setTypeFilter('electronic')}
-          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
-            typeFilter === 'electronic'
-              ? 'border-blue-500 bg-blue-50/50 ring-1 ring-blue-500'
-              : 'border-border bg-card'
-          }`}
-        >
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <Zap size={14} className="text-blue-600" /> Electronic Parts
-            </span>
-            <span className="rounded bg-blue-50 border border-blue-200 px-1.5 py-0.5 text-[11px] font-bold text-blue-700 font-mono">
-              Piece
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-blue-700">
-            {kpis.electronicCount} <span className="text-xs font-semibold text-muted-foreground font-sans">items</span>
-          </p>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setTypeFilter('gas')}
-          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
-            typeFilter === 'gas'
-              ? 'border-amber-500 bg-amber-50/50 ring-1 ring-amber-500'
-              : 'border-border bg-card'
-          }`}
-        >
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <Flame size={14} className="text-amber-600" /> Gas Parts
-            </span>
-            <span className="rounded bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[11px] font-bold text-amber-800 font-mono">
-              Kg
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-amber-700">
-            {kpis.gasCount} <span className="text-xs font-semibold text-muted-foreground font-sans">items</span>
-          </p>
-        </button>
-
-        <div className="rounded-xl border border-border bg-card p-3 sm:p-4 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <Boxes size={14} className="text-emerald-600" /> Sales Bills Usage
-            </span>
-            <span className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[11px] font-bold text-emerald-700 font-mono">
-              Total
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
-            {kpis.totalUsage} <span className="text-xs font-semibold text-muted-foreground font-sans">bill lines</span>
-          </p>
-        </div>
-      </section>
-
-      {/* 2. ADD / EDIT SELLING ITEM FORM CARD */}
-      <section className="rounded-xl border border-border bg-card p-4 sm:p-5 shadow-xs space-y-3">
-        <div className="flex items-center justify-between border-b border-border/70 pb-2.5">
-          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
-            {editingId ? <Edit3 size={15} className="text-primary" /> : <Plus size={15} className="text-primary" />}
-            {editingId ? 'Edit Product Item' : 'Add New Selling Product'}
-          </h2>
-          {editingId && (
-            <button
-              type="button"
-              className="rounded-md border border-border bg-background px-2.5 py-1 text-xs font-semibold text-muted-foreground hover:bg-secondary hover:text-foreground transition"
-              onClick={resetForm}
-            >
-              Cancel Edit
-            </button>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_150px_160px_150px_120px_130px_auto]">
+    <div className="space-y-3">
+      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) resetForm() }}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogTitle className="text-base font-semibold text-slate-900">{editingId ? 'Edit Sale Item' : 'Add Sale Item'}</DialogTitle>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {/* Item Name */}
           <label className="flex flex-col gap-1">
             <span className="text-[11px] font-semibold text-muted-foreground">Item Name *</span>
@@ -570,17 +465,17 @@ function SellingItemsView() {
               />
             </label>
           ) : (
-            <div className="hidden xl:block" />
+            <div className="hidden sm:block" />
           )}
 
           {/* Form Actions */}
-          <div className="flex items-end gap-1.5 pt-1">
+          <div className="flex items-end justify-end gap-1.5 pt-1 sm:col-span-2">
             <button
               type="button"
               className="h-9 rounded-md border border-border bg-card px-3 text-xs font-semibold text-muted-foreground hover:bg-secondary hover:text-foreground transition"
-              onClick={resetForm}
+              onClick={() => { setFormOpen(false); resetForm() }}
             >
-              Clear
+              Cancel
             </button>
             <button
               type="button"
@@ -594,12 +489,9 @@ function SellingItemsView() {
           </div>
         </div>
 
-        {statusText && (
-          <p className="text-xs text-muted-foreground italic px-0.5" role="status">
-            {statusText}
-          </p>
-        )}
-      </section>
+          {statusText && <p className="text-xs text-muted-foreground" role="status">{statusText}</p>}
+        </DialogContent>
+      </Dialog>
 
       {/* 3. TOOLBAR CARD (Search, Type Filter & CSV) */}
       <section className="rounded-xl border border-border bg-card p-3 shadow-xs space-y-2.5">
@@ -660,11 +552,15 @@ function SellingItemsView() {
           >
             <Download size={13} /> CSV
           </button>
+          <button type="button" onClick={() => { resetForm(); setFormOpen(true) }} className={`${buttonClass('primary')} h-9 shrink-0 text-xs`}>
+            <Plus size={14} /> Add item
+          </button>
         </div>
+        {statusText && !formOpen && <p role="status" className="text-xs text-slate-600">{statusText}</p>}
       </section>
 
       {/* 4. MAIN SELLING PRODUCTS TABLE CARD */}
-      <section className="rounded-xl border border-border bg-card p-4 sm:p-5 shadow-xs overflow-hidden">
+      <section className="rounded-xl border border-border bg-card p-3 shadow-xs overflow-hidden">
         <div className="mb-3 flex justify-end"><select aria-label="Filter Sale items by status" value={activeFilter} onChange={(event) => setActiveFilter(event.target.value as typeof activeFilter)} className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs"><option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
         {itemsQuery.isLoading ? (
           <div className="py-16 text-center text-sm text-muted-foreground animate-pulse">
@@ -675,15 +571,15 @@ function SellingItemsView() {
             <table className="w-full min-w-[940px] text-xs">
               <thead>
                 <tr className="border-b border-border bg-secondary/40 text-left text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                  <th className="px-3.5 py-2.5">Item Name</th>
-                  <th className="px-3.5 py-2.5">Report Group</th>
-                  <th className="px-3.5 py-2.5 text-right">Default Rate</th>
-                  <th className="px-3.5 py-2.5">Part Type</th>
-                  <th className="px-3.5 py-2.5">Unit</th>
-                  <th className="px-3.5 py-2.5 text-right">Usage Count</th>
-                  <th className="px-3.5 py-2.5 text-left">Last Billed</th>
-                  <th className="px-3.5 py-2.5">Status</th>
-                  <th className="px-3.5 py-2.5 text-right">Actions</th>
+                  <th className="px-3 py-2">Item Name</th>
+                  <th className="px-3 py-2">Report Group</th>
+                  <th className="px-3 py-2 text-right">Default Rate</th>
+                  <th className="px-3 py-2">Part Type</th>
+                  <th className="px-3 py-2">Unit</th>
+                  <th className="px-3 py-2 text-right">Usage Count</th>
+                  <th className="px-3 py-2 text-left">Last Billed</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -696,16 +592,16 @@ function SellingItemsView() {
                 ) : (
                   filteredItems.map((item) => (
                     <tr key={item.id} className="transition hover:bg-secondary/30">
-                      <td className="px-3.5 py-3 font-bold text-sm text-foreground">
+                      <td className="px-3 py-2 font-bold text-sm text-foreground">
                         {item.name}
                       </td>
-                      <td className="px-3.5 py-3 font-medium text-muted-foreground">
+                      <td className="px-3 py-2 font-medium text-muted-foreground">
                         {item.group || '—'}
                       </td>
-                      <td className="px-3.5 py-3 text-right font-mono text-xs font-semibold tabular-nums text-foreground">
+                      <td className="px-3 py-2 text-right font-mono text-xs font-semibold tabular-nums text-foreground">
                         ₹{formatInrInteger(item.defaultRate)}
                       </td>
-                      <td className="px-3.5 py-3">
+                      <td className="px-3 py-2">
                         <span
                           className={`rounded px-2 py-0.5 text-[11px] font-bold uppercase ${
                             item.type === 'electronic'
@@ -716,47 +612,29 @@ function SellingItemsView() {
                           {formatItemType(item.type)}
                         </span>
                       </td>
-                      <td className="px-3.5 py-3 font-medium text-foreground">
+                      <td className="px-3 py-2 font-medium text-foreground">
                         {item.unit || '—'}
                         {item.type === 'gas' && item.bagWeight ? ` (${item.bagWeight}kg/bag)` : ''}
                       </td>
-                      <td className="px-3.5 py-3 text-right font-mono text-xs tabular-nums text-foreground">
+                      <td className="px-3 py-2 text-right font-mono text-xs tabular-nums text-foreground">
                         {item.usageCount > 0 ? (
                           <span className="font-semibold">{item.usageCount} bills</span>
                         ) : (
                           <span className="text-muted-foreground">0</span>
                         )}
                       </td>
-                      <td className="px-3.5 py-3 font-mono text-xs text-muted-foreground">
+                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
                         {item.lastUsedDate ? formatFullDate(item.lastUsedDate) : '—'}
                       </td>
-                      <td className="px-3.5 py-3 text-xs">{item.active ? 'Active' : 'Inactive'}</td>
-                      <td className="px-3.5 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            onClick={() => startEdit(item)}
-                            className="inline-flex h-7 items-center gap-1 rounded border border-border bg-card px-2.5 text-[11px] font-semibold text-foreground hover:bg-secondary transition"
-                            title="Edit product item"
-                          >
-                            <Edit3 size={12} /> Edit
-                          </button>
-                          <button type="button" onClick={() => toggleSaleActive.mutate({ id: item.id, active: !item.active })} className="inline-flex h-7 items-center rounded border border-slate-300 bg-white px-2 text-[11px] text-slate-700">{item.active ? 'Deactivate' : 'Activate'}</button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setItemToDelete({
-                                id: item.id,
-                                name: item.name,
-                                usageCount: item.usageCount,
-                              })
-                            }
-                            className="inline-flex h-7 items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 transition"
-                            title="Delete item"
-                          >
-                            <Trash2 size={12} /> Delete
-                          </button>
-                        </div>
+                      <td className="px-3 py-2 text-xs">{item.active ? 'Active' : 'Inactive'}</td>
+                      <td className="px-3 py-2 text-right">
+                        <ItemRowActions
+                          name={item.name}
+                          active={item.active}
+                          onEdit={() => startEdit(item)}
+                          onToggleActive={() => toggleSaleActive.mutate({ id: item.id, active: !item.active })}
+                          onDelete={() => setItemToDelete({ id: item.id, name: item.name, usageCount: item.usageCount })}
+                        />
                       </td>
                     </tr>
                   ))
@@ -837,6 +715,7 @@ function PurchaseItemsView() {
   const [query, setQuery] = useState(searchParams.q ?? '')
   const [filter, setFilter] = useState<PurchaseItemFilter>(searchParams.purchaseFilter ?? 'all')
   const [newItemName, setNewItemName] = useState('')
+  const [addOpen, setAddOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [editingAliases, setEditingAliases] = useState('')
@@ -945,6 +824,7 @@ function PurchaseItemsView() {
     mutationFn: async (name: string) => createPurchaseItem(name),
     onSuccess: async () => {
       setNewItemName('')
+      setAddOpen(false)
       setStatusText('Scrap item created successfully.')
       await invalidateAfterSupplierPurchaseWrite(queryClient)
     },
@@ -1000,96 +880,7 @@ function PurchaseItemsView() {
   const isLoading = itemsQuery.isLoading || billsQuery.isLoading
 
   return (
-    <div className="space-y-4">
-      {/* 1. TOP INTERACTIVE KPI CARDS */}
-      <section className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
-        <button
-          type="button"
-          onClick={() => setFilter('all')}
-          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
-            filter === 'all'
-              ? 'border-primary bg-primary/5 ring-1 ring-primary'
-              : 'border-border bg-card'
-          }`}
-          title="Click to view all scrap items"
-        >
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <Boxes size={14} className="text-primary" /> Total Scrap Catalog
-            </span>
-            <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] font-bold text-muted-foreground">
-              All
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
-            {kpis.totalItems} <span className="text-xs font-semibold text-muted-foreground font-sans">scrap items</span>
-          </p>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setFilter('active')}
-          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
-            filter === 'active'
-              ? 'border-emerald-500 bg-emerald-50/50 ring-1 ring-emerald-500'
-              : 'border-border bg-card'
-          }`}
-          title="Click to view active scrap items"
-        >
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <Tag size={14} className="text-emerald-600" /> Active Scrap
-            </span>
-            <span className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[11px] font-bold text-emerald-700 font-mono">
-              Live
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-emerald-700">
-            {kpis.activeCount} <span className="text-xs font-semibold text-muted-foreground font-sans">in pickers</span>
-          </p>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setFilter('inactive')}
-          className={`text-left rounded-xl border p-3 sm:p-4 shadow-xs transition hover:opacity-95 ${
-            filter === 'inactive'
-              ? 'border-amber-500 bg-amber-50/50 ring-1 ring-amber-500'
-              : 'border-border bg-card'
-          }`}
-          title="Click to view inactive scrap items"
-        >
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <Package size={14} className="text-amber-600" /> Inactive / Archived
-            </span>
-            <span className="rounded bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[11px] font-bold text-amber-800 font-mono">
-              Hidden
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-amber-700">
-            {kpis.inactiveCount} <span className="text-xs font-semibold text-muted-foreground font-sans">archived</span>
-          </p>
-        </button>
-
-        <div className="rounded-xl border border-border bg-card p-3 sm:p-4 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-muted-foreground text-xs font-semibold">
-            <span className="flex items-center gap-1.5 uppercase tracking-wider text-[11px] sm:text-[11px]">
-              <Package size={14} className="text-blue-600" /> Total Procured
-            </span>
-            <span className="rounded bg-blue-50 border border-blue-200 px-1.5 py-0.5 text-[11px] font-bold text-blue-700 font-mono">
-              Volume
-            </span>
-          </div>
-          <p className="mt-2 font-mono text-xl sm:text-2xl font-extrabold tracking-tight text-foreground">
-            {fmtKg(kpis.totalKg)}{' '}
-            <span className="text-xs font-semibold text-muted-foreground font-sans">
-              ({formatPaiseInr(kpis.totalSpendPaise)})
-            </span>
-          </p>
-        </div>
-      </section>
-
+    <div className="space-y-3">
       {/* 2. FILTER & ADD TOOLBAR CARD (Strictly Enclosed Inside Card) */}
       <section className="rounded-xl border border-border bg-card p-3 shadow-xs space-y-3">
         <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
@@ -1150,41 +941,48 @@ function PurchaseItemsView() {
               <X size={13} /> Clear
             </button>
           )}
+          <button type="button" onClick={() => setAddOpen(true)} className={`${buttonClass('primary')} h-9 shrink-0 text-xs`}>
+            <Plus size={14} /> Add item
+          </button>
         </div>
+        {statusText && <p className="text-xs text-slate-600" role="status">{statusText}</p>}
+      </section>
 
-        {/* Quick Add Scrap Item Form */}
-        <form
-          className="flex items-center gap-2 border-t border-border/70 pt-2.5"
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogTitle className="text-base font-semibold text-slate-900">Add Purchase Item</DialogTitle>
+          <form
+          className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault()
             const trimmed = newItemName.trim()
             if (trimmed) createMutation.mutate(trimmed)
           }}
         >
+          <label className="block text-xs font-medium text-slate-600">Item name
           <input
             value={newItemName}
             onChange={(e) => setNewItemName(e.target.value)}
-            placeholder="Add new scrap grade (e.g. Brass Scrap, Copper Armor, Sisu)… and press Enter"
-            className="h-9 flex-1 rounded-md border border-border bg-background px-3 text-xs text-foreground outline-none transition placeholder:text-muted-foreground focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
+            placeholder="e.g. Brass Scrap"
+            className={`${inputClass} mt-1`}
           />
+          </label>
+          <div className="flex justify-end gap-2">
+          <button type="button" onClick={() => setAddOpen(false)} className={`${buttonClass('secondary')} h-9 text-xs`}>Cancel</button>
           <button
             type="submit"
             disabled={!newItemName.trim() || createMutation.isPending}
-            className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 sm:px-4 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90 disabled:opacity-50 shrink-0"
+            className={`${buttonClass('primary')} h-9 text-xs`}
           >
             <Plus size={14} /> Add Item
           </button>
+          </div>
         </form>
-
-        {statusText && (
-          <p className="text-xs text-muted-foreground italic px-1" role="status">
-            {statusText}
-          </p>
-        )}
-      </section>
+        </DialogContent>
+      </Dialog>
 
       {/* 3. MAIN TABLE CARD */}
-      <section className="rounded-xl border border-border bg-card p-4 sm:p-5 shadow-xs overflow-hidden">
+      <section className="rounded-xl border border-border bg-card p-3 shadow-xs overflow-hidden">
         {isLoading ? (
           <div className="py-16 text-center text-sm text-muted-foreground animate-pulse">
             Loading scrap items catalog…
@@ -1194,14 +992,14 @@ function PurchaseItemsView() {
             <table className="w-full min-w-[840px] text-xs">
               <thead>
                 <tr className="border-b border-border bg-secondary/40 text-left text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                  <th className="px-3.5 py-2.5">Scrap Item Name</th>
-                  <th className="px-3.5 py-2.5">Status</th>
-                  <th className="px-3.5 py-2.5 text-right">Bills Used</th>
-                  <th className="px-3.5 py-2.5 text-right">30D Weight</th>
-                  <th className="px-3.5 py-2.5 text-right">Total Weight</th>
-                  <th className="px-3.5 py-2.5 text-right">Avg Buy Rate</th>
-                  <th className="px-3.5 py-2.5 text-right">Last Purchase Rate</th>
-                  <th className="px-3.5 py-2.5 text-right">Actions</th>
+                  <th className="px-3 py-2">Scrap Item Name</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2 text-right">Bills Used</th>
+                  <th className="px-3 py-2 text-right">30D Weight</th>
+                  <th className="px-3 py-2 text-right">Total Weight</th>
+                  <th className="px-3 py-2 text-right">Avg Buy Rate</th>
+                  <th className="px-3 py-2 text-right">Last Purchase Rate</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -1227,7 +1025,7 @@ function PurchaseItemsView() {
                         className={`transition hover:bg-secondary/30 ${item.active ? '' : 'opacity-70 bg-secondary/10'}`}
                       >
                         {/* Item Name & Quick Rename */}
-                        <td className="px-3.5 py-3 font-medium text-foreground">
+                        <td className="px-3 py-2 font-medium text-foreground">
                           {isEditing ? (
                             <div className="flex flex-wrap items-center gap-1.5">
                               <input
@@ -1270,7 +1068,7 @@ function PurchaseItemsView() {
                           ) : (
                             <div className="flex items-center gap-2">
                               <span className="font-bold text-sm text-foreground">{item.name}</span>
-                              {item.aliases && <span className="max-w-48 truncate text-xs text-muted-foreground" title={item.aliases}>· {item.aliases.replace(/\n/g, ", ")}</span>}
+                              {item.aliases && <span className="max-w-48 truncate text-xs text-muted-foreground" title={item.aliases}>· {item.aliases.replace(/\n/g, ', ')}</span>}
                               <button
                                 type="button"
                                 aria-label={`Rename ${item.name}`}
@@ -1290,7 +1088,7 @@ function PurchaseItemsView() {
                         </td>
 
                         {/* Status Toggle Switch Badge */}
-                        <td className="whitespace-nowrap px-3.5 py-3">
+                        <td className="whitespace-nowrap px-3 py-2">
                           <button
                             type="button"
                             role="switch"
@@ -1319,7 +1117,7 @@ function PurchaseItemsView() {
                         </td>
 
                         {/* Bills Count */}
-                        <td className="whitespace-nowrap px-3.5 py-3 text-right font-mono text-xs tabular-nums text-foreground">
+                        <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums text-foreground">
                           {stats.billCount > 0 ? (
                             <span className="font-semibold">{stats.billCount} bills</span>
                           ) : (
@@ -1328,17 +1126,17 @@ function PurchaseItemsView() {
                         </td>
 
                         {/* 30D Weight */}
-                        <td className="whitespace-nowrap px-3.5 py-3 text-right font-mono text-xs tabular-nums text-foreground">
+                        <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums text-foreground">
                           {fmtKg(stats.kgLast30d)}
                         </td>
 
                         {/* Total Weight */}
-                        <td className="whitespace-nowrap px-3.5 py-3 text-right font-mono text-xs font-semibold tabular-nums text-foreground">
+                        <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs font-semibold tabular-nums text-foreground">
                           {fmtKg(stats.allTimeKg)}
                         </td>
 
                         {/* Avg Buy Rate */}
-                        <td className="whitespace-nowrap px-3.5 py-3 text-right font-mono text-xs tabular-nums">
+                        <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums">
                           {avgRate > 0 ? (
                             <span className="rounded bg-blue-50 px-2 py-0.5 font-bold text-blue-700 border border-blue-200">
                               {fmtRate(avgRate)}
@@ -1349,7 +1147,7 @@ function PurchaseItemsView() {
                         </td>
 
                         {/* Last Rate */}
-                        <td className="whitespace-nowrap px-3.5 py-3 text-right font-mono text-xs tabular-nums">
+                        <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-xs tabular-nums">
                           {stats.lastRateMilli != null ? (
                             <div>
                               <span className="font-bold text-foreground">
@@ -1367,45 +1165,14 @@ function PurchaseItemsView() {
                         </td>
 
                         {/* Row Actions */}
-                        <td className="whitespace-nowrap px-3.5 py-3 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingId(item.id)
-                                setEditingName(item.name)
-                                setRowError('')
-                              }}
-                              className="inline-flex h-7 items-center gap-1 rounded border border-border bg-card px-2 text-[11px] font-semibold text-foreground hover:bg-secondary transition"
-                              title="Rename item"
-                            >
-                              <Edit3 size={12} /> Rename
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => toggleActiveMutation.mutate({ id: item.id, active: !item.active })}
-                              className="inline-flex h-7 items-center rounded border border-border bg-card px-2 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition"
-                              title={item.active ? 'Deactivate item' : 'Activate item'}
-                            >
-                              {item.active ? 'Deactivate' : 'Activate'}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setItemToDelete({
-                                  id: item.id,
-                                  name: item.name,
-                                  billCount: stats.billCount,
-                                })
-                              }
-                              className="inline-flex h-7 items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 transition"
-                              title="Delete item"
-                            >
-                              <Trash2 size={12} /> Delete
-                            </button>
-                          </div>
+                        <td className="whitespace-nowrap px-3 py-2 text-right">
+                          <ItemRowActions
+                            name={item.name}
+                            active={item.active}
+                            onEdit={() => { setEditingId(item.id); setEditingName(item.name); setRowError('') }}
+                            onToggleActive={() => toggleActiveMutation.mutate({ id: item.id, active: !item.active })}
+                            onDelete={() => setItemToDelete({ id: item.id, name: item.name, billCount: stats.billCount })}
+                          />
                         </td>
                       </tr>
                     )

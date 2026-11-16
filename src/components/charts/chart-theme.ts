@@ -1,14 +1,19 @@
 /**
  * Unified chart palette & theme configuration for Kapil Billing dashboards.
- * Aligned with the executive blue identity (#2563eb) and semantic state mapping.
+ * Strictly aligned with Kapil design tokens: calm surfaces, slate dividers,
+ * semantic color map, and accessible contrast.
  */
 
 export const CHART_THEME = {
   colors: {
-    primary: '#2563eb', // blue-600 (sales, bought, wire out, our rate)
-    secondary: '#059669', // emerald-600 (collections, paid out, metal in)
+    primary: '#0f172a', // slate-900
+    secondary: '#2563eb', // shared chart fallback
+    sales: '#2563eb', // blue-600 (sales billed)
+    collections: '#059669', // emerald-600 (collections received)
+    purchases: '#d97706', // amber-600 (scrap bought)
+    payouts: '#64748b', // slate-500 (disbursed out)
     benchmark: '#94a3b8', // slate-400 dashed (vilaity market benchmark)
-    warning: '#f59e0b', // amber-500
+    warning: '#d97706', // amber-600
     danger: '#e11d48', // rose-600
     neutral: '#64748b', // slate-500
     grid: '#f1f5f9', // slate-100
@@ -18,15 +23,15 @@ export const CHART_THEME = {
     emerald: '#059669',
   },
   ageing: {
-    b0to30: '#3b82f6', // blue-500 (matching company-charts.tsx)
-    b31to60: '#f59e0b', // amber-500
-    b60plus: '#e11d48', // rose-600
+    b0to30: '#3b82f6', // blue-500 (current receivables)
+    b31to60: '#d97706', // amber-600 (watch period)
+    b60plus: '#e11d48', // rose-600 (overdue risk)
   },
   donut: [
-    '#2563eb', // blue-600 (primary)
-    '#059669', // emerald-600 (secondary / healthy)
-    '#3b82f6', // blue-500
-    '#f59e0b', // amber-500
+    '#0f172a', // slate-900
+    '#2563eb', // blue-600
+    '#059669', // emerald-600
+    '#d97706', // amber-600
     '#64748b', // slate-500
     '#94a3b8', // slate-400
   ],
@@ -36,9 +41,9 @@ export const CHART_THEME = {
   },
   tooltipStyle: {
     backgroundColor: '#ffffff',
-    border: '1px solid #bfdbfe',
+    border: '1px solid #e2e8f0',
     borderRadius: '0.5rem',
-    boxShadow: '0 4px 6px -1px rgb(37 99 235 / 0.08)',
+    boxShadow: '0 4px 6px -1px rgb(15 23 42 / 0.08)',
     fontSize: '11px',
     padding: '8px 12px',
     color: '#0f172a',

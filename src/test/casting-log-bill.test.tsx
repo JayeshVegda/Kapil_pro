@@ -5,7 +5,7 @@ import { CastingTicket, summarizeMaterials } from '@/components/casting/casting-
 import { CastingLogPage } from '@/routes/casting/log'
 import { CastingBillPage } from '@/routes/casting/bill'
 
-// Phase 4 — casting log toolbar, shared CastingTicket, and bill calm cards.
+// Casting log toolbar and a single shared on-screen/print chitty.
 // The ticket renders only stored session columns, so the same component backs
 // the log "View" modal and the printed bill page output.
 
@@ -70,10 +70,10 @@ describe('CastingTicket (Phase 4)', () => {
 
     // Header facts straight from the record
     expect(html).toContain('Kapil Products')
-    expect(html).toContain('Furnace session cost sheet')
+    expect(html).toContain('Casting Chitty')
     expect(html).toContain('05-11-2026')
-    expect(html).toContain('Session ID:')
-    expect(html).toContain('5 runs')
+    expect(html).toContain('sess_abc')
+    expect(html).toContain('Batches')
 
     // Material rows summarized for display, money total from the record
     expect(html).toContain('Brass')
@@ -82,9 +82,10 @@ describe('CastingTicket (Phase 4)', () => {
     expect(html).toContain('24,000')
 
     // Overhead + final ticket columns — stored, not recomputed
-    expect(html).toContain('40.0 kg × ₹12.00')
-    expect(html).toContain('₹40.00/kg')
-    expect(html).toContain('₹95.00/kg')
+    expect(html).toContain('40.0 kg')
+    expect(html).toContain('₹12.00')
+    expect(html).toContain('₹40.00')
+    expect(html).toContain('₹95.00')
   })
 
   it('summarizes material inputs by name', () => {
@@ -122,7 +123,7 @@ describe('Casting Log (Phase 4)', () => {
 })
 
 describe('Casting Bill (Phase 4)', () => {
-  it('renders filter + compact list on the left and calm cards plus hidden shared ticket on the right', async () => {
+  it('renders filters and the shared chitty directly on the right', async () => {
     state.queryData.set('casting-sessions', [session])
     const html = await renderPage(<CastingBillPage />)
 
@@ -137,15 +138,11 @@ describe('Casting Bill (Phase 4)', () => {
     expect(html).toContain('batches •')
     expect(html).toContain('Metal cost')
 
-    // Right side calm cards
-    expect(html).toContain('Output &amp; yield')
-    expect(html).toContain('Inputs by material')
-    expect(html).toContain('Overhead &amp; final cost')
-    expect(html).toContain('Print ticket')
-    expect(html).toContain('Yield')
-
-    // The printed ticket is the shared component, present but held for print
-    expect(html).toContain('hidden print:block')
-    expect(html).toContain('Furnace session cost sheet')
+    expect(html).toContain('Print chitty')
+    expect(html).toContain('Casting Chitty')
+    expect(html).toContain('Material charged')
+    expect(html).toContain('Furnace and labour')
+    expect(html).toContain('Final product cost')
+    expect(html).not.toContain('hidden print:block')
   })
 })
