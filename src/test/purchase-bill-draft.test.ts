@@ -47,6 +47,16 @@ describe('purchase bill draft validation', () => {
     })
   })
 
+  it('marks contradictory pool and tax mode invalid without silent coercion', () => {
+    const line = { item_name: 'Brass Scrap', weight_kg: '1', rate_rs_per_kg: '395' }
+    const base = { supplier_name: 'Scrap Supplier', date: '2026-11-15', lines: [line] }
+    expect(parsePurchaseBillDraft(2, { ...base, pool: 'gst', tax_mode: 'none' })).toMatchObject({ kind: 'invalid', issues: [expect.stringContaining('GST pool')] })
+    for (const tax_mode of ['gst', 'rcm']) {
+      expect(parsePurchaseBillDraft(2, { ...base, pool: 'kacha', tax_mode })).toMatchObject({ kind: 'invalid', issues: [expect.stringContaining('Kacha pool')] })
+    }
+    expect(parsePurchaseBillDraft(1, { ...draft, pool: 'kacha', tax_mode: 'gst' }).kind).toBe('invalid')
+  })
+
   it('rejects excess decimals, exponent notation and unsafe magnitudes', () => {
     expect(() => parsePurchaseDecimal('1.0001', 3, 'Weight')).toThrow('at most 3')
     expect(() => parsePurchaseDecimal('1.001', 2, 'Amount')).toThrow('at most 2')

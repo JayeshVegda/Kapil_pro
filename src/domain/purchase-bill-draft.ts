@@ -136,6 +136,8 @@ function invalid(issues: z.core.$ZodIssue[]): { kind: 'invalid'; issues: string[
 
 function validateLineMath(value: PurchaseBillDraftPayloadV1) {
   try {
+    if (value.pool === 'gst' && value.tax_mode === 'none') throw new Error('GST pool requires gst or rcm tax_mode')
+    if (value.pool === 'kacha' && value.tax_mode !== 'none') throw new Error('Kacha pool requires none tax_mode')
     for (const line of value.lines) calculateDraftLinePaise(line.weight_g, line.rate_milli)
     return { kind: 'valid' as const, value }
   } catch (error) {
@@ -160,6 +162,8 @@ export function parsePurchaseBillDraft(schemaVersion: unknown, payload: unknown)
     // draft's bag weight from unstructured note text or silently strip that text.
     if (p.private_note?.includes('[bags_at_receipt:')) throw new Error('Use bags_at_receipt for bag weight; remove the reserved tag from private_note')
     const pool = p.pool ?? 'kacha'
+    if (pool === 'gst' && p.tax_mode === 'none') throw new Error('GST pool requires gst or rcm tax_mode')
+    if (pool === 'kacha' && p.tax_mode != null && p.tax_mode !== 'none') throw new Error('Kacha pool requires none tax_mode')
     const taxMode = pool === 'kacha' ? 'none' : (p.tax_mode === 'rcm' ? 'rcm' : 'gst')
     const value: PurchaseBillDraftPayloadV1 = {
       supplier_id: p.supplier_id, supplier_name: p.supplier_name, date: p.date,
