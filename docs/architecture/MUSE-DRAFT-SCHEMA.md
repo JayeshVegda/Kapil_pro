@@ -40,6 +40,8 @@ Decimal inputs are **strings**. The app converts them to integer `weight_g`, `ra
   "pool": "kacha",
   "tax_mode": "none",
   "supplier_bill_no": "SMT-225",
+  "vehicle_no": "GJ-10-AB-1234",
+  "bags_at_receipt": "2.500",
   "private_note": "Weighed at intake",
   "lines": [{
     "item_name": "Brass Scrap",
@@ -55,7 +57,7 @@ Decimal inputs are **strings**. The app converts them to integer `weight_g`, `ra
 }
 ```
 
-Optional fields include `gst_rate_bp`, `vehicle_no`, `stated_total_rs`, and line/bardan notes. Allowed tax modes: `none`, `gst`, `rcm`; allowed on-bill payment modes: `cash`, `upi`, `rtgs`, `neft`, `cheque`, `other`; adjustment types: `labour`, `transport`, `quality_cut`, `other`; bardan methods: `deduct`, `in_kind`, `cash_back`, `advance`. Keep `private_note` free of the reserved `[bags_at_receipt:...]` token: the editor strips that syntax and may discard literal note text. Owner must verify GST pool and tax selection.
+Optional fields include `gst_rate_bp`, `vehicle_no`, `bags_at_receipt` (kg decimal string, up to three places), `stated_total_rs`, and line/bardan notes. Allowed tax modes: `none`, `gst`, `rcm`; allowed on-bill payment modes: `cash`, `upi`, `rtgs`, `neft`, `cheque`, `other`; adjustment types: `labour`, `transport`, `quality_cut`, `other`; bardan methods: `deduct`, `in_kind`, `cash_back`, `advance`. Pool and tax mode must agree. Bank payment modes require a reference. `private_note` containing the reserved `[bags_at_receipt:...]` token is rejected; use the typed field. Owner must verify GST pool and tax selection.
 
 ## Purchase payment v1
 

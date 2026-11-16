@@ -561,6 +561,7 @@ Versioned proposals. `created_by` is set from authentication, not trusted from t
   "tax_mode": "none",
   "supplier_bill_no": "SMT-225",
   "vehicle_no": "GJ-10-TX-4402",
+  "bags_at_receipt": "2.500",
   "private_note": "Weighed at intake",
   "lines": [{
     "item_name": "Brass Scrap",
@@ -575,7 +576,7 @@ Versioned proposals. `created_by` is set from authentication, not trusted from t
   "payment": { "amount_rs": "5000.00", "mode": "neft", "reference": "UTR12345" }
 }
 ```
-The v2 parser converts strings to integer grams, milli-rupees, and paise. Omitted `pool` defaults to `kacha`; GST-pool `tax_mode` defaults to `gst`. `stated_total_rs`, `gst_rate_bp`, and optional notes may also be supplied. No `in_no` or market premium is accepted. `private_note` must not contain the reserved `[bags_at_receipt:...]` tag; see collision risk below.
+The v2 parser converts strings to integer grams, milli-rupees, and paise. Omitted `pool` defaults to `kacha`; GST-pool `tax_mode` defaults to `gst`. Optional `bags_at_receipt` is a kg decimal string (up to three places) that populates the editor's bag-weight field. `vehicle_no`, `stated_total_rs`, `gst_rate_bp`, and notes may also be supplied. No `in_no` or market premium is accepted. Contradictory pool/tax modes and a reserved `[bags_at_receipt:...]` tag in `private_note` make the draft invalid.
 
 **Purchase payment payload, `schema_version: 1`:**
 ```json
@@ -595,7 +596,7 @@ The v2 parser converts strings to integer grams, milli-rupees, and paise. Omitte
 ```
 Only four kinds are valid in drafts: `payment`, `paid_on_behalf`, `settle_off`, `refund_received`. Live `bardan_advance` is generated from bill entries and is not accepted in payment drafts. `pool` defaults to `kacha`; `mode` is optional and must be chosen by the owner before save.
 
-**Private-note collision:** The bill editor copies draft `private_note` into its note field, then `formatPrivateNoteWithBags()` strips any `[bags_at_receipt:...]` token and regenerates the tag from a separate bags input. Drafts do not prefill that bags input, so a tag embedded in draft note is lost. Keep the tag out of Muse text; a future fix should model bags-at-receipt as a dedicated typed field and escape literal note text.
+**Private-note boundary:** Muse must send bag weight in `bags_at_receipt`, never inside `private_note`. The parser rejects the reserved tag, and the editor writes its internal bag metadata from the typed field.
 
 ---
 
