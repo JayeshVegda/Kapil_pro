@@ -62,6 +62,7 @@ export const purchaseBillDraftPayloadV1 = z.strictObject({
   tax_mode: z.enum(['none', 'gst', 'rcm']),
   gst_rate_bp: nonnegativeInteger.optional(),
   vehicle_no: z.string().trim().optional(),
+  bags_at_receipt_g: nonnegativeInteger.optional(),
   private_note: z.string().optional(),
   lines: z.array(z.strictObject({
     item_id: id.optional(),
@@ -106,7 +107,7 @@ export const purchaseBillDraftPayloadV2 = z.strictObject({
   pool: z.enum(['kacha', 'gst']).optional(),
   tax_mode: z.enum(['none', 'gst', 'rcm']).optional(),
   gst_rate_bp: nonnegativeInteger.optional(),
-  vehicle_no: z.string().trim().optional(), private_note: z.string().optional(),
+  vehicle_no: z.string().trim().optional(), bags_at_receipt: decimal.optional(), private_note: z.string().optional(),
   stated_total_rs: decimal.optional(),
   lines: z.array(z.strictObject({
     item_id: id.optional(), item_name: z.string().trim().min(1),
@@ -155,12 +156,17 @@ export function parsePurchaseBillDraft(schemaVersion: unknown, payload: unknown)
   if (!parsed.success) return invalid(parsed.error.issues)
   const p = parsed.data
   try {
+    // The live bill reserves this tag for its own memo metadata. Never infer a
+    // draft's bag weight from unstructured note text or silently strip that text.
+    if (p.private_note?.includes('[bags_at_receipt:')) throw new Error('Use bags_at_receipt for bag weight; remove the reserved tag from private_note')
     const pool = p.pool ?? 'kacha'
     const taxMode = pool === 'kacha' ? 'none' : (p.tax_mode === 'rcm' ? 'rcm' : 'gst')
     const value: PurchaseBillDraftPayloadV1 = {
       supplier_id: p.supplier_id, supplier_name: p.supplier_name, date: p.date,
       supplier_bill_no: p.supplier_bill_no, pool, tax_mode: taxMode,
-      gst_rate_bp: p.gst_rate_bp, vehicle_no: p.vehicle_no, private_note: p.private_note,
+      gst_rate_bp: p.gst_rate_bp, vehicle_no: p.vehicle_no,
+      bags_at_receipt_g: p.bags_at_receipt == null ? undefined : parsePurchaseDecimal(p.bags_at_receipt, 3, 'Bags at receipt'),
+      private_note: p.private_note,
       stated_total_paise: p.stated_total_rs == null ? undefined : parsePurchaseDecimal(p.stated_total_rs, 2, 'Stated total'),
       lines: p.lines.map((line, i) => {
         const weight_g = parsePurchaseDecimal(line.weight_kg, 3, `Line ${i + 1} weight`)

@@ -318,6 +318,7 @@ type DraftSnapshot = {
   taxMode: PurchaseTaxMode
   gstRatePercent: number
   supplierBillNo: string
+  vehicleNo: string
   bagsAtReceiptStr: string
   privateNote: string
   lines: LineFormItem[]
@@ -337,6 +338,7 @@ function snapshotDraft(d: DraftSnapshot): string {
     tm: d.taxMode,
     g: d.gstRatePercent,
     sb: d.supplierBillNo.trim(),
+    v: d.vehicleNo.trim(),
     b: d.bagsAtReceiptStr.trim(),
     n: d.privateNote.trim(),
     l: d.lines.map((l) => [l.itemId ?? '', l.itemName.trim(), l.bardanStr ?? '', l.weightKgStr, l.rateRupeesStr]),
@@ -464,6 +466,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
   const [taxMode, setTaxMode] = useState<PurchaseTaxMode>('none')
   const [gstRatePercent, setGstRatePercent] = useState<number>(18)
   const [supplierBillNo, setSupplierBillNo] = useState('')
+  const [vehicleNo, setVehicleNo] = useState('')
   const [bagsAtReceiptStr, setBagsAtReceiptStr] = useState('')
   const [privateNote, setPrivateNote] = useState('')
   const [photos, setPhotos] = useState<File[]>([])
@@ -505,6 +508,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
       taxMode: 'none',
       gstRatePercent: 18,
       supplierBillNo: '',
+      vehicleNo: '',
       bagsAtReceiptStr: '',
       privateNote: '',
       lines: [blankLine()],
@@ -572,6 +576,8 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     setTaxMode(nextTaxMode)
     setGstRatePercent(nextGstRate)
     setSupplierBillNo(p.supplier_bill_no ?? '')
+    setVehicleNo(p.vehicle_no ?? '')
+    setBagsAtReceiptStr(p.bags_at_receipt_g == null ? '' : gramsToKgText(p.bags_at_receipt_g))
     setPrivateNote(p.private_note ?? '')
     setLines(mappedLines)
     setAdjustments(mappedAdjustments)
@@ -593,7 +599,8 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
       setPaymentOpen(true)
     }
     setBaselineDraft(snapshotDraft({ supplierId: nextSupplierId, date: p.date, pool: p.pool, taxMode: nextTaxMode,
-      gstRatePercent: nextGstRate, supplierBillNo: p.supplier_bill_no ?? '', bagsAtReceiptStr: '', privateNote: p.private_note ?? '',
+      gstRatePercent: nextGstRate, supplierBillNo: p.supplier_bill_no ?? '', vehicleNo: p.vehicle_no ?? '',
+      bagsAtReceiptStr: p.bags_at_receipt_g == null ? '' : gramsToKgText(p.bags_at_receipt_g), privateNote: p.private_note ?? '',
       lines: mappedLines, adjustments: mappedAdjustments }))
     setBaselineReady(true)
     draftAppliedRef.current = draftId
@@ -652,6 +659,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     setTaxMode(resolvedTax)
     setGstRatePercent(resolvedGst)
     setSupplierBillNo(bill.supplierBillNo ?? '')
+    setVehicleNo(bill.vehicleNo ?? '')
     setInNoPreview(bill.inNo)
     setBagsAtReceiptStr(memoBags)
     setPrivateNote(userNote)
@@ -677,6 +685,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
       taxMode: resolvedTax,
       gstRatePercent: resolvedGst,
       supplierBillNo: bill.supplierBillNo ?? '',
+      vehicleNo: bill.vehicleNo ?? '',
       bagsAtReceiptStr: memoBags,
       privateNote: userNote,
       lines: mappedLines,
@@ -694,12 +703,13 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
         taxMode,
         gstRatePercent,
         supplierBillNo,
+        vehicleNo,
         bagsAtReceiptStr,
         privateNote,
         lines,
         adjustments,
       }),
-    [supplierId, date, pool, taxMode, gstRatePercent, supplierBillNo, bagsAtReceiptStr, privateNote, lines, adjustments],
+    [supplierId, date, pool, taxMode, gstRatePercent, supplierBillNo, vehicleNo, bagsAtReceiptStr, privateNote, lines, adjustments],
   )
   const isDirty = baselineReady && (serializedDraft !== baselineDraft || (draftId && JSON.stringify(draftBardan) !== draftBardanBaseline) || photos.length > 0 || (!editBillId && ((draftId ? draftPaymentStr.trim() !== '' : paymentAmountRupees > 0) || paymentNote.trim() !== '' || Boolean(paymentReference.trim()))))
   const requestBack = () => (isDirty ? setDiscardOpen(true) : onDiscard ? onDiscard() : window.history.back())
@@ -985,6 +995,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
         const payload: PurchaseBillUpdateInput = {
           supplierId,
           supplierBillNo: supplierBillNo.trim(),
+          vehicleNo: vehicleNo.trim(),
           date,
           pool,
           taxMode,
@@ -1015,6 +1026,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
           inNo: draftId ? '' : inNoPreview,
           draftId,
           supplierBillNo: supplierBillNo.trim(),
+          vehicleNo: vehicleNo.trim(),
           date,
           pool,
           taxMode,
@@ -1257,6 +1269,10 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
                       onChange={(e) => setBagsAtReceiptStr(e.target.value)}
                       className="mt-1 h-9 w-full rounded-md border border-border bg-card px-3 text-xs text-foreground outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
                     />
+                  </div>
+                  <div>
+                    <label htmlFor="purchase-vehicle-no" className="text-[11px] font-semibold text-slate-600">Vehicle No</label>
+                    <input id="purchase-vehicle-no" type="text" value={vehicleNo} onChange={(event) => setVehicleNo(event.target.value)} className={inputClass} />
                   </div>
                   {pool === 'gst' && (
                     <>

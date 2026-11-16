@@ -35,6 +35,18 @@ describe('purchase bill draft validation', () => {
     }
   })
 
+  it('keeps typed bag weight and vehicle separate from private note', () => {
+    const payload = { supplier_name: 'Scrap Supplier', date: '2026-11-15', vehicle_no: 'GJ-10-AB-1234',
+      bags_at_receipt: '2.500', private_note: 'Handle carefully',
+      lines: [{ item_name: 'Brass Scrap', weight_kg: '10', rate_rs_per_kg: '395' }] }
+    expect(parsePurchaseBillDraft(2, payload)).toMatchObject({ kind: 'valid', value: {
+      vehicle_no: 'GJ-10-AB-1234', bags_at_receipt_g: 2500, private_note: 'Handle carefully',
+    } })
+    expect(parsePurchaseBillDraft(2, { ...payload, private_note: 'Keep [bags_at_receipt:2.500] dry' })).toMatchObject({
+      kind: 'invalid', issues: [expect.stringContaining('Use bags_at_receipt')],
+    })
+  })
+
   it('rejects excess decimals, exponent notation and unsafe magnitudes', () => {
     expect(() => parsePurchaseDecimal('1.0001', 3, 'Weight')).toThrow('at most 3')
     expect(() => parsePurchaseDecimal('1.001', 2, 'Amount')).toThrow('at most 2')
