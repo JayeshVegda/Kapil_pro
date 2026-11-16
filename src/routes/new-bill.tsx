@@ -15,6 +15,7 @@ import { loadCustomerAutoBalanceContext, type AutoBalanceContext } from '@/data/
 import { createItem, loadItemOptions, suggestItemGroup } from '@/data/items'
 import { bookNoForBillNo, getBookRange, isBillNoInBook } from '@/domain/bill-books'
 import { pb } from '@/data/pocketbase'
+import { loadPendingBillDraftForReview } from '@/data/bill-drafts'
 import { calculateBillTotals } from '@/domain/billing-calculations'
 import {
   calculateBillingLineBags,
@@ -42,6 +43,7 @@ import { formatInQty, formatInrInteger, parseNonNegativeNumber, parsePositiveInt
 import { pollWhileTabVisible } from '@/lib/poll-while-visible'
 
 export const Route = createFileRoute('/new-bill')({
+  validateSearch: z.object({ draftId: z.string().regex(/^[a-z0-9]{15}$/).optional(), preview: z.boolean().optional() }),
   component: NewBillPage,
 })
 
@@ -170,6 +172,7 @@ function countDraftItems(items: unknown): number {
 
 function NewBillPage() {
   const navigate = useNavigate()
+  const { draftId: routeDraftId, preview: routePreview } = Route.useSearch()
   const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
   const [bookNo, setBookNo] = useState<number>(0)
@@ -354,6 +357,7 @@ function NewBillPage() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      if (routeDraftId && loadedDraftId !== routeDraftId) throw new Error('Wait for the pending Sales draft to finish loading before saving.')
       const customer = (customersQuery.data ?? []).find((c) => c.id === customerId)
       if (!customer) throw new Error('Please select a customer')
       const validRows = rows.filter((r) => r.itemName.trim() && r.qty > 0 && r.rate > 0)
@@ -393,7 +397,7 @@ function NewBillPage() {
           mode: payment.mode,
           note: payment.note || `Quick payment with bill ${bookNo}/${billNo}`,
         })),
-        draftId: loadedDraftId ?? undefined,
+        draftId: routeDraftId ?? loadedDraftId ?? undefined,
       })
     },
     onSuccess: async () => {
@@ -413,6 +417,7 @@ function NewBillPage() {
       setStatusText(savedQuickPaymentCount > 0 ? `Bill saved with ${savedQuickPaymentCount} quick payment${savedQuickPaymentCount === 1 ? '' : 's'}` : 'Bill saved successfully')
       setLoadedDraftId(null)
       resetForm()
+      void navigate({ to: '/new-bill', search: {} })
     },
     onError: (err) => {
       setStatusText(toUserMessage(err))
@@ -509,6 +514,7 @@ function NewBillPage() {
     setDate(today)
     setCustomerId('')
     setLoadedDraftId(null)
+    if (routeDraftId) void navigate({ to: '/new-bill', search: {} })
     setMktRate(0)
     mktManuallyEditedRef.current = false
     setTransport(0)
@@ -1080,7 +1086,14 @@ function NewBillPage() {
     refetchInterval: pollWhileTabVisible(4000),
   })
 
-  const draftPreloadHandledRef = useRef(false)
+  const routeDraftQuery = useQuery({
+    queryKey: ['sales-bill-draft-review', routeDraftId],
+    queryFn: () => loadPendingBillDraftForReview(routeDraftId!),
+    enabled: Boolean(routeDraftId),
+    refetchOnWindowFocus: true,
+  })
+
+  const draftPreloadHandledRef = useRef('')
 
   const applyDraft = useCallback(async (draft: any) => {
     if (!draft) return
@@ -1336,22 +1349,13 @@ function NewBillPage() {
     }
   }, [customersQuery.data, itemsQuery.data, getSuggestedRowPatch, getDefaultRateFromFinal, today, marketRate.rate, updateMktRate, autoBalanceQuery])
 
-  // Consume any preloaded draft from session storage (when user clicks "Review & Load" from /drafts)
+  // The URL keeps the draft identity across reloads; fetch its current pending state.
   useEffect(() => {
-    if (draftPreloadHandledRef.current) return
+    if (!routeDraftId || !routeDraftQuery.data || draftPreloadHandledRef.current === routeDraftId) return
     if (!customersQuery.data || !itemsQuery.data) return
-    try {
-      const stored = sessionStorage.getItem('kapil-loaded-draft')
-      if (stored) {
-        draftPreloadHandledRef.current = true
-        sessionStorage.removeItem('kapil-loaded-draft')
-        const draft = JSON.parse(stored)
-        applyDraft(draft)
-      }
-    } catch {
-      sessionStorage.removeItem('kapil-loaded-draft')
-    }
-  }, [customersQuery.data, itemsQuery.data, applyDraft])
+    draftPreloadHandledRef.current = routeDraftId
+    void applyDraft({ ...routeDraftQuery.data, autoOpenPreview: Boolean(routePreview) })
+  }, [routeDraftId, routePreview, routeDraftQuery.data, customersQuery.data, itemsQuery.data, applyDraft])
 
   const dismissDraft = useCallback((draftId: string) => {
     pb.collection('bill_drafts').update(draftId, { status: 'rejected' }).catch(() => null)
@@ -1441,7 +1445,7 @@ function NewBillPage() {
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 transition shadow-sm"
-                  onClick={() => applyDraft({ ...draft, autoOpenPreview: true })}
+                  onClick={() => void navigate({ to: '/new-bill', search: { draftId: draft.id, preview: true } })}
                   title="Direct 1-click preview"
                 >
                   <Eye size={13} /> Quick Preview
@@ -1449,7 +1453,7 @@ function NewBillPage() {
                 <button
                   type="button"
                   className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 transition"
-                  onClick={() => applyDraft(draft)}
+                  onClick={() => void navigate({ to: '/new-bill', search: { draftId: draft.id } })}
                 >
                   <Check size={14} /> Review & Load
                 </button>

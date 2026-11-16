@@ -104,10 +104,7 @@ function DraftsPage() {
     else await rejectCastingSessionDraft(rejecting.id, reason)
   }, onSuccess: () => { setRejecting(null); setReason(''); refresh() } })
   const loadSalesBill = (view: DraftView) => {
-    const raw = salesBills.data?.drafts.find((entry) => entry.draft.id === view.id)
-    if (!raw) return
-    sessionStorage.setItem('kapil-loaded-draft', JSON.stringify({ ...raw.draft, items: raw.items.map((line) => ({ itemId: String(line.item ?? ''), itemName: String(line.item_name ?? ''), qty: Number(line.qty ?? 0), bags: Number(line.bags ?? 0), rate: Number(line.rate ?? 0) })), payments: raw.payments, autoOpenPreview: false }))
-    void navigate({ to: '/new-bill' })
+    void navigate({ to: '/new-bill', search: { draftId: view.id } })
   }
   const review = (row: InboxRow) => {
     if (row.invalid || row.status !== 'pending_review') return

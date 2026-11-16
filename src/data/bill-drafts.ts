@@ -10,6 +10,23 @@ export type DraftPage = {
   page: number
 }
 
+/** Rehydrate a Sales draft by ID; inbox page limits must not affect review. */
+export async function loadPendingBillDraftForReview(draftId: string) {
+  if (!/^[a-z0-9]{15}$/.test(draftId)) throw new Error('Invalid Sales draft ID')
+  const draft = await pb.collection('bill_drafts').getOne(draftId, { expand: 'customer' })
+  if (draft.status !== 'pending_review') throw new Error('This Sales draft was already processed')
+  const [items, payments] = await Promise.all([
+    pb.collection('bill_draft_items').getFullList({ filter: pb.filter('draft = {:draftId}', { draftId }) }),
+    pb.collection('bill_draft_payments').getFullList({ filter: pb.filter('draft = {:draftId}', { draftId }) }),
+  ])
+  return {
+    ...draft,
+    customer_name: draft.customer_name || draft.expand?.customer?.company_name || draft.expand?.customer?.name || '',
+    items: items.map((line) => ({ itemId: String(line.item ?? ''), itemName: String(line.item_name ?? ''), qty: Number(line.qty ?? 0), bags: Number(line.bags ?? 0), rate: Number(line.rate ?? 0) })),
+    payments: payments.map((payment) => ({ date: payment.date || draft.date || '', amount: Number(payment.amount ?? 0), mode: payment.mode === 'Bank' ? 'Bank' : 'Cash', note: String(payment.note ?? '') })),
+  }
+}
+
 const statusFilter = (status: DraftStatusFilter) => {
   if (status === 'approved') return 'status = "approved"'
   if (status === 'rejected') return 'status = "rejected"'
