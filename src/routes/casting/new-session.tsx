@@ -4,12 +4,19 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { toUserMessage } from '@/app/errors'
-import { loadLatestCastingDefaults, loadMarketRateForDate, saveCastingSession } from '@/data/casting'
+import { AppError } from '@/app/errors'
+import { loadCastingMaterials, loadLatestCastingDefaults, loadMarketRateForDate, saveCastingSession } from '@/data/casting'
+import { loadCastingSessionDraft } from '@/data/casting-session-drafts'
+import { matchCastingMaterial } from '@/domain/casting-session-draft'
+import { Panel } from '@/components/ui/panel'
+import { buttonClass } from '@/components/ui/form-control-classes'
+import { z } from 'zod'
 import { calculateCastingCost, type CastingBatchCostInput } from '@/domain/casting-calculations'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/casting/new-session')({
+  validateSearch: z.object({ draftId: z.string().regex(/^[a-z0-9]{15}$/).optional() }),
   component: CastingNewSessionPage,
 })
 
@@ -18,6 +25,7 @@ const DEFAULT_BATCH_COUNT = 4
 
 type MaterialRow = {
   id: string
+  materialId?: string
   name: string
   rate: number
   qtyByBatch: number[]
@@ -88,6 +96,7 @@ function MathInput({ value, onChange, className, placeholder }: MathInputProps) 
 }
 
 function CastingNewSessionPage() {
+  const { draftId } = Route.useSearch()
   const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
   const [date, setDate] = useState(today)
@@ -99,7 +108,36 @@ function CastingNewSessionPage() {
   const [wireOutByBatch, setWireOutByBatch] = useState<number[]>(() => Array(DEFAULT_BATCH_COUNT).fill(0))
   const [melByBatch, setMelByBatch] = useState<number[]>(() => Array(DEFAULT_BATCH_COUNT).fill(0))
   const [statusText, setStatusText] = useState('')
+  const [draftSaved, setDraftSaved] = useState(false)
+  const [convertedSessionId, setConvertedSessionId] = useState('')
   const defaultsAppliedRef = useRef(false)
+  const draftAppliedRef = useRef('')
+
+  const draftQuery = useQuery({ queryKey: ['casting-session-draft', draftId], queryFn: () => loadCastingSessionDraft(draftId!), enabled: Boolean(draftId), refetchOnWindowFocus: true })
+  const materialsQuery = useQuery({ queryKey: ['casting-materials'], queryFn: loadCastingMaterials, enabled: Boolean(draftId) })
+
+  useEffect(() => {
+    if (!draftId || !draftQuery.data || !materialsQuery.data || draftAppliedRef.current === draftId) return
+    const draft = draftQuery.data
+    if (draft.status !== 'pending_review' || draft.parsed.kind !== 'valid') return
+    const p = draft.parsed
+    const count = p.batches.length
+    const mappedRows: MaterialRow[] = p.batches.flatMap((batch, batchIndex) => batch.inputs.map((input) => {
+      const material = matchCastingMaterial(input.materialName, input.materialId, materialsQuery.data)
+      const quantities = Array(count).fill(0) as number[]
+      quantities[batchIndex] = input.qty
+      return { id: crypto.randomUUID(), materialId: material?.id ?? '', name: material?.name ?? input.materialName, rate: input.rate, qtyByBatch: quantities }
+    }))
+    setDate(p.value.date)
+    setCoalKg(p.coalKg)
+    setCoalRate(p.coalRate)
+    setWorkerSalary(p.workerSalary)
+    setNote(p.value.note ?? '')
+    setRows(mappedRows)
+    setWireOutByBatch(p.batches.map((batch) => batch.wireOut))
+    setMelByBatch(p.batches.map((batch) => batch.mel))
+    draftAppliedRef.current = draftId
+  }, [draftId, draftQuery.data, materialsQuery.data])
 
   const defaultsQuery = useQuery({
     queryKey: ['latest-casting-defaults'],
@@ -114,6 +152,7 @@ function CastingNewSessionPage() {
   })
 
   useEffect(() => {
+    if (draftId) return
     if (!defaultsQuery.isSuccess || defaultsAppliedRef.current) return
     defaultsAppliedRef.current = true
     const defaults = defaultsQuery.data
@@ -127,7 +166,7 @@ function CastingNewSessionPage() {
       }),
     )
     setStatusText('')
-  }, [defaultsQuery.data, defaultsQuery.isSuccess])
+  }, [draftId, defaultsQuery.data, defaultsQuery.isSuccess])
 
   const batchCount = wireOutByBatch.length
   const batches = useMemo<CastingBatchCostInput[]>(() => {
@@ -137,6 +176,7 @@ function CastingNewSessionPage() {
       mel: melByBatch[batchIndex] ?? 0,
       inputs: rows
         .map((row) => ({
+          materialId: row.materialId,
           materialName: row.name.trim(),
           qty: row.qtyByBatch[batchIndex] ?? 0,
           rate: row.rate,
@@ -162,7 +202,10 @@ function CastingNewSessionPage() {
       if (!date) throw new Error('Date is required')
       if (!hasMaterial) throw new Error('Enter at least one material quantity and rate')
       if (!(cost.totalWireOut > 0)) throw new Error('Enter wire out for at least one batch')
+      if (draftId && (draftSaved || draftQuery.data?.status !== 'pending_review' || draftQuery.data.parsed.kind !== 'valid')) throw new Error('This draft is invalid or was already processed.')
+      if (draftId && batches.some((batch) => batch.inputs.some((input) => !input.materialId))) throw new Error('Match every draft input to a Casting material.')
       return saveCastingSession({
+        draftId,
         date,
         coalKg,
         coalRate,
@@ -173,6 +216,12 @@ function CastingNewSessionPage() {
     },
     onSuccess: async () => {
       setStatusText('Casting session saved.')
+      if (draftId) {
+        setDraftSaved(true)
+        void queryClient.invalidateQueries({ queryKey: ['casting-session-draft', draftId] })
+        void queryClient.invalidateQueries({ queryKey: ['casting-session-drafts'] })
+        void queryClient.invalidateQueries({ queryKey: ['casting-session-drafts-count'] })
+      }
       resetForm()
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['casting-sessions'] }),
@@ -180,7 +229,10 @@ function CastingNewSessionPage() {
         queryClient.invalidateQueries({ queryKey: ['latest-casting-defaults'] }),
       ])
     },
-    onError: (err) => setStatusText(toUserMessage(err)),
+    onError: (err) => {
+      if (err instanceof AppError && err.code === 'CONFLICT' && err.details && typeof err.details === 'object' && 'sessionId' in err.details) setConvertedSessionId(String(err.details.sessionId))
+      setStatusText(toUserMessage(err))
+    },
   })
 
   function resetForm() {
@@ -235,6 +287,7 @@ function CastingNewSessionPage() {
 
   return (
     <div className="w-full space-y-5 px-3 pb-8 pt-3 sm:px-4 lg:px-6">
+      {draftId && <Panel className="border-blue-200 bg-blue-50 text-sm text-slate-900">{draftQuery.isLoading ? 'Loading Casting draft…' : draftQuery.data?.parsed.kind === 'invalid' ? `Invalid draft — editor unavailable: ${draftQuery.data.parsed.issues.join('; ')}` : draftQuery.data?.status !== 'pending_review' || draftSaved ? 'This draft has already been processed.' : 'Muse Casting draft · Review materials, weights and costs before saving.'}{convertedSessionId && <a className="ml-2 font-semibold underline" href="/casting/log">View saved session in Casting Logs</a>}</Panel>}
       {helperStatus ? (
         <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-2.5 text-xs font-semibold text-blue-700" role="status" aria-live="polite">
           {helperStatus}
@@ -269,9 +322,10 @@ function CastingNewSessionPage() {
           <div>
             <h3 className="text-sm font-bold text-slate-900">Batch Intake Grid</h3>
           </div>
-          <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 px-3 py-2 transition shadow-sm" onClick={addBatch}>
-            <Plus size={14} /> Add Batch run
-          </button>
+          <div className="flex items-center gap-2">
+            {draftId && <button type="button" className={buttonClass('secondary')} onClick={() => setRows((current) => [...current, { id: crypto.randomUUID(), materialId: '', name: '', rate: 0, qtyByBatch: Array(batchCount).fill(0) }])}><Plus size={14} /> Add material</button>}
+            <button type="button" className={buttonClass('secondary')} onClick={addBatch}><Plus size={14} /> Add Batch run</button>
+          </div>
         </div>
         <div className="overflow-x-auto rounded-lg">
           <table className="w-full min-w-[750px] text-sm">
@@ -298,7 +352,7 @@ function CastingNewSessionPage() {
                 const totalKg = row.qtyByBatch.reduce((sum, qty) => sum + qty, 0)
                 return (
                   <tr key={row.id} className="hover:bg-slate-50/30 transition text-slate-800">
-                    <td className="sticky left-0 bg-white px-3 py-2.5 font-semibold text-slate-800 w-36">{row.name}</td>
+                    <td className="sticky left-0 bg-white px-3 py-2.5 font-semibold text-slate-800 w-36">{draftId ? <div className="flex items-center gap-1"><select aria-label={`Material for ${row.name || 'new row'}`} className="max-w-36 rounded-md border border-slate-300 bg-white px-1 py-1 text-xs" value={row.materialId ?? ''} onChange={(event) => { const material = materialsQuery.data?.find((entry) => entry.id === event.target.value); setRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, materialId: material?.id ?? '', name: material?.name ?? entry.name } : entry)) }}><option value="">{row.name ? `Match ${row.name}` : 'Select material'}</option>{(materialsQuery.data ?? []).filter((entry) => entry.isActive).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select><button type="button" aria-label={`Remove ${row.name || 'material row'}`} onClick={() => setRows((current) => current.filter((entry) => entry.id !== row.id))} className="rounded p-1 text-rose-700"><Trash2 size={13} /></button></div> : row.name}</td>
                     {row.qtyByBatch.map((qty, idx) => (
                       <td key={`${row.id}-${idx}`} className="p-0 text-center w-16">
                         <MathInput className="w-full h-9 bg-transparent text-center font-mono px-1 outline-none transition focus:bg-slate-50/80" value={qty} onChange={(val) => updateQty(row.id, idx, val)} placeholder="—" />
@@ -444,7 +498,7 @@ function CastingNewSessionPage() {
           <button type="button" className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-4 py-2 transition shadow-sm" onClick={resetForm}>
             Clear Form
           </button>
-          <button type="button" className="rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white px-5 py-2 transition shadow-sm disabled:cursor-not-allowed disabled:opacity-60" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+          <button type="button" className={buttonClass('primary')} onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || (Boolean(draftId) && (draftSaved || draftQuery.data?.status !== 'pending_review' || draftQuery.data.parsed.kind !== 'valid'))}>
             {saveMutation.isPending ? 'Saving...' : 'Save Session'}
           </button>
         </div>

@@ -24,6 +24,7 @@ import { buildBillPreviewProps } from '@/lib/bill-preview-props'
 import { calculateBillTotals } from '@/domain/billing-calculations'
 import { PurchaseDraftLane } from '@/components/drafts/purchase-draft-lane'
 import { PurchasePaymentDraftLane } from '@/components/drafts/purchase-payment-draft-lane'
+import { CastingSessionDraftLane } from '@/components/drafts/casting-session-draft-lane'
 import { useModuleSettings } from '@/lib/use-module-settings'
 import { StatusChip } from '@/components/ui/status-chip'
 
@@ -39,7 +40,7 @@ type DraftRow =
   | { source: 'payment'; view: PaymentDraftView }
 
 function DraftsPage() {
-  const { purchaseEnabled } = useModuleSettings()
+  const { purchaseEnabled, castingEnabled } = useModuleSettings()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState<DraftStatusFilter>('pending')
@@ -391,6 +392,7 @@ function DraftsPage() {
 
       {purchaseEnabled && <PurchaseDraftLane />}
       {purchaseEnabled && <PurchasePaymentDraftLane />}
+      {castingEnabled && <CastingSessionDraftLane />}
 
       {rejectingPayment && (
         <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-900/50 px-4 backdrop-blur-sm">
