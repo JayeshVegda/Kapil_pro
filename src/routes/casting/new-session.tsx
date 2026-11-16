@@ -453,21 +453,29 @@ function CastingNewSessionPage() {
                 <span className="font-mono font-bold text-slate-900">{cost.metalCostPerKg > 0 ? `₹${cost.metalCostPerKg.toFixed(2)}` : '—'}</span>
               </div>
               <div className="flex justify-between items-center py-0.5 border-b border-dashed border-slate-100">
-                <span className="text-slate-500">Baravo 7.5% Loss Estimate</span>
-                <span className="font-mono font-bold text-slate-900">{cost.baravoCostPerKg > 0 ? `₹${cost.baravoCostPerKg.toFixed(2)}` : '—'}</span>
+                <span className="text-slate-500">Chitty Brass rate / kg</span>
+                <span className="font-mono font-bold text-slate-900">{cost.brassRatePerKg > 0 ? `₹${cost.brassRatePerKg.toFixed(2)}` : '—'}</span>
               </div>
               <div className="flex justify-between items-center py-0.5 border-b border-dashed border-slate-100">
-                <span className="text-slate-500">Double Overhead per kg</span>
-                <span className="font-mono font-bold text-slate-900">{cost.overhead2Kg > 0 ? `₹${cost.overhead2Kg.toFixed(2)}` : '—'}</span>
+                <span className="text-slate-500">Baravo · 7% × 2</span>
+                <span className="font-mono font-bold text-slate-900">{cost.baravoCostPerKg > 0 ? `₹${(cost.baravoCostPerKg * 2).toFixed(2)}` : '₹0.00'}</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5 border-b border-dashed border-slate-100">
+                <span className="text-slate-500">Coal / wire kg × 2</span>
+                <span className="font-mono font-bold text-slate-900">₹{(cost.coalCostPerKg * 2).toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5 border-b border-dashed border-slate-100">
+                <span className="text-slate-500">Worker / wire kg × 2</span>
+                <span className="font-mono font-bold text-slate-900">₹{(cost.workerCostPerKg * 2).toFixed(2)}</span>
               </div>
             </div>
           </div>
           <div className="mt-4 pt-3.5 border-t-2 border-double border-slate-200 flex items-center justify-between">
             <div>
               <span className="block text-[11px] uppercase font-bold text-slate-400">Final Ready Cost</span>
-              <span className="text-xs text-slate-500">Raw metal + 2kg overheads</span>
+              <span className="text-xs text-slate-500">Metal + double Baravo, coal and worker</span>
             </div>
-            <span className="font-mono text-2xl font-black text-blue-700">{cost.finalProductCostPerKg > 0 ? `₹${cost.finalProductCostPerKg.toFixed(2)}/kg` : '—'}</span>
+            <span className="font-mono text-2xl font-black text-slate-900">{cost.finalProductCostPerKg > 0 ? `₹${cost.finalProductCostPerKg.toFixed(2)}/kg` : '—'}</span>
           </div>
         </div>
       </section>

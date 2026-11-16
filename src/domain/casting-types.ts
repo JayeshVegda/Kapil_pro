@@ -34,6 +34,7 @@ export type CastingMaterialRecord = {
 
 export type CastingSessionRecord = {
   id: CastingSessionId
+  costFormulaVersion: 1 | 2
   /** YYYY-MM-DD */
   date: string
   coalKg: number
@@ -66,6 +67,7 @@ export type CastingSessionWithInputs = CastingSessionRecord & {
 /** Snapshot stored in local trash (soft delete), same 3h TTL pattern as transactions. */
 export type CastingSessionTrashSnapshot = {
   id: string
+  costFormulaVersion?: 1 | 2
   date: string
   coalKg: number
   coalRate: number
