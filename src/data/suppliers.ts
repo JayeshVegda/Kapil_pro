@@ -613,6 +613,20 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
             date: entry.date ?? input.date,
             note: entry.note ?? '',
           })
+          if (entry.method === 'advance' && (entry.creditPaise ?? 0) > 0) {
+            const paymentId = generateRecordId()
+            const paymentPayload = {
+              id: paymentId, supplier: input.supplierId, date: entry.date ?? input.date,
+              pool: input.pool, kind: 'bardan_advance', amount_paise: entry.creditPaise,
+              mode: 'other', reference: `Bardan Advance (Bill ${inNo})`,
+              payee_name: '', private_note: entry.note ?? '',
+            }
+            batch.collection('supplier_payments').create(paymentPayload)
+            batch.collection('purchase_audit_log').create({
+              collection: 'supplier_payments', record_id: paymentId, action: 'create',
+              after_json: JSON.stringify(paymentPayload), actor: currentActor(),
+            })
+          }
         }
         if (input.payment) {
           const paymentId = generateRecordId()

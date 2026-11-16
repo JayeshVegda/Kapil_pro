@@ -6,6 +6,7 @@ vi.mock('@/data/pocketbase', () => ({
 }))
 
 import { addPurchaseBardanEntry, createPurchaseBill, createSupplierPayment, loadPurchaseBill, updatePurchaseBill } from './suppliers'
+import { computeSupplierSettlement } from '@/domain/supplier-settlement'
 
 type Row = Record<string, unknown> & { id: string }
 type Operation = { collection: string; action: 'create' | 'update' | 'delete'; row: Row }
@@ -173,6 +174,39 @@ describe('supplier write confirmation', () => {
     expect(table('supplier_payments').size).toBe(1)
     expect(table('supplier_payment_allocations').size).toBe(1)
     expect(sendCalls).toBe(1)
+  })
+
+  it('creates the same pool-bound bardan advance as the later-add path, once on retry', async () => {
+    for (const pool of ['kacha', 'gst'] as const) {
+      const taxMode = pool === 'gst' ? 'gst' : 'none'
+      const input = { ...billInput, pool, taxMode, gstRateBp: pool === 'gst' ? 1800 : 0,
+        inNo: `IN-${pool}-1`, requestId: `advance-${pool}`,
+        bardan: [{ bardanG: 1000, rateMilli: 800000, method: 'advance', creditPaise: 20000 }] }
+      responseLost = true
+      readFailure = true
+      await expect(createPurchaseBill(input)).rejects.toThrow(/could not be confirmed/)
+      responseLost = false
+      readFailure = false
+      const saved = await createPurchaseBill(input)
+      expect([...table('supplier_payments').values()].filter((row) => row.kind === 'bardan_advance' && row.pool === pool)).toHaveLength(1)
+      const later = await createPurchaseBill({ ...billInput, pool, taxMode, gstRateBp: input.gstRateBp, inNo: `IN-${pool}-2` })
+      await addPurchaseBardanEntry({ billId: later.id, bardanG: 1000, rateMilli: 800000, method: 'advance', creditPaise: 20000 })
+      const position = (billId: string) => {
+        const bill = table('purchase_bills').get(billId)!
+        const payments = [...table('supplier_payments').values()].filter((row) => row.pool === pool && row.kind === 'bardan_advance')
+        const credit = payments.find((row) => row.reference === `Bardan Advance (Bill ${bill.in_no})`)!
+        return computeSupplierSettlement({
+          supplier: { openingKachaPaise: 0, openingGstPaise: 0 },
+          bills: [{ id: billId, date: String(bill.date), created: String(bill.created), pool, taxMode, gstRateBp: input.gstRateBp }],
+          lines: [{ billId, amountPaise: 80000 }], adjustments: [],
+          bardan: [{ billId, method: 'advance', creditPaise: 20000 }],
+          payments: [{ id: String(credit.id), date: String(credit.date), created: String(credit.created), pool, kind: 'bardan_advance', amountPaise: Number(credit.amount_paise) }],
+          allocations: [],
+        }).pools[pool].outstandingPaise
+      }
+      expect(position(saved.id)).toBe(position(later.id))
+      expect([...table('purchase_audit_log').values()].filter((row) => row.collection === 'supplier_payments' && row.action === 'create')).toHaveLength(pool === 'kacha' ? 2 : 4)
+    }
   })
 
   it('bardan returns its committed record without a dependent read', async () => {
