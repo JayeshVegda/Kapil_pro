@@ -224,6 +224,7 @@ export function CastingLogPage() {
   function snapshotToSession(snap: CastingSessionTrashSnapshot): CastingSessionWithInputs {
     return {
       id: snap.id,
+      costFormulaVersion: snap.costFormulaVersion ?? 1,
       date: snap.date,
       coalKg: snap.coalKg,
       coalRate: snap.coalRate,
@@ -260,6 +261,7 @@ export function CastingLogPage() {
     mutationFn: async (session: CastingSessionWithInputs) => {
       const snapshot: CastingSessionTrashSnapshot = {
         id: session.id,
+        costFormulaVersion: session.costFormulaVersion,
         date: session.date,
         coalKg: session.coalKg,
         coalRate: session.coalRate,
@@ -297,6 +299,7 @@ export function CastingLogPage() {
     mutationFn: async (entry: CastingTrashEntry) => {
       const s = entry.snapshot
       await saveCastingSession({
+        costFormulaVersion: s.costFormulaVersion ?? 1,
         date: s.date,
         coalKg: s.coalKg,
         coalRate: s.coalRate,

@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({ queryData: new Map<string, unknown>() }))
 
 const session: CastingSessionWithInputs = {
   id: 'sess_abcd1234ef',
+  costFormulaVersion: 1,
   date: '2026-11-05',
   coalKg: 40,
   coalRate: 12,
@@ -142,7 +143,7 @@ describe('Casting Bill (Phase 4)', () => {
     expect(html).toContain('Casting Chitty')
     expect(html).toContain('Material charged')
     expect(html).toContain('Furnace and labour')
-    expect(html).toContain('Final product cost')
+    expect(html).toContain('Final ready cost')
     expect(html).not.toContain('hidden print:block')
   })
 })

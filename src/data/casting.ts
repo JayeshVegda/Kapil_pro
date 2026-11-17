@@ -36,6 +36,7 @@ function mapSession(row: PBRecord): CastingSessionRecord {
   const workerCostPerKg = num(row.worker_cost_per_kg)
   return {
     id: row.id,
+    costFormulaVersion: num(row.cost_formula_version) === 2 ? 2 : 1,
     date: String(row.date ?? '').slice(0, 10),
     coalKg: num(row.coal_kg),
     coalRate: num(row.coal_rate),
@@ -97,6 +98,7 @@ function mapMaterial(row: PBRecord): CastingMaterialRecord {
 function withRecalculatedSessionCosts(session: CastingSessionRecord, batches: CastingBatchRecord[]): CastingSessionRecord {
   if (batches.length === 0) return session
   const cost = calculateCastingCost({
+    formulaVersion: session.costFormulaVersion,
     batches: batches.map((batch) => ({
       batchNumber: batch.batchNumber,
       wireOut: batch.wireOut,
@@ -420,6 +422,7 @@ export async function syncCastingMaterialMaster(): Promise<{ created: number; li
 
 export type SaveCastingSessionPayload = {
   draftId?: string
+  costFormulaVersion?: 1 | 2
   date: string
   coalKg?: number
   coalRate?: number
@@ -513,6 +516,7 @@ export async function saveCastingSession(payload: SaveCastingSessionPayload): Pr
   const batches = normalizeBatchesForSave(payload)
   const inputs = batches.flatMap((batch) => batch.inputs)
   const cost = calculateCastingCost({
+    formulaVersion: payload.costFormulaVersion ?? 2,
     batches,
     coalKg: payload.coalKg,
     coalRate: payload.coalRate,
@@ -548,6 +552,7 @@ export async function saveCastingSession(payload: SaveCastingSessionPayload): Pr
     }
     batchRequest.collection('casting_sessions').create({
       id: sessionId,
+      cost_formula_version: payload.costFormulaVersion ?? 2,
       date: payload.date.slice(0, 10),
       unit: batches.length,
       coal_kg: num(payload.coalKg),
@@ -559,6 +564,10 @@ export async function saveCastingSession(payload: SaveCastingSessionPayload): Pr
       total_wire_out: cost.totalWireOut,
       total_mel: cost.totalMel,
       cost_per_kg: cost.finalCastingCostPerKg,
+      metal_cost_per_kg: cost.metalCostPerKg,
+      coal_cost_per_kg: cost.coalCostPerKg,
+      worker_cost_per_kg: cost.workerCostPerKg,
+      final_product_cost_per_kg: cost.finalProductCostPerKg,
       total_input_cost: cost.totalInputCost,
       total_input_kg: cost.totalInputKg,
       note: String(payload.note ?? ''),
@@ -597,14 +606,14 @@ export async function saveCastingSession(payload: SaveCastingSessionPayload): Pr
 export async function updateCastingSession(sessionId: string, payload: SaveCastingSessionPayload): Promise<void> {
   const batches = normalizeBatchesForSave(payload)
   const inputs = batches.flatMap((batch) => batch.inputs)
-  const cost = calculateCastingCost({
-    batches,
-    coalKg: payload.coalKg,
-    coalRate: payload.coalRate,
-    workerSalary: payload.workerSalary,
-  })
 
   await runDataOperation('update-casting-session', async () => {
+    const existing = await pb.collection('casting_sessions').getOne(sessionId)
+    const formulaVersion = num(existing.cost_formula_version) === 2 ? 2 : 1
+    const coalKg = payload.coalKg ?? num(existing.coal_kg)
+    const coalRate = payload.coalRate ?? num(existing.coal_rate)
+    const workerSalary = payload.workerSalary ?? num(existing.worker_salary)
+    const cost = calculateCastingCost({ batches, coalKg, coalRate, workerSalary, formulaVersion })
     await ensureMaterialMap(inputs.map((r) => r.materialName))
     const existingBatches = await listAllPaged('casting_batches', { filter: `session = "${sessionId}"` })
     const existingBatchIds = existingBatches.map((row) => row.id)
@@ -636,15 +645,19 @@ export async function updateCastingSession(sessionId: string, payload: SaveCasti
     batchRequest.collection('casting_sessions').update(sessionId, {
       date: payload.date.slice(0, 10),
       unit: batches.length,
-      coal_kg: num(payload.coalKg),
-      coal_rate: num(payload.coalRate),
-      worker_salary: num(payload.workerSalary),
+      coal_kg: coalKg,
+      coal_rate: coalRate,
+      worker_salary: workerSalary,
       wire_out: cost.totalWireOut,
       wastage: cost.totalMel,
       chol_in: 0,
       total_wire_out: cost.totalWireOut,
       total_mel: cost.totalMel,
       cost_per_kg: cost.finalCastingCostPerKg,
+      metal_cost_per_kg: cost.metalCostPerKg,
+      coal_cost_per_kg: cost.coalCostPerKg,
+      worker_cost_per_kg: cost.workerCostPerKg,
+      final_product_cost_per_kg: cost.finalProductCostPerKg,
       total_input_cost: cost.totalInputCost,
       total_input_kg: cost.totalInputKg,
       note: String(payload.note ?? ''),

@@ -5,10 +5,8 @@ import { formatInrInteger } from '@/lib/inr-format'
 /**
  * CastingTicket, the shared on-screen and printed furnace chitty.
  *
- * This sheet is shared by Casting Log View and the Casting Bill page. It renders only what the
- * session already stores — every cost column comes straight from the saved
- * record, so the on-screen ticket and the printed ticket can never disagree.
- * No route may recalculate costs around it.
+ * Shared by Casting Log View, Casting Bill and print. The final figure comes
+ * from the versioned saved session; the breakdown uses its saved material lines.
  */
 
 export type CastingMaterialSummaryRow = {
@@ -41,6 +39,9 @@ export function formatKg(value: number) {
 export function CastingTicket({ session }: { session: CastingSessionWithInputs }) {
   const materials = summarizeMaterials(session)
   const rate = (value: number) => value > 0 ? `₹${value.toFixed(2)}` : '—'
+  const brassRate = materials.find((material) => material.name.toLowerCase() === 'brass')?.avgRate ?? 0
+  const originalFormula = session.costFormulaVersion === 1
+  const baravoPerKg = originalFormula ? session.metalCostPerKg * 0.075 : brassRate * 0.07
 
   return (
     <article aria-label="Casting chitty" className="mx-auto w-full max-w-[21cm] min-w-0 bg-white p-4 text-slate-900 shadow-sm ring-1 ring-slate-300 sm:p-6 print:max-w-none print:p-0 print:shadow-none print:ring-0">
@@ -74,8 +75,16 @@ export function CastingTicket({ session }: { session: CastingSessionWithInputs }
         <div><h3 className="mb-1 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600">Output and cost</h3><ChittyLine label="Wire out" value={formatKg(session.totalWireOut)} /><ChittyLine label="Mel / wastage" value={formatKg(session.totalMel)} /><ChittyLine label="Chol in" value={formatKg(session.cholIn)} /><ChittyLine label="Metal cost / kg" value={rate(session.metalCostPerKg)} /><ChittyLine label="Casting cost / kg" value={rate(session.costPerKg)} /></div>
       </section>
 
+      <section className="border-b border-slate-300 py-3 text-xs">
+        <h3 className="mb-2 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600">Ready cost per kg</h3>
+        <ChittyLine label="A · Metal / kg" value={rate(session.metalCostPerKg)} />
+        <ChittyLine label={originalFormula ? 'B · Original Baravo 7.5% × 2' : `B · Chitty Brass ${rate(brassRate)}/kg × 7% × 2`} value={rate(baravoPerKg * 2)} />
+        <ChittyLine label="C · Coal / wire kg × 2" value={rate(session.coalCostPerKg * 2)} />
+        <ChittyLine label="C · Worker / wire kg × 2" value={rate(session.workerCostPerKg * 2)} />
+      </section>
+
       <div className="mt-4 flex flex-wrap items-end justify-between gap-3 border-y-2 border-slate-900 py-3">
-        <div><p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600">Final product cost</p><p className="mt-1 text-xs text-slate-500">Saved session rate, including the configured buffer</p></div>
+        <div><p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600">Final ready cost</p><p className="mt-1 text-xs text-slate-500">{originalFormula ? 'Original session formula' : 'A + B + C from this chitty'}</p></div>
         <strong className="font-mono text-xl tabular-nums">{rate(session.finalProductCostPerKg)}<span className="text-xs"> / kg</span></strong>
       </div>
       {session.note && <p className="mt-4 whitespace-pre-wrap break-words border-b border-slate-200 pb-3 text-xs"><strong>Remarks: </strong>{session.note}</p>}
