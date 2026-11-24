@@ -15,6 +15,7 @@ vi.mock('@/data/pocketbase', () => {
 import { pb } from '@/data/pocketbase'
 import {
   cancelPurchaseBill,
+  cancelSupplierPayment,
   createPurchaseBill,
   createPurchaseItem,
   createSupplier,
@@ -35,6 +36,7 @@ describe('Purchase Audit Log Integration', () => {
     create: vi.fn(),
   }
   const batchCreateMock = vi.fn()
+  const batchUpdateMock = vi.fn()
   const batchSendMock = vi.fn()
 
   beforeEach(() => {
@@ -50,9 +52,12 @@ describe('Purchase Audit Log Integration', () => {
     ;(pb.createBatch as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       collection: (col: string) => ({
         create: (payload: unknown) => batchCreateMock(col, payload),
-        update: vi.fn(),
+        update: (id: string, payload: Record<string, unknown>) => batchUpdateMock(col, id, payload),
       }),
-      send: batchSendMock.mockImplementation(async () => batchCreateMock.mock.calls.map(([, payload]) => ({ status: 200, body: payload }))),
+      send: batchSendMock.mockImplementation(async () => [
+        ...batchUpdateMock.mock.calls.map(([, id, payload]) => ({ status: 200, body: { id, ...payload } })),
+        ...batchCreateMock.mock.calls.map(([, payload]) => ({ status: 200, body: payload })),
+      ]),
     })
 
     mockTable.create.mockImplementation(async (payload) => ({ id: 'rec_created', ...payload }))
@@ -207,7 +212,8 @@ describe('Purchase Audit Log Integration', () => {
   it('records an audit row when cancelling a purchase bill', async () => {
     await cancelPurchaseBill('bill_1', 'Duplicate invoice entered')
 
-    expect(auditTable.create).toHaveBeenCalledWith(
+    expect(batchUpdateMock).toHaveBeenCalledWith('purchase_bills', 'bill_1', { cancelled: true, cancel_reason: 'Duplicate invoice entered' })
+    expect(batchCreateMock).toHaveBeenCalledWith('purchase_audit_log',
       expect.objectContaining({
         collection: 'purchase_bills',
         record_id: 'bill_1',
@@ -215,6 +221,24 @@ describe('Purchase Audit Log Integration', () => {
         after_json: JSON.stringify({ cancelled: true, cancel_reason: 'Duplicate invoice entered' }),
       }),
     )
+  })
+
+  it('voids a supplier payment and records its audit entry in the same batch', async () => {
+    await cancelSupplierPayment('pay_1', 'Duplicate transfer')
+    expect(batchUpdateMock).toHaveBeenCalledWith('supplier_payments', 'pay_1', { cancelled: true, cancel_reason: 'Duplicate transfer' })
+    expect(batchCreateMock).toHaveBeenCalledWith('purchase_audit_log', expect.objectContaining({ collection: 'supplier_payments', record_id: 'pay_1', action: 'cancel' }))
+    expect(batchSendMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not post a follow-up purchase payment while the parent supplier draft is still pending', async () => {
+    mockTable.getOne.mockImplementation(async (id) => id === 'supplier1234567'
+      ? { id, status: 'pending_review' }
+      : { id, status: 'pending_review', supplier_draft: 'supplier1234567' })
+    await expect(createSupplierPayment({
+      draftId: 'childdraft00001', supplierId: 'supplier1234567', date: '2026-11-24',
+      pool: 'kacha', kind: 'payment', amountPaise: 50_000, mode: 'cash',
+    })).rejects.toThrow('Approve the linked new supplier')
+    expect(batchSendMock).not.toHaveBeenCalled()
   })
 
   it('batches an audit row when creating a supplier payment', async () => {

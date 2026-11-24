@@ -88,7 +88,7 @@ const dialogs = [
   { name: 'bardan', subject: 'bill', label: 'Review Bardan', preview: 'Revised bill net', node: () => <AddBardanModal billId="bill1" onClose={onClose} /> },
   { name: 'quick payment', subject: 'supplier', label: 'Save Payment', preview: 'Pinned to', node: () => <RecordPaymentModal supplierId="supplier1" pool="kacha" pins={[{ billId: 'bill1', inNo: 'IN-001', duePaise: 100_000 }]} onClose={onClose} /> },
   { name: 'settle-off', subject: 'supplier', label: 'Settle to NIL', preview: 'Remaining due on', node: () => <SettleToNilModal supplierId="supplier1" pool="kacha" billId="bill1" inNo="IN-001" duePaise={100_000} onClose={onClose} /> },
-  { name: 'bill cancellation', subject: 'bill', label: 'Cancel Bill', preview: 'Soft cancellation', node: () => <CancelBillModal billId="bill1" inNo="IN-001" onClose={onClose} /> },
+  { name: 'bill cancellation', subject: 'bill', label: 'Void Bill', preview: 'Soft cancellation', node: () => <CancelBillModal billId="bill1" inNo="IN-001" onClose={onClose} /> },
   { name: 'payment details', subject: 'payment', label: '', preview: 'Advance left', node: () => <PaymentDetailsModal paymentId="payment1" onClose={onClose} /> },
 ]
 

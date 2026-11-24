@@ -4,6 +4,7 @@ import { parseCastingSessionDraft } from '@/domain/casting-session-draft'
 export type CastingSessionDraftRecord = {
   id: string; schema_version: number; payload: unknown; status: string
   source_message_id: string; raw_text: string; confidence: number; notes: string
+  rejection_reason?: string
   converted_session: string; direct_save: boolean; created: string; updated: string
 }
 export type CastingSessionDraftView = CastingSessionDraftRecord & { parsed: ReturnType<typeof parseCastingSessionDraft> }

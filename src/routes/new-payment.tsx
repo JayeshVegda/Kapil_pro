@@ -10,6 +10,8 @@ import { DateInput } from '@/components/ui/date-input'
 import { PaymentAmountInput } from '@/components/ui/payment-amount-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { ensurePaymentPersisted, loadCustomerPaymentLedger, loadPaymentCustomers, savePayment, type SavedPaymentReceipt } from '@/data/payments'
+import { loadSalesPaymentDraft, savePaymentFromDraft } from '@/data/payment-drafts'
+import { composeReceiptNote } from '@/domain/payment-drafts'
 import type { TransactionsContext } from '@/data/transactions'
 import { isOnOrBeforeDay } from '@/domain/financial-math'
 import { compareBusinessDateThenCreatedDesc } from '@/domain/records'
@@ -21,8 +23,14 @@ import { getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/new-payment')({
-  component: NewPaymentPage,
+  validateSearch: (search: Record<string, unknown>): { draftId?: string } => ({ draftId: z.string().regex(/^[a-z0-9]{15}$/).optional().catch(undefined).parse(search.draftId) }),
+  component: PaymentRoute,
 })
+
+function PaymentRoute() {
+  const { draftId } = Route.useSearch()
+  return <NewPaymentPage key={draftId ?? 'manual'} draftId={draftId} />
+}
 
 const submitPaymentSchema = z.object({
   customerId: z.string().trim().min(1, 'Please select a customer'),
@@ -34,7 +42,7 @@ const submitPaymentSchema = z.object({
 
 const PAYMENT_DRAFT_STORAGE_KEY = 'kapil-new-payment-draft-v1'
 
-function NewPaymentPage() {
+function NewPaymentPage({ draftId }: { draftId?: string }) {
   const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
   const [date, setDate] = useState(today)
@@ -50,9 +58,23 @@ function NewPaymentPage() {
   const amountInputRef = useRef<HTMLInputElement | null>(null)
   const noteInputRef = useRef<HTMLInputElement | null>(null)
   const draftHydratedRef = useRef(false)
+  const [loadedMuse, setLoadedMuse] = useState(false)
+  const [processedMuse, setProcessedMuse] = useState(false)
+  const muse = useQuery({ queryKey: ['sales-payment-draft', draftId], queryFn: () => loadSalesPaymentDraft(draftId!), enabled: Boolean(draftId), retry: false })
+  const musePaymentBlocked = Boolean(draftId && (!loadedMuse || processedMuse || muse.isError || muse.data?.status !== 'pending_review'))
+  useEffect(() => {
+    if (!muse.data || loadedMuse || muse.data.status !== 'pending_review') return
+    setCustomerId(muse.data.customerId)
+    setDate(muse.data.date)
+    setMode(muse.data.mode)
+    setAmount(muse.data.amount)
+    setNote(muse.data.note)
+    setLoadedMuse(true)
+  }, [muse.data, loadedMuse])
 
   // Restore an in-progress payment draft left over from navigating away.
   useEffect(() => {
+    if (draftId) return
     try {
       const raw = window.localStorage.getItem(PAYMENT_DRAFT_STORAGE_KEY)
       if (raw) {
@@ -68,10 +90,10 @@ function NewPaymentPage() {
     } finally {
       draftHydratedRef.current = true
     }
-  }, [])
+  }, [draftId])
 
   useEffect(() => {
-    if (!draftHydratedRef.current) return
+    if (draftId || !draftHydratedRef.current) return
     try {
       if (!customerId && !(amount > 0)) {
         window.localStorage.removeItem(PAYMENT_DRAFT_STORAGE_KEY)
@@ -81,7 +103,7 @@ function NewPaymentPage() {
     } catch {
       // Storage full/blocked — drafting still works in-memory.
     }
-  }, [date, customerId, mode, amount, note])
+  }, [date, customerId, mode, amount, note, draftId])
 
   const customersQuery = useQuery({
     queryKey: ['payment-customers'],
@@ -131,16 +153,25 @@ function NewPaymentPage() {
       if (!selectedCustomer) {
         throw new Error('Please select a customer')
       }
-      return savePayment({
+      if (musePaymentBlocked) throw new Error('This Muse draft is not ready to save.')
+      const values = {
         customerId: parsed.data.customerId,
         customerName: selectedCustomer.name,
         date: parsed.data.date,
         amount: parsed.data.amount,
         mode: parsed.data.mode,
         note: parsed.data.note,
-      })
+      }
+      return draftId
+        ? savePaymentFromDraft({ ...values, draftId, note: composeReceiptNote(values.date, values.note ?? '') })
+        : savePayment(values)
     },
     onSuccess: async (savedPayment) => {
+      if (draftId) {
+        setProcessedMuse(true)
+        void queryClient.invalidateQueries({ queryKey: ['payment-drafts-page'] })
+        void queryClient.invalidateQueries({ queryKey: ['payment-drafts-pending-count'] })
+      }
       const persisted = await ensurePaymentPersisted(savedPayment.id)
       setLastSavedPayment(savedPayment)
       queryClient.setQueryData(['payment-ledger-context', customerId, date], (prev: unknown) => {
@@ -221,7 +252,7 @@ function NewPaymentPage() {
       setAmount(0)
       setNote('')
       try {
-        window.localStorage.removeItem(PAYMENT_DRAFT_STORAGE_KEY)
+        if (!draftId) window.localStorage.removeItem(PAYMENT_DRAFT_STORAGE_KEY)
       } catch {
         // Ignore storage failures.
       }
@@ -393,6 +424,7 @@ function NewPaymentPage() {
             </button>
           </div>
 
+          {draftId && <p role="status" className="mb-3 rounded-md border bg-slate-50 p-2 text-xs">{processedMuse ? 'Muse draft approved and saved.' : muse.isError ? 'Could not load this draft.' : muse.data && muse.data.status !== 'pending_review' ? 'This draft was already processed.' : loadedMuse ? 'Muse draft loaded. Changes are not posted until you save.' : 'Loading Muse draft…'}</p>}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <Field label="Date">
               <DateInput className={inputClass} value={date} onChange={setDate} />
@@ -462,7 +494,7 @@ function NewPaymentPage() {
               type="button"
               className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               onClick={() => void saveMutation.mutateAsync()}
-              disabled={saveMutation.isPending || !customerId || amount <= 0}
+              disabled={saveMutation.isPending || musePaymentBlocked || !customerId || amount <= 0}
             >
               {saveMutation.isPending ? 'Saving...' : 'Save Payment'}
             </button>
@@ -679,7 +711,7 @@ function NewPaymentPage() {
                 type="button"
                 className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => void confirmCommandPayment()}
-                disabled={saveMutation.isPending || !customerId || amount <= 0}
+                disabled={saveMutation.isPending || musePaymentBlocked || !customerId || amount <= 0}
               >
                 {saveMutation.isPending ? 'Saving...' : 'Confirm & Save'}
               </button>

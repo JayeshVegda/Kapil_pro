@@ -538,6 +538,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
   })
 
   const editBillQuery = useQuery(purchaseBillQueryOptions(editBillId ?? ''))
+  const convertedBillQuery = useQuery(purchaseBillQueryOptions(convertedBillId))
   const draftQuery = useQuery({ queryKey: ['purchase-bill-draft', draftId], queryFn: () => loadPurchaseBillDraft(draftId!), enabled: Boolean(draftId), refetchOnWindowFocus: true })
 
   // Supplier context strip bundle query
@@ -1154,11 +1155,12 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
           {draftId && <Panel className="border-blue-200 bg-blue-50 text-sm text-slate-900">
             <p className="font-semibold">Muse Purchase Bill Draft</p>
             <p className="text-xs text-slate-600">Review and correct the proposal. Opening it does not create a bill.</p>
+            {draftQuery.data?.raw_text && <details className="mt-1 text-xs"><summary className="cursor-pointer font-semibold">Original message</summary><p className="mt-1 whitespace-pre-wrap break-words">{draftQuery.data.raw_text}</p></details>}
             {draftQuery.isLoading && <p className="mt-1 text-xs">Loading draft…</p>}
             {draftQuery.isError && <p role="alert" className="mt-1 text-xs text-rose-700">Could not load draft.</p>}
             {draftQuery.data?.parsed.kind === 'invalid' && <p role="alert" className="mt-1 text-xs text-rose-700">Invalid draft: {draftQuery.data.parsed.issues.join('; ')}</p>}
             {draftQuery.data && draftQuery.data.status !== 'pending_review' && <p role="alert" className="mt-1 text-xs text-rose-700">This draft was already processed.</p>}
-            {convertedBillId && <a className="mt-1 inline-block text-xs font-semibold text-blue-700 underline" href={`/purchase-bills/${convertedBillId}`}>Open the saved bill</a>}
+            {convertedBillQuery.data?.bill.inNo && <a className="mt-1 inline-block text-xs font-semibold text-blue-700 underline" href={`/purchase-bills/${encodeURIComponent(convertedBillQuery.data.bill.inNo)}`}>Open the saved bill</a>}
           </Panel>}
 
           {hasManualAllocationsWarning && (

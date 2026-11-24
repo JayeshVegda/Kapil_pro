@@ -120,8 +120,17 @@ function generateRecordId(): string {
   return id
 }
 
-export async function saveBillWithItems(input: SaveBillInput & { payments?: QuickPaymentInput[]; draftId?: string }) {
-  await runDataOperation('save-bill', async () => {
+export async function saveBillWithItems(input: SaveBillInput & { payments?: QuickPaymentInput[]; draftId?: string; newCustomer?: boolean }) {
+  return runDataOperation('save-bill', async () => {
+    if (input.draftId) {
+      const draft = await pb.collection('bill_drafts').getOne(input.draftId)
+      if (draft.status === 'approved' && draft.converted_bill && input.newCustomer && draft.muse_new_customer) return { billId: String(draft.converted_bill) }
+      if (draft.status !== 'pending_review') throw new Error('This Sales draft was already processed.')
+      if (Boolean(draft.muse_new_customer) !== Boolean(input.newCustomer)) throw new Error('Review this new-customer bill from AI Drafts.')
+      if (input.newCustomer && (input.customerId !== draft.id || input.customerName !== String(draft.customer_name))) {
+        throw new Error('The new customer must match the pending draft.')
+      }
+    } else if (input.newCustomer) throw new Error('New customer plus first bill requires a draft.')
     await assertBillNumberAvailable(input.bookNo, input.billNo)
 
     const totals = calculateBillTotals({
@@ -133,6 +142,17 @@ export async function saveBillWithItems(input: SaveBillInput & { payments?: Quic
 
     const billId = generateRecordId()
     const batch = pb.createBatch()
+    if (input.newCustomer) {
+      const customers = await pb.collection('customers').getFullList({ fields: 'id,name,company_name,aliases' })
+      const normalize = (value: unknown) => String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+      if (customers.some((row) => [row.name, row.company_name, ...String(row.aliases ?? '').split(/[,\n]/), ...String(row.aliases ?? '').split(/[\s,]+/)]
+        .some((name) => normalize(name) === normalize(input.customerName)))) {
+        throw new Error('A customer with this name or alias now exists. Reject this proposal and use the existing customer.')
+      }
+      batch.collection('customers').create({
+        id: input.customerId, name: input.customerName, company_name: input.customerName, active: true, opening_balance: 0,
+      })
+    }
 
     batch.collection('bills').create({
       id: billId,
@@ -189,6 +209,10 @@ export async function saveBillWithItems(input: SaveBillInput & { payments?: Quic
       // Atomic request: header, line items, and quick payments commit together in one transaction.
       await batch.send()
     } catch (error) {
+      if (input.newCustomer && input.draftId) {
+        const saved = await pb.collection('bill_drafts').getOne(input.draftId).catch(() => null)
+        if (saved?.status === 'approved' && saved.converted_bill) return { billId: String(saved.converted_bill) }
+      }
       if (isUniqueBillNumberError(error)) {
         throw new Error(`Bill ${input.bookNo}/${input.billNo} was just taken by another save. Pick the next free number and try again.`, { cause: error })
       }
@@ -209,5 +233,6 @@ export async function saveBillWithItems(input: SaveBillInput & { payments?: Quic
     } catch (error) {
       console.warn('[save-bill] bill JPG upload failed after save', error)
     }
+    return { billId }
   })
 }

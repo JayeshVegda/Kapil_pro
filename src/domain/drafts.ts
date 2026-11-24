@@ -31,6 +31,8 @@ export type DraftRecordInput = {
   notes?: string
   raw_text?: string
   converted_bill?: string
+  rejection_reason?: string
+  muse_new_customer?: boolean
   expand?: {
     customer?: { id: string; name?: string; company_name?: string } | null
   }
@@ -74,6 +76,8 @@ export type DraftView = {
   lrNo: string
   notes: string
   convertedBill: string
+  rejection_reason?: string
+  museNewCustomer?: boolean
   rows: DraftItemRow[]
   payments: DraftPaymentInput[]
   itemsSubtotal: number
@@ -175,6 +179,8 @@ export function buildDraftView(draft: DraftRecordInput, itemRows: Array<Record<s
     lrNo: String(draft.lr_no ?? ''),
     notes: String(draft.notes ?? ''),
     convertedBill: String(draft.converted_bill ?? ''),
+    rejection_reason: draft.rejection_reason,
+    museNewCustomer: draft.muse_new_customer === true,
     rows,
     payments,
     itemsSubtotal,

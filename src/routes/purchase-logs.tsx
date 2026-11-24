@@ -121,7 +121,7 @@ function PurchaseLogsPage() {
   // Modals state
   const [cancelBillTarget, setCancelBillTarget] = useState<{ id: string; inNo: string } | null>(null)
   const [editBillTarget, setEditBillTarget] = useState<{ id: string; inNo: string } | null>(null)
-  const [paymentDetailsId, setPaymentDetailsId] = useState<string | null>(null)
+  const [paymentDialog, setPaymentDialog] = useState<{ id: string; void: boolean } | null>(null)
 
   // Queries
   const billsQuery = useQuery(purchaseBillsQueryOptions())
@@ -647,12 +647,13 @@ function PurchaseLogsPage() {
                               <>
                                 <button
                                   type="button"
-                                  onClick={() => setPaymentDetailsId(row.id)}
+                                  onClick={() => setPaymentDialog({ id: row.id, void: false })}
                                   className="inline-flex h-7 items-center gap-1 rounded border border-border bg-card px-2 text-[11px] font-semibold text-foreground hover:bg-secondary transition"
                                   title="View payment allocations & breakdown"
                                 >
                                   <Eye size={12} /> View
                                 </button>
+                                {!row.cancelled && <button type="button" aria-label="Void payment" onClick={() => setPaymentDialog({ id: row.id, void: true })} className="inline-flex h-7 items-center rounded border border-border bg-card px-1.5 text-[11px] text-muted-foreground hover:bg-rose-50 hover:text-rose-600">Void</button>}
                               </>
                             )}
                           </div>
@@ -679,10 +680,11 @@ function PurchaseLogsPage() {
       )}
 
 
-      {paymentDetailsId && (
+      {paymentDialog && (
         <PaymentDetailsModal
-          paymentId={paymentDetailsId}
-          onClose={() => setPaymentDetailsId(null)}
+          paymentId={paymentDialog.id}
+          startInVoidMode={paymentDialog.void}
+          onClose={() => setPaymentDialog(null)}
         />
       )}
 

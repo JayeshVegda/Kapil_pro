@@ -66,6 +66,11 @@ vi.mock('@/data/casting', () => ({
 }))
 
 describe('CastingTicket (Phase 4)', () => {
+  it('renders saved remarks on the shared chithi and hides the section when blank', async () => {
+    expect(await renderPage(<CastingTicket session={session} />)).toContain('Shiny batch')
+    expect(await renderPage(<CastingTicket session={{ ...session, note: '  ' }} />)).not.toContain('Remarks')
+  })
+
   it('shows the current Brass basis and separately labels the original saved cost', async () => {
     const html = await renderPage(<CastingTicket session={session} />)
 

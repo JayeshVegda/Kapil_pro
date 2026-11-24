@@ -87,6 +87,7 @@ export async function executeConfirmedBatch(options: {
   scope: string
   label: string
   input: unknown
+  resultIndex?: number
   build: (confirmationId: string) => { batch: BatchSender; record: RecordRow } | Promise<{ batch: BatchSender; record: RecordRow }>
   recover?: (confirmation: RecordRow) => RecordRow
 }): Promise<RecordRow> {
@@ -126,7 +127,7 @@ export async function executeConfirmedBatch(options: {
       if (failed) {
         throw Object.assign(new Error('Purchase transaction rejected.'), { status: failed.status, data: failed.body })
       }
-      const saved = results?.[0]?.body
+      const saved = results?.[options.resultIndex ?? 0]?.body
       if (!saved || typeof saved !== 'object' || !('id' in saved) || saved.id !== record.id) {
         throw new Error('The save response did not include the committed record.')
       }

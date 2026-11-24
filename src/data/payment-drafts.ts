@@ -73,6 +73,10 @@ export async function countPendingPaymentDrafts(): Promise<number> {
   return res.totalItems
 }
 
+export async function loadSalesPaymentDraft(id: string): Promise<PaymentDraftView> {
+  return buildPaymentDraftView(await pb.collection('payment_drafts').getOne<PaymentDraftRecordInput>(id))
+}
+
 export type SavedPaymentReceiptFromDraft = {
   id: string
   draftId: string

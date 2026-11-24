@@ -6,12 +6,14 @@ import { runDataOperation } from '@/data/reliability'
 import { executeConfirmedBatch, generatePurchaseRecordId } from '@/data/confirmed-write'
 import { isValidCalendarDay } from '@/lib/date'
 import { validateSupplierPaymentMode, type SupplierPaymentMode } from '@/domain/supplier-payment-modes'
-import { formatPurchaseLineMemos, parsePurchaseLineMemos, readSettledBagCount, remainingPurchaseBags, writeSettledBagCount } from '@/domain/purchase-receipt-memos'
+import { formatPurchaseLineMemos, parsePurchaseLineMemos, purchaseReceiptBagCount, remainingPurchaseBags, writeSettledBagCount } from '@/domain/purchase-receipt-memos'
+import { num, text, day, bool, mapSupplier, mapItem, mapBill, mapLine, mapAdjustment, mapBardan, mapPayment, mapAllocation, type PBRow } from '@/data/purchase-record-mappers'
 import { nextPurchaseInNo } from '@/domain/in-no'
 import { findItemNameCollision, itemNameKey, normalizeItemName } from '@/domain/purchase-item-name'
-import { normalizePurchaseAliases } from '@/domain/purchase-bill-draft'
+import { matchPurchaseMaster, normalizePurchaseAliases } from '@/domain/purchase-bill-draft'
 import { MAX_PURCHASE_BILL_PAISE, MAX_PURCHASE_RATE_MILLI, MAX_PURCHASE_WEIGHT_G, sumPaise } from '@/domain/supplier-units'
 import { parsePurchasePaymentDraft } from '@/domain/purchase-payment-draft'
+import { prepareMusePurchaseAction } from '@/domain/muse-purchase-actions'
 import { bundleToLedgerInput, bundleToSettlementInput } from '@/domain/supplier-bundle'
 import {
   buildPurchaseReadModel, buildSupplierBundle, groupPurchaseCollections,
@@ -185,131 +187,6 @@ export type SupplierUpsertInput = {
   active?: boolean
 }
 
-type PBRow = Record<string, unknown> & { id: string }
-
-function num(value: unknown): number {
-  const n = Number(value ?? 0)
-  return Number.isFinite(n) ? n : 0
-}
-
-function text(value: unknown): string {
-  if (value == null) return ''
-  return String(value)
-}
-
-function day(value: unknown): string {
-  return text(value).slice(0, 10)
-}
-
-function bool(value: unknown): boolean {
-  return value === true
-}
-
-function photoList(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((entry): entry is string => typeof entry === 'string')
-}
-
-const mapSupplier = (row: PBRow): SupplierView => ({
-  id: row.id,
-  companyName: text(row.company_name),
-  aliases: text(row.aliases),
-  contactName: text(row.contact_name),
-  phone: text(row.phone),
-  gstNo: text(row.gst_no),
-  city: text(row.city),
-  notes: text(row.notes),
-  openingKachaPaise: num(row.opening_kacha_paise),
-  openingGstPaise: num(row.opening_gst_paise),
-  openingBalanceDate: day(row.opening_balance_date),
-  active: row.active === undefined ? true : bool(row.active),
-  created: text(row.created),
-})
-
-const mapItem = (row: PBRow): PurchaseItemView => ({
-  id: row.id,
-  name: text(row.name),
-  aliases: text(row.aliases),
-  active: row.active === undefined ? true : bool(row.active),
-  created: text(row.created),
-})
-
-const mapBill = (row: PBRow): PurchaseBillView => ({
-  id: row.id,
-  supplierId: text(row.supplier),
-  inNo: text(row.in_no),
-  supplierBillNo: text(row.supplier_bill_no),
-  date: day(row.date),
-  pool: text(row.pool) === 'gst' ? 'gst' : 'kacha',
-  taxMode: text(row.tax_mode) || 'none',
-  gstRateBp: num(row.gst_rate_bp),
-  groupId: text(row.group_id),
-  vehicleNo: text(row.vehicle_no),
-  privateNote: text(row.private_note),
-  photos: photoList(row.photos),
-  cancelled: bool(row.cancelled),
-  cancelReason: text(row.cancel_reason),
-  created: text(row.created),
-})
-
-const mapLine = (row: PBRow): PurchaseLineView => ({
-  id: row.id,
-  billId: text(row.bill),
-  itemId: text(row.item),
-  itemName: text(row.item_name),
-  weightG: num(row.weight_g),
-  rateMilli: num(row.rate_milli),
-  amountPaise: num(row.amount_paise),
-  created: text(row.created),
-})
-
-const mapAdjustment = (row: PBRow): PurchaseAdjustmentView => ({
-  id: row.id,
-  billId: text(row.bill),
-  type: text(row.type),
-  amountPaise: num(row.amount_paise),
-  note: text(row.note),
-  created: text(row.created),
-})
-
-const mapBardan = (row: PBRow): PurchaseBardanView => ({
-  id: row.id,
-  billId: text(row.bill),
-  bardanG: num(row.bardan_g),
-  rateLineId: text(row.rate_line),
-  rateMilli: num(row.rate_milli),
-  method: text(row.method),
-  creditPaise: num(row.credit_paise),
-  cashAmountPaise: num(row.cash_amount_paise),
-  date: day(row.date),
-  ...readSettledBagCount(text(row.note)),
-  created: text(row.created),
-})
-
-const mapPayment = (row: PBRow): SupplierPaymentView => ({
-  id: row.id,
-  supplierId: text(row.supplier),
-  date: day(row.date),
-  pool: text(row.pool) === 'gst' ? 'gst' : 'kacha',
-  kind: text(row.kind),
-  amountPaise: num(row.amount_paise),
-  mode: text(row.mode),
-  reference: text(row.reference),
-  payeeName: text(row.payee_name),
-  privateNote: text(row.private_note),
-  photos: photoList(row.photos),
-  cancelled: bool(row.cancelled),
-  cancelReason: text(row.cancel_reason),
-  created: text(row.created),
-})
-
-const mapAllocation = (row: PBRow): SupplierAllocationView => ({
-  id: row.id,
-  paymentId: text(row.payment),
-  billId: text(row.bill),
-  amountPaise: num(row.amount_paise),
-  created: text(row.created),
-})
 
 function currentActor(): string {
   const record = pb.authStore.record
@@ -502,6 +379,7 @@ export async function deletePurchaseItem(itemId: string): Promise<void> {
 export type PurchaseBillCreateInput = {
   requestId?: string
   draftId?: string
+  newSupplierDraft?: { name: string; actionDraftId: string }
   supplierId: string
   inNo: string
   supplierBillNo?: string
@@ -545,6 +423,18 @@ export async function getNextPurchaseInNo(dateYyyyMmDd: string): Promise<string>
   return nextPurchaseInNo(existingInNos, dateYyyyMmDd)
 }
 
+async function assertMuseSupplierReady(dependency: unknown, supplierId: string) {
+  const id = text(dependency)
+  if (!id) return
+  if (supplierId !== id) throw new Error('This draft is linked to a specific new supplier. Do not switch it to another supplier.')
+  const parent = await pb.collection('muse_purchase_action_drafts').getOne(id)
+  if (parent.status !== 'approved' || !parent.converted_record || prepareMusePurchaseAction(parent.payload).kind !== 'new_supplier_bill') {
+    throw new Error('Approve the linked new supplier and first bill before saving this follow-up.')
+  }
+  const supplier = await getSupplier(supplierId)
+  if (!supplier.active) throw new Error('The linked supplier is inactive.')
+}
+
 export async function createPurchaseBill(input: PurchaseBillCreateInput): Promise<PurchaseBillView> {
   return runDataOperation('create-purchase-bill', async () => {
     if (input.draftId) {
@@ -553,7 +443,9 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
         throw new AppError({ code: 'CONFLICT', message: 'Draft already converted.', details: { billId: String(draft.converted_bill) } })
       }
       if (draft.status !== 'pending_review') throw new AppError({ code: 'CONFLICT', message: 'This draft was already processed.' })
+      await assertMuseSupplierReady(draft.supplier_draft, input.supplierId)
     }
+    if (input.newSupplierDraft && input.draftId) throw new Error('Use only one purchase proposal at a time.')
     validatePurchaseLines(input.lines)
     const paymentDate = input.payment?.date ?? input.date
     if (input.payment) {
@@ -569,8 +461,8 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
 
     const saved = await executeConfirmedBatch({
       confirmationCollection: 'purchase_bills', scope: input.supplierId,
-      label: `Purchase bill ${inNo}`, input,
-      build: (billId) => {
+      label: `Purchase bill ${inNo}`, input, resultIndex: input.newSupplierDraft ? 1 : 0,
+      build: async (billId) => {
         const lineIds = input.lines.map(() => generateRecordId())
         const billPayload = {
           id: billId,
@@ -586,7 +478,24 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
           group_id: input.groupId ?? '',
         }
         const batch = pb.createBatch()
+        if (input.newSupplierDraft) {
+          const name = input.newSupplierDraft.name.trim()
+          const suppliers = await listSuppliers({ includeInactive: true })
+          if (suppliers.some((s) => matchPurchaseMaster(name, undefined, [{ id: s.id, name: s.companyName, aliases: s.aliases, active: true }]))) {
+            throw new Error('A supplier with this name or alias already exists. Reject the proposal and use the existing supplier.')
+          }
+          batch.collection('suppliers').create({ id: input.supplierId, company_name: name, active: true })
+        }
         batch.collection('purchase_bills').create(billPayload)
+        if (input.newSupplierDraft) {
+          batch.collection('purchase_audit_log').create({
+            collection: 'suppliers', record_id: input.supplierId, action: 'create',
+            after_json: JSON.stringify({ company_name: input.newSupplierDraft.name }), actor: currentActor(),
+          })
+          batch.collection('muse_purchase_action_drafts').update(input.newSupplierDraft.actionDraftId, {
+            status: 'approved', converted_record: billId,
+          })
+        }
         for (const [index, line] of input.lines.entries()) {
           const lineId = lineIds[index]
           batch.collection('purchase_bill_lines').create({
@@ -841,6 +750,7 @@ export async function updatePurchaseBill(billId: string, input: PurchaseBillUpda
 
 export type PurchaseBardanEntryInput = {
   bagCount?: number
+  actionDraftId?: string
   requestId?: string
   billId: string
   bardanG: number
@@ -864,10 +774,12 @@ export async function addPurchaseBardanEntry(input: PurchaseBardanEntryInput): P
     if (input.bagCount !== undefined) {
       const detail = await loadPurchaseBill(input.billId)
       const line = detail.lines.find((row) => row.id === input.rateLineId)
-      if (detail.bill.cancelled || !line || !Number.isSafeInteger(input.bagCount) || input.bagCount <= 0 || input.bagCount > remainingPurchaseBags(line, detail.bardan)) {
+      const allowPreviouslyUnrecorded = input.actionDraftId && line && purchaseReceiptBagCount(line.receiptMemo) === 0 && detail.bardan.length === 0
+      if (detail.bill.cancelled || !line || !Number.isSafeInteger(input.bagCount) || input.bagCount <= 0 ||
+        (!allowPreviouslyUnrecorded && input.bagCount > remainingPurchaseBags(line, detail.bardan))) {
         throw new Error('The remaining bag count changed. Reopen Add Bardan and review the bill.')
       }
-      if ((input.method === 'deduct' || input.method === 'advance') && line.rateMilli !== input.rateMilli) {
+      if ((input.method === 'deduct' || input.method === 'advance' || input.actionDraftId) && line.rateMilli !== input.rateMilli) {
         throw new Error('The bill rate changed. Reopen Add Bardan and review the rate.')
       }
     }
@@ -886,6 +798,9 @@ export async function addPurchaseBardanEntry(input: PurchaseBardanEntryInput): P
 
     const batch = pb.createBatch()
     batch.collection('purchase_bardan').create(bardanPayload)
+    if (input.actionDraftId) {
+      batch.collection('muse_purchase_action_drafts').update(input.actionDraftId, { status: 'approved', converted_record: bardanId })
+    }
 
     if (input.method === 'advance' && (input.creditPaise ?? 0) > 0) {
       const paymentId = generateRecordId()
@@ -926,12 +841,33 @@ export async function addPurchaseBardanEntry(input: PurchaseBardanEntryInput): P
   })
 }
 
+async function voidPurchaseRecord(collection: 'purchase_bills' | 'supplier_payments', id: string, reason: string): Promise<PBRow> {
+  const cancelReason = reason.trim()
+  if (!cancelReason) throw new Error('Void reason is required.')
+  const before = await pb.collection(collection).getOne<PBRow>(id)
+  if (bool(before.cancelled)) throw new Error('This record is already voided.')
+  const patch = { cancelled: true, cancel_reason: cancelReason }
+  return executeConfirmedBatch({
+    confirmationCollection: 'purchase_audit_log',
+    scope: `void:${collection}:${id}`,
+    label: 'Purchase void',
+    input: { id, cancelReason },
+    recover: (audit) => ({ ...before, ...patch, updated: audit.created }),
+    build: async (auditId) => {
+      const batch = pb.createBatch()
+      batch.collection(collection).update(id, patch)
+      batch.collection('purchase_audit_log').create({
+        id: auditId, collection, record_id: id, action: 'cancel',
+        before_json: JSON.stringify(before), after_json: JSON.stringify(patch), actor: currentActor(),
+      })
+      return { batch, record: { ...before, ...patch } }
+    },
+  })
+}
+
 export async function cancelPurchaseBill(billId: string, reason: string): Promise<PurchaseBillView> {
   return runDataOperation('cancel-purchase-bill', async () => {
-    const before = (await pb.collection('purchase_bills').getOne(billId)) as PBRow
-    const row = (await pb.collection('purchase_bills').update(billId, { cancelled: true, cancel_reason: reason })) as PBRow
-    await writeAuditRow({ collection: 'purchase_bills', recordId: billId, action: 'cancel', before, after: { cancelled: true, cancel_reason: reason } })
-    return mapBill(row)
+    return mapBill(await voidPurchaseRecord('purchase_bills', billId, reason))
   })
 }
 
@@ -972,6 +908,7 @@ export async function createSupplierPayment(input: SupplierPaymentCreateInput): 
         throw new AppError({ code: 'CONFLICT', message: 'Draft already converted.', details: { paymentId: String(draft.converted_payment) } })
       }
       if (draft.status !== 'pending_review') throw new AppError({ code: 'CONFLICT', message: 'This draft was already processed.' })
+      await assertMuseSupplierReady(draft.supplier_draft, input.supplierId)
       if (parsePurchasePaymentDraft(draft.schema_version, draft.payload).kind === 'invalid') {
         throw new AppError({ code: 'VALIDATION', message: 'Invalid Purchase payment draft cannot be saved.' })
       }
@@ -1103,10 +1040,7 @@ export async function loadPurchaseBill(billId: string): Promise<PurchaseBillDeta
 
 export async function cancelSupplierPayment(paymentId: string, reason: string): Promise<SupplierPaymentView> {
   return runDataOperation('cancel-supplier-payment', async () => {
-    const before = (await pb.collection('supplier_payments').getOne(paymentId)) as PBRow
-    const row = (await pb.collection('supplier_payments').update(paymentId, { cancelled: true, cancel_reason: reason })) as PBRow
-    await writeAuditRow({ collection: 'supplier_payments', recordId: paymentId, action: 'cancel', before, after: { cancelled: true, cancel_reason: reason } })
-    return mapPayment(row)
+    return mapPayment(await voidPurchaseRecord('supplier_payments', paymentId, reason))
   })
 }
 

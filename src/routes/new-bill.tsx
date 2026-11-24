@@ -1354,8 +1354,12 @@ function NewBillPage() {
     if (!routeDraftId || !routeDraftQuery.data || draftPreloadHandledRef.current === routeDraftId) return
     if (!customersQuery.data || !itemsQuery.data) return
     draftPreloadHandledRef.current = routeDraftId
+    if (routeDraftQuery.data.muse_new_customer) {
+      void navigate({ to: '/drafts' })
+      return
+    }
     void applyDraft({ ...routeDraftQuery.data, autoOpenPreview: Boolean(routePreview) })
-  }, [routeDraftId, routePreview, routeDraftQuery.data, customersQuery.data, itemsQuery.data, applyDraft])
+  }, [routeDraftId, routePreview, routeDraftQuery.data, customersQuery.data, itemsQuery.data, applyDraft, navigate])
 
   const dismissDraft = useCallback((draftId: string) => {
     pb.collection('bill_drafts').update(draftId, { status: 'rejected' }).catch(() => null)

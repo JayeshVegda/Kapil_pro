@@ -1,5 +1,5 @@
 export type InboxModule = 'sales' | 'purchase' | 'casting'
-export type InboxKind = 'bill' | 'payment' | 'session'
+export type InboxKind = 'bill' | 'payment' | 'session' | 'action'
 export type InboxStatus = 'pending_review' | 'approved' | 'rejected'
 
 export type InboxEntry = {

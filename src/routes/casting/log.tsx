@@ -1,17 +1,16 @@
+import { CastingSessionEditor } from '@/components/casting/casting-session-editor'
 import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
 import { LogsPager, LogsTableCard, LogsToolbarCard, defaultLogFromDate, useLogsPager } from '@/components/logging/logs-shell'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Edit3, Eye, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Edit3, Eye, RotateCcw, Search, Trash2, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
-import { deleteCastingSession, loadCastingMaterials, loadCastingSessions, saveCastingSession, updateCastingSession } from '@/data/casting'
-import { SearchableCombobox } from '@/components/ui/searchable-combobox'
+import { deleteCastingSession, loadCastingSessions, saveCastingSession } from '@/data/casting'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { CastingTicket } from '@/components/casting/casting-ticket'
-import type { CastingInputRow } from '@/domain/casting-calculations'
 import type { CastingSessionTrashSnapshot, CastingSessionWithInputs, CastingTrashEntry } from '@/domain/casting-types'
 import { cleanupExpiredCastingTrash } from '@/domain/casting-trash'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
@@ -29,26 +28,8 @@ export const Route = createFileRoute('/casting/log')({
 const CASTING_TRASH_KEY = 'kapil-casting-trash-v1'
 const CASTING_SESSIONS_KEY = ['casting-sessions'] as const
 const CASTING_LOG_KEY = ['casting-log'] as const
-const CASTING_MATERIALS_KEY = ['casting-materials'] as const
 const pollMs = 60_000
-const STANDARD_MATERIALS = ['Brass', 'Pata', 'Aux Chol', 'Merobal', 'Lead'] as const
-
-type UiRow = CastingInputRow & { clientId: string }
-
-function newClientId() {
-  return `r-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-}
-
-function toUiRows(inputs: CastingSessionWithInputs['inputs']): UiRow[] {
-  if (inputs.length === 0) return [{ clientId: newClientId(), materialName: '', qty: 0, rate: 0 }]
-  return inputs.map((i) => ({
-    clientId: newClientId(),
-    materialName: i.materialName,
-    qty: i.qty,
-    rate: i.rate,
-  }))
-}
-
+const inputClass = `${baseInputClass} h-10`
 function readTrash(): CastingTrashEntry[] {
   if (typeof window === 'undefined') return []
   try {
@@ -82,79 +63,6 @@ function matchesSearch(session: CastingSessionWithInputs, q: string) {
   return session.inputs.some((i) => i.materialName.toLowerCase().includes(needle))
 }
 
-// Utility to parse arithmetic expressions like "20+20"
-function parseExpression(val: string | number): number {
-  if (typeof val === 'number') return val
-  const clean = String(val ?? '').replace(/\s+/g, '')
-  if (!clean) return 0
-  try {
-    if (/^[0-9.+\-*/()]+$/.test(clean)) {
-      const fn = new Function(`return (${clean})`)
-      const result = Number(fn())
-      return Number.isFinite(result) && result >= 0 ? result : 0
-    }
-  } catch {
-    // Fall through to plain number parsing below.
-  }
-  const parsed = Number(clean)
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
-type MathInputProps = {
-  value: number
-  onChange: (val: number) => void
-  className?: string
-  placeholder?: string
-}
-
-function MathInput({ value, onChange, className, placeholder }: MathInputProps) {
-  const [tempValue, setTempValue] = useState<string>('')
-  const [isFocused, setIsFocused] = useState(false)
-
-  useEffect(() => {
-    if (!isFocused) {
-      setTempValue(value ? String(value) : '')
-    }
-  }, [value, isFocused])
-
-  const handleBlur = () => {
-    setIsFocused(false)
-    const evaluated = parseExpression(tempValue)
-    onChange(evaluated)
-    setTempValue(evaluated ? String(evaluated) : '')
-  }
-
-  return (
-    <input
-      type="text"
-      className={className}
-      value={tempValue}
-      onChange={(e) => setTempValue(e.target.value)}
-      onFocus={() => setIsFocused(true)}
-      onBlur={handleBlur}
-      placeholder={placeholder}
-    />
-  )
-}
-
-const editSchema = z
-  .object({
-    id: z.string().min(1),
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    unit: z.number().nonnegative(),
-    wireOut: z.number().nonnegative(),
-    wastage: z.number().nonnegative(),
-    cholIn: z.number().nonnegative(),
-    note: z.string(),
-    rows: z.array(z.object({ materialName: z.string(), qty: z.number(), rate: z.number() })),
-  })
-  .superRefine((data, ctx) => {
-    const valid = data.rows.filter((r) => r.materialName.trim().length > 0 && r.qty > 0 && r.rate > 0)
-    if (valid.length === 0) {
-      ctx.addIssue({ code: 'custom', message: 'Add at least one material row with qty > 0 and rate > 0', path: ['rows'] })
-    }
-  })
-
 export function CastingLogPage() {
   const queryClient = useQueryClient()
   const { sessionId, sessionDate, action } = Route.useSearch()
@@ -168,14 +76,6 @@ export function CastingLogPage() {
   const [viewing, setViewing] = useState<CastingSessionWithInputs | null>(null)
   const [editing, setEditing] = useState<CastingSessionWithInputs | null>(null)
   const [deletingSession, setDeletingSession] = useState<CastingSessionWithInputs | null>(null)
-  const [editDate, setEditDate] = useState('')
-  const [editUnit, setEditUnit] = useState(0)
-  const [editWire, setEditWire] = useState(0)
-  const [editWastage, setEditWastage] = useState(0)
-  const [editChol, setEditChol] = useState(0)
-  const [editNote, setEditNote] = useState('')
-  const [editRows, setEditRows] = useState<UiRow[]>([])
-
   useEffect(() => {
     if (sessionId && sessionDate && action) {
       setDateFrom(sessionDate)
@@ -191,19 +91,6 @@ export function CastingLogPage() {
         ...(dateTo ? { to: dateTo } : {}),
       }),
   })
-  const materialsQuery = useQuery({
-    queryKey: CASTING_MATERIALS_KEY,
-    queryFn: loadCastingMaterials,
-    staleTime: 60_000,
-  })
-  const materialOptions = useMemo(() => {
-    const set = new Set<string>(STANDARD_MATERIALS)
-    for (const m of materialsQuery.data ?? []) {
-      if (m.isActive && m.name.trim()) set.add(m.name.trim())
-    }
-    return [...set].map((name) => ({ id: name, name }))
-  }, [materialsQuery.data])
-
   useEffect(() => {
     const timer = window.setInterval(() => {
       setTrashEntries((prev) => {
@@ -337,38 +224,6 @@ export function CastingLogPage() {
     onError: (e) => setStatusText(toUserMessage(e)),
   })
 
-  const updateMutation = useMutation({
-    mutationFn: async () => {
-      if (!editing) return
-      const parsed = editSchema.safeParse({
-        id: editing.id,
-        date: editDate,
-        unit: editUnit,
-        wireOut: editWire,
-        wastage: editWastage,
-        cholIn: editChol,
-        note: editNote,
-        rows: editRows.map(({ materialName, qty, rate }) => ({ materialName, qty, rate })),
-      })
-      if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid session')
-      await updateCastingSession(parsed.data.id, {
-        date: parsed.data.date,
-        unit: parsed.data.unit,
-        wireOut: parsed.data.wireOut,
-        wastage: parsed.data.wastage,
-        cholIn: parsed.data.cholIn,
-        note: parsed.data.note,
-        inputs: parsed.data.rows,
-      })
-    },
-    onSuccess: async () => {
-      setStatusText('Session updated.')
-      closeEdit()
-      await invalidateCastingQueries(queryClient)
-    },
-    onError: (e) => setStatusText(toUserMessage(e)),
-  })
-
   async function invalidateCastingQueries(qc: ReturnType<typeof useQueryClient>) {
     await Promise.all([
       qc.invalidateQueries({ queryKey: CASTING_SESSIONS_KEY }),
@@ -379,13 +234,6 @@ export function CastingLogPage() {
 
   function openEdit(s: CastingSessionWithInputs) {
     setEditing(s)
-    setEditDate(s.date)
-    setEditUnit(s.unit)
-    setEditWire(s.wireOut)
-    setEditWastage(s.wastage)
-    setEditChol(s.cholIn)
-    setEditNote(s.note)
-    setEditRows(toUiRows(s.inputs))
   }
 
   useEffect(() => {
@@ -404,20 +252,8 @@ export function CastingLogPage() {
 
   function closeEdit() {
     setEditing(null)
-    setEditRows([])
   }
 
-  function updateEditRow(id: string, patch: Partial<CastingInputRow>) {
-    setEditRows((prev) => prev.map((r) => (r.clientId === id ? { ...r, ...patch } : r)))
-  }
-
-  function addEditRow() {
-    setEditRows((prev) => [...prev, { clientId: newClientId(), materialName: '', qty: 0, rate: 0 }])
-  }
-
-  function removeEditRow(id: string) {
-    setEditRows((prev) => (prev.length <= 1 ? prev : prev.filter((r) => r.clientId !== id)))
-  }
 
   const totals = useMemo(() => {
     let inputKg = 0
@@ -635,7 +471,7 @@ export function CastingLogPage() {
       {/* View Casting Session Modal: centered, sharing the printed ticket */}
       {viewing && (
         <Dialog open onOpenChange={(open) => { if (!open) setViewing(null) }}>
-          <DialogContent showCloseButton={false} className="max-h-[92vh] max-w-2xl overflow-auto border border-slate-200 bg-white p-0 shadow-xl">
+          <DialogContent showCloseButton={false} className="max-h-[92vh] sm:max-w-4xl overflow-auto border border-slate-200 bg-white p-0 shadow-xl">
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
               <DialogTitle className="text-sm font-semibold text-slate-950">
                 Casting session ticket — {formatFullDate(viewing.date)}
@@ -654,100 +490,17 @@ export function CastingLogPage() {
         </Dialog>
       )}
 
-      {/* Edit Casting Session Modal */}
       {editing && (
         <Dialog open onOpenChange={(open) => { if (!open) closeEdit() }}>
-          <DialogContent showCloseButton={false} className="max-h-[92vh] max-w-4xl overflow-auto border border-slate-200 bg-white p-0 shadow-xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-              <DialogTitle className="text-sm font-semibold text-slate-950">Edit Casting Session</DialogTitle>
-              <button type="button" aria-label="Close casting editor" className="rounded-md p-1 text-slate-400 hover:bg-slate-150 transition" onClick={closeEdit}>
-                <X size={16} />
-              </button>
+          <DialogContent showCloseButton={false} className="max-h-[92vh] gap-0 overflow-auto border border-slate-200 bg-white p-0 shadow-xl sm:max-w-[min(94vw,78rem)]">
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-slate-200 bg-white px-5 py-3">
+              <DialogTitle>Edit Casting Session · {formatFullDate(editing.date)}</DialogTitle>
+              <button type="button" aria-label="Close casting editor" className="rounded p-1 hover:bg-slate-100" onClick={closeEdit}><X size={16} /></button>
             </div>
-            <div className="space-y-5 p-5">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-6">
-                <Field label="Date *">
-                  <input className={inputClass} type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
-                </Field>
-                <Field label="Unit (batches)">
-                  <MathInput className={inputClass} placeholder="0" value={editUnit} onChange={setEditUnit} />
-                </Field>
-                <Field label="Wire out (kg)">
-                  <MathInput className={inputClass} placeholder="0.00" value={editWire} onChange={setEditWire} />
-                </Field>
-                <Field label="Wastage (kg)">
-                  <MathInput className={inputClass} placeholder="0.00" value={editWastage} onChange={setEditWastage} />
-                </Field>
-                <Field label="Chol IN (kg)">
-                  <MathInput className={inputClass} placeholder="0.00" value={editChol} onChange={setEditChol} />
-                </Field>
-                <Field label="Remarks / Note">
-                  <input className={inputClass} value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="Remarks" />
-                </Field>
-              </div>
-
-              {/* Nested Materials Table */}
-              <div className="rounded-xl border border-slate-200 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Materials Consumed</h4>
-                  <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 px-3 py-1.5 transition shadow-sm" onClick={addEditRow}>
-                    <Plus size={12} /> Add Material row
-                  </button>
-                </div>
-                <div className="overflow-x-auto rounded-lg">
-                  <table className="w-full min-w-[640px] text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-slate-500 text-xs font-bold uppercase tracking-wider text-left bg-slate-50/50">
-                        <th className="px-3 py-2 text-left font-bold text-slate-600">Material</th>
-                        <th className="px-3 py-2 text-center font-bold text-slate-600 w-32">Qty (kg)</th>
-                        <th className="px-3 py-2 text-center font-bold text-slate-600 w-32">Rate / kg</th>
-                        <th className="px-3 py-2 text-right font-bold text-slate-600 w-36">Amount</th>
-                        <th className="px-3 py-2 text-right font-bold text-slate-600 w-24"> </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {editRows.map((r) => {
-                        const amt = r.qty * r.rate
-                        return (
-                          <tr key={r.clientId} className="hover:bg-slate-50/30 transition">
-                            <td className="p-1.5 align-middle">
-                              <SearchableCombobox
-                                options={materialOptions}
-                                value={r.materialName}
-                                onChange={(nextId) => updateEditRow(r.clientId, { materialName: nextId })}
-                                inputClassName="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30"
-                                placeholder="Select material"
-                                emptyText="No matching material."
-                              />
-                            </td>
-                            <td className="p-0 align-middle text-center w-32">
-                              <MathInput className="w-full h-9 bg-transparent text-center font-mono px-1 outline-none transition focus:bg-slate-50" value={r.qty} onChange={(val) => updateEditRow(r.clientId, { qty: val })} placeholder="0.00" />
-                            </td>
-                            <td className="p-0 align-middle text-center w-32">
-                              <MathInput className="w-full h-9 bg-transparent text-center font-mono px-1 outline-none transition focus:bg-slate-50" value={r.rate} onChange={(val) => updateEditRow(r.clientId, { rate: val })} placeholder="0.00" />
-                            </td>
-                            <td className="px-3 py-2 align-middle text-right font-mono font-semibold tabular-nums text-slate-850 w-36">{formatInrInteger(amt)}</td>
-                            <td className="px-3 py-2 align-middle text-right w-24">
-                              <button type="button" className="text-xs font-semibold text-rose-600 hover:text-rose-700 disabled:opacity-30 transition" onClick={() => removeEditRow(r.clientId)} disabled={editRows.length <= 1}>
-                                <Trash2 size={13} className="inline mr-1" /> Remove
-                              </button>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-            <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-slate-200 bg-white px-4 py-3.5">
-              <button type="button" className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 px-4 py-2 transition shadow-sm" onClick={closeEdit}>
-                Cancel
-              </button>
-              <button type="button" className="rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white px-5 py-2 transition shadow-sm disabled:opacity-60" onClick={() => void updateMutation.mutateAsync()} disabled={updateMutation.isPending}>
-                {updateMutation.isPending ? 'Saving...' : 'Save changes'}
-              </button>
-            </div>
+            <CastingSessionEditor key={editing.id} initialSession={editing} onSaved={() => {
+              closeEdit()
+              setStatusText('Session updated.')
+            }} />
           </DialogContent>
         </Dialog>
       )}
@@ -765,14 +518,3 @@ function subtractMonthsIso(monthsBack: number) {
   const d = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
 }
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1.5 w-full">
-      <span className="text-xs font-semibold text-slate-500 tracking-wide">{label}</span>
-      {children}
-    </label>
-  )
-}
-
-const inputClass = `${baseInputClass} h-10`

@@ -113,6 +113,11 @@ export function CastingTicket({ session }: { session: CastingSessionWithInputs }
         </dl>
       </section>
 
+      {session.note.trim() && <section className="rounded-lg border border-slate-200 px-3 py-2.5">
+        <h3 className="text-xs font-semibold">Remarks</h3>
+        <p className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-700">{session.note.trim()}</p>
+      </section>}
+
       <section className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 print:bg-white">
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <h3 className="text-sm font-semibold text-emerald-950">Final ready cost</h3>

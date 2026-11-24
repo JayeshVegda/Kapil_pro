@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
 import { PurchaseBillEditor } from '@/components/suppliers/purchase-bill-editor'
+import { NewPurchaseMuseStrip } from '@/components/drafts/muse-purchase-inbox'
 
 const searchSchema = z.object({
   supplierId: z.string().optional(),
@@ -18,11 +19,14 @@ export const Route = createFileRoute('/new-purchase-bill')({
 function NewPurchaseBillPage() {
   const { supplierId, editBillId, draftId } = Route.useSearch()
   return (
+    <>
+    {!draftId && !editBillId && <NewPurchaseMuseStrip />}
     <PurchaseBillEditor
       variant="page"
       initialSupplierId={supplierId}
       editBillId={editBillId}
       draftId={draftId}
     />
+    </>
   )
 }

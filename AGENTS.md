@@ -47,8 +47,8 @@ Sales, Purchase, and Casting are **completely independent data worlds**.
 - When a module is disabled, its pages, navigation items, Ctrl+K commands, and tab headers are completely hidden. Deep links redirect to `/` via `src/routes/__root.tsx`.
 
 ### Rule 6: Muse AI Constraints
-- External Muse automations interact only through draft collections: `bill_drafts` and `payment_drafts`.
-- Muse has **zero direct write access** to live ledgers, bills, or payment records. All drafts must be approved by the owner via `/drafts`.
+- The private Muse gateway stages Sales bills and receipts, Purchase bills, payments and Bardan actions, and Casting sessions in their separate draft collections. Use `/drafts` to review, load into the normal editor, or reject an entry with a reason.
+- The only direct create operations are explicitly requested Sales customer and Purchase supplier master records, with zero opening balances. Muse cannot directly post to a ledger, bill, payment, or Casting session. Only the owner can post a draft.
 
 ---
 

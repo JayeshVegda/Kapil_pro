@@ -18,20 +18,9 @@ import { buildPurchaseBillPresentation } from '@/components/suppliers/purchase-b
 import { AddBardanModal, CancelBillModal } from '@/components/suppliers/bill-modals'
 import { PurchaseBillEditDialog } from '@/components/suppliers/purchase-bill-editor'
 import { itemsSummary } from '@/components/suppliers/purchase-bills-table'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
 import { listPurchaseItems, type EnrichedPurchaseBill } from '@/data/suppliers'
 import { purchaseBillQueryOptions, purchaseBillsQueryOptions, supplierContextQueryOptions, supplierPaymentsQueryOptions, suppliersSummaryQueryOptions } from '@/data/purchase-queries'
-import { useSavedViews } from '@/data/use-saved-views'
-import type { PurchaseBillsFilterConfig } from '@/data/saved-views'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
 
@@ -75,7 +64,6 @@ const TAB_LABELS: Record<TabKey, string> = {
   bardan: 'Bills with bardan pending',
 }
 
-const SAVED_VIEW_SCOPE = 'purchase-bills' as const
 
 function PurchaseBillsRoute() {
   return (
@@ -104,13 +92,6 @@ function PurchaseBillsPage() {
   const [selectedId, setSelectedId] = useState<string>(routeSearch.billId ?? '')
   const [modal, setModal] = useState<ModalKind>(null)
   const [editingBill, setEditingBill] = useState<{ id: string; inNo: string } | null>(null)
-  const [saveViewOpen, setSaveViewOpen] = useState(false)
-  const [saveViewName, setSaveViewName] = useState('')
-  const [renameOpen, setRenameOpen] = useState(false)
-  const [renameName, setRenameName] = useState('')
-  const [deleteViewOpen, setDeleteViewOpen] = useState(false)
-  const [selectedViewName, setSelectedViewName] = useState('')
-
   // 1. Load bills and suppliers
   const billsQuery = useQuery(purchaseBillsQueryOptions())
   const paymentsQuery = useQuery(supplierPaymentsQueryOptions())
@@ -277,34 +258,7 @@ function PurchaseBillsPage() {
 
   const isPaymentsView = routeSearch.view === 'payments'
 
-  // Saved views (Phase 2): owner-named snapshots of the current URL filters.
-  const savedViews = useSavedViews(SAVED_VIEW_SCOPE)
-  const appliedConfig = useMemo<PurchaseBillsFilterConfig>(() => {
-    const cfg: PurchaseBillsFilterConfig = {}
-    for (const key of ['view', 'supplier', 'tab', 'pool', 'q', 'from', 'to', 'kind', 'payq'] as const) {
-      const value = routeSearch[key]
-      if (value) (cfg as Record<string, unknown>)[key] = value
-    }
-    return cfg
-  }, [routeSearch])
-  const chosenView = useMemo(
-    () => (savedViews.viewsQuery.data ?? []).find((v) => v.name === selectedViewName) ?? null,
-    [savedViews.viewsQuery.data, selectedViewName],
-  )
-  const applySavedView = (name: string) => {
-    const view = (savedViews.viewsQuery.data ?? []).find((v) => v.name === name)
-    if (!view) {
-      setSelectedViewName('')
-      return
-    }
-    setSelectedViewName(view.name)
-    void navigate({
-      to: '/purchase-bills',
-      search: { billId: routeSearch.billId, ...view.config } as any,
-    })
-  }
   const clearAllFilters = () => {
-    setSelectedViewName('')
     void navigate({ to: '/purchase-bills', search: { billId: routeSearch.billId, view: routeSearch.view } })
   }
 
@@ -380,47 +334,6 @@ function PurchaseBillsPage() {
               />
             </>
           )}
-          {/* Saved views */}
-          <div className="ml-auto flex items-center gap-1.5">
-            <span className="text-[11px] font-semibold text-slate-400">Views</span>
-            <select
-              aria-label="Apply saved view"
-              value={chosenView ? chosenView.name : ''}
-              onChange={(event) => applySavedView(event.target.value)}
-              className="h-7 max-w-40 rounded-md border border-slate-300 bg-white px-2"
-            >
-              <option value="">Preset…</option>
-              {(savedViews.viewsQuery.data ?? []).map((v) => <option key={v.id} value={v.name}>{v.name}</option>)}
-            </select>
-            {chosenView && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRenameName(chosenView.name)
-                    setRenameOpen(true)
-                  }}
-                  className="h-7 rounded-md border border-slate-300 bg-white px-2 whitespace-nowrap hover:bg-slate-50"
-                >
-                  Rename
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDeleteViewOpen(true)}
-                  className="h-7 rounded-md border border-slate-200 bg-white px-2 text-slate-500 whitespace-nowrap hover:bg-rose-50 hover:text-rose-700"
-                >
-                  Delete
-                </button>
-              </>
-            )}
-            <button
-              type="button"
-              onClick={() => { setSaveViewName(''); setSaveViewOpen(true) }}
-              className="h-7 rounded-md border border-slate-300 bg-white px-2 font-semibold whitespace-nowrap hover:bg-slate-50"
-            >
-              Save view
-            </button>
-          </div>
         </div>
         {/* Active-filter chips */}
         {activeChips.length > 0 && (
@@ -790,123 +703,6 @@ function PurchaseBillsPage() {
         />
       )}
 
-      {/* Save / rename / delete a named filter view */}
-      <Dialog open={saveViewOpen} onOpenChange={setSaveViewOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="text-sm font-semibold">Save current filters as a view</DialogTitle>
-            <DialogDescription asChild>
-              <div className="text-xs leading-5 text-muted-foreground">The view stores these filters only. {activeChips.length === 0 ? 'No filters are active right now.' : ''}</div>
-            </DialogDescription>
-          </DialogHeader>
-          <input
-            autoFocus
-            value={saveViewName}
-            onChange={(event) => setSaveViewName(event.target.value)}
-            placeholder="e.g. July kacha open bills"
-            maxLength={60}
-            className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs shadow-xs outline-none focus:border-slate-500"
-            aria-label="View name"
-          />
-          <DialogFooter>
-            <button
-              type="button"
-              onClick={() => setSaveViewOpen(false)}
-              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold text-foreground hover:bg-secondary"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={!saveViewName.trim() || savedViews.createMutation.isPending}
-              onClick={() => {
-                savedViews.createMutation.mutate(
-                  { name: saveViewName, config: appliedConfig },
-                  {
-                    onSuccess: (created) => {
-                      setSaveViewOpen(false)
-                      setSelectedViewName(created.name)
-                    },
-                  },
-                )
-              }}
-              className="inline-flex h-9 items-center rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {savedViews.createMutation.isPending ? 'Saving…' : 'Save'}
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={renameOpen}
-        onOpenChange={(open) => {
-          setRenameOpen(open)
-          if (!open) return
-        }}
-      >
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="text-sm font-semibold">Rename view</DialogTitle>
-            <DialogDescription asChild>
-              <div className="text-xs leading-5 text-muted-foreground">'{chosenView?.name}'</div>
-            </DialogDescription>
-          </DialogHeader>
-          <input
-            autoFocus
-            value={renameName}
-            onChange={(event) => setRenameName(event.target.value)}
-            maxLength={60}
-            className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs shadow-xs outline-none focus:border-slate-500"
-            aria-label="New view name"
-          />
-          <DialogFooter>
-            <button
-              type="button"
-              onClick={() => setRenameOpen(false)}
-              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-xs font-semibold text-foreground hover:bg-secondary"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={!renameName.trim() || !chosenView || savedViews.renameMutation.isPending}
-              onClick={() => {
-                if (!chosenView) return
-                savedViews.renameMutation.mutate(
-                  { id: chosenView.id, name: renameName },
-                  {
-                    onSuccess: (renamed) => {
-                      setRenameOpen(false)
-                      setSelectedViewName(renamed.name)
-                    },
-                  },
-                )
-              }}
-              className="inline-flex h-9 items-center rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {savedViews.renameMutation.isPending ? 'Renaming…' : 'Rename'}
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <ConfirmDialog
-        open={deleteViewOpen}
-        onOpenChange={setDeleteViewOpen}
-        title="Delete this view?"
-        description={`'${chosenView?.name}' will be removed permanently. Filters on the page stay as they are.`}
-        confirmLabel="Delete view"
-        tone="danger"
-        onConfirm={() => {
-          if (!chosenView) return
-          savedViews.deleteMutation.mutate(chosenView.id, {
-            onSuccess: () => {
-              setSelectedViewName('')
-            },
-          })
-        }}
-      />
     </div>
   )
 }

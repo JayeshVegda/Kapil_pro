@@ -2,16 +2,20 @@ import { afterAll, expect, it } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { copyFileSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 
 const root = resolve(import.meta.dirname, '../..')
-const binary = join(root, 'runtime/bin/pocketbase')
+const binary = join(root, process.platform === 'win32' ? 'runtime/bin/pocketbase.exe' : 'runtime/bin/pocketbase')
 const schemaMigration = join(root, 'pb_migrations/1794640008_created_purchase_bill_drafts.js')
 const stagedRules = join(root, 'pb_migrations/1794640009_tighten_sales_and_purchase_draft_rules.js')
 const paymentSchemaMigration = join(root, 'pb_migrations/1794640012_created_purchase_payment_drafts.js')
 const castingSchemaMigration = join(root, 'pb_migrations/1794640013_created_casting_session_drafts.js')
-const temp = mkdtempSync(join(tmpdir(), 'kapil-muse-rules-'))
+const paymentReadRules = join(root, 'pb_migrations/1794640016_scope_purchase_payment_draft_reads.js')
+const purchaseActionSchema = join(root, 'pb_migrations/1794640017_create_muse_purchase_action_drafts.js')
+const salesIdempotencySchema = join(root, 'pb_migrations/1794640018_muse_sales_draft_idempotency.js')
+const linkedDraftSchema = join(root, 'pb_migrations/1794640019_link_muse_party_drafts.js')
+const reviewSchema = join(root, 'pb_migrations/1794640020_muse_review_and_party_creation.js')
+const temp = mkdtempSync(join(root, 'node_modules', '.kapil-muse-rules-'))
 const migrationsDir = join(temp, 'migrations')
 const dataDir = join(temp, 'data')
 mkdirSync(migrationsDir)
@@ -80,7 +84,15 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
       account.set('role', role)
       app.save(account)
     }
-    ${['purchase_bills', 'supplier_payments', 'bills', 'bill_items', 'payments', 'customers', 'items', 'brass_rates', 'casting_sessions', 'casting_batches', 'casting_batch_inputs', 'casting_materials'].map(minimalCollection).join('\n    ')}
+    ${['purchase_bills', 'supplier_payments', 'bills', 'bill_items', 'payments', 'items', 'brass_rates', 'casting_sessions', 'casting_batches', 'casting_batch_inputs', 'casting_materials'].map(minimalCollection).join('\n    ')}
+    for (const name of ['customers', 'suppliers']) {
+      app.save(new Collection({ name, type: 'base', listRule: '', viewRule: '', fields: [
+        { name: 'company_name', type: 'text', required: true },
+        { name: 'name', type: 'text' }, { name: 'aliases', type: 'text' },
+        { name: 'active', type: 'bool' }, { name: 'opening_balance', type: 'number' },
+        { name: 'opening_kacha_paise', type: 'number' }, { name: 'opening_gst_paise', type: 'number' },
+      ] }))
+    }
     for (const [name, converted] of [['bill_drafts', 'converted_bill'], ['payment_drafts', 'converted_payment']]) {
       app.save(new Collection({name, type: 'base', listRule: '', viewRule: '', createRule: '', updateRule: '', deleteRule: '', fields: [
         {name: 'created_by', type: 'relation', collectionId: app.findCollectionByNameOrId('users').id, maxSelect: 1},
@@ -116,6 +128,11 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
   await stopPocketBase()
   copyFileSync(stagedRules, join(migrationsDir, '1794640009_tighten_sales_and_purchase_draft_rules.js'))
   copyFileSync(paymentSchemaMigration, join(migrationsDir, '1794640012_created_purchase_payment_drafts.js'))
+  copyFileSync(paymentReadRules, join(migrationsDir, '1794640016_scope_purchase_payment_draft_reads.js'))
+  copyFileSync(purchaseActionSchema, join(migrationsDir, '1794640017_create_muse_purchase_action_drafts.js'))
+  copyFileSync(salesIdempotencySchema, join(migrationsDir, '1794640018_muse_sales_draft_idempotency.js'))
+  copyFileSync(linkedDraftSchema, join(migrationsDir, '1794640019_link_muse_party_drafts.js'))
+  copyFileSync(reviewSchema, join(migrationsDir, '1794640020_muse_review_and_party_creation.js'))
   copyFileSync(castingSchemaMigration, join(migrationsDir, '1794640013_created_casting_session_drafts.js'))
   url = await startPocketBase(port)
   const after = await stage('anonymous-after')
@@ -131,6 +148,48 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
   }
   const muse = await auth('muse')
   const operator = await auth('operator')
+  const createParty = (body: object, token = muse.token) => fetch(url + '/api/kapil/muse/create-party', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token }, body: JSON.stringify(body),
+  })
+  for (const module of ['purchase', 'sales']) {
+    const proposal = { module, name: 'Demo One', sourceId: 'create-demo-one' }
+    expect((await createParty(proposal, operator.token)).status).toBe(403)
+    expect((await createParty({ ...proposal, opening_balance: 1234 })).status).toBe(422)
+    const created = await createParty(proposal)
+    expect(created.status).toBe(201)
+    const party = await created.json() as { id: string }
+    expect(await (await createParty(proposal)).json()).toMatchObject({ id: party.id, name: 'Demo One', reused: true })
+    expect((await createParty({ ...proposal, name: 'Demo Two' })).status).toBe(409)
+    const list = await fetch(url + '/api/collections/' + (module === 'sales' ? 'customers' : 'suppliers') + '/records', { headers: { Authorization: operator.token } })
+    expect(await list.json()).toMatchObject({ totalItems: 1, items: [{ id: party.id, company_name: 'Demo One', active: true, opening_balance: 0, opening_kacha_paise: 0 }] })
+  }
+  const salesDraftPath = '/api/collections/bill_drafts/records'
+  const stageSalesDraft = (id: string, source?: string) => fetch(url + '/api/batch', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: muse.token },
+    body: JSON.stringify({ requests: [
+      { method: 'POST', url: salesDraftPath, body: { id, status: 'pending_review', ...(source ? { muse_source_id: source, muse_request_hash: 'a'.repeat(64) } : {}) } },
+      { method: 'POST', url: '/api/collections/bill_draft_items/records', body: { draft: id } },
+    ] }),
+  })
+  expect((await stageSalesDraft('aaaaaaaasales01', 'one-sales-source')).status).toBe(200)
+  expect((await stageSalesDraft('aaaaaaaasales02', 'one-sales-source')).status).toBe(400)
+  expect((await stageSalesDraft('aaaaaaaasales03')).status).toBe(200)
+  expect((await stageSalesDraft('aaaaaaaasales04')).status).toBe(200)
+  const withoutReason = await fetch(url + salesDraftPath + '/aaaaaaaasales04', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: operator.token },
+    body: JSON.stringify({ status: 'rejected', rejection_reason: '   ' }),
+  })
+  expect(withoutReason.status).toBe(400)
+  const rejectedSale = await fetch(url + salesDraftPath + '/aaaaaaaasales04', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: operator.token },
+    body: JSON.stringify({ status: 'rejected', rejection_reason: 'Test draft only' }),
+  })
+  expect(await rejectedSale.json()).toMatchObject({ status: 'rejected', rejection_reason: 'Test draft only', converted_bill: '' })
+  const setMarker = await fetch(url + salesDraftPath + '/aaaaaaaasales01', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: muse.token },
+    body: JSON.stringify({ muse_new_customer: true }),
+  })
+  expect(setMarker.status).toBe(404)
   const museDraft = await fetch(`${url}/api/collections/purchase_bill_drafts/records`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: muse.token },
     body: JSON.stringify({ payload: { date: '2026-11-15', lines: [{ weight_g: 1000, rate_milli: 450000, amount_paise: 45000 }] }, schema_version: 1, status: 'pending_review', source_message_id: 'muse-after', created_by: operator.record.id }),
@@ -190,7 +249,7 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
   const rejected = await rejectedResponse.json() as { id: string }
   expect((await fetch(`${url}/api/collections/purchase_bill_drafts/records/${rejected.id}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: operator.token },
-    body: JSON.stringify({ status: 'rejected' }),
+    body: JSON.stringify({ status: 'rejected', rejection_reason: 'Declined test proposal' }),
   })).status).toBe(200)
   expect((await fetch(`${url}/api/batch`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: operator.token },
@@ -210,6 +269,16 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
   const paymentDraft = await paymentDraftResponse.json() as { id: string; created_by: string; status: string; direct_save: boolean }
   expect(paymentDraft.created_by).toBe(muse.record.id)
   expect(paymentDraft).toMatchObject({ status: 'pending_review', direct_save: true })
+  const operatorDraftResponse = await fetch(`${url}/api/collections/purchase_payment_drafts/records`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: operator.token },
+    body: JSON.stringify({ payload: { supplier_name: 'Other Supplier' }, schema_version: 1, status: 'pending_review', source_message_id: 'operator-only' }),
+  })
+  expect(operatorDraftResponse.status).toBe(200)
+  const operatorDraft = await operatorDraftResponse.json() as { id: string }
+  const draftUrl = (id: string) => `${url}/api/collections/purchase_payment_drafts/records/${id}`
+  expect((await fetch(draftUrl(operatorDraft.id), { headers: { Authorization: muse.token } })).status).toBe(404)
+  expect((await fetch(draftUrl(paymentDraft.id), { headers: { Authorization: muse.token } })).status).toBe(200)
+  expect((await fetch(draftUrl(paymentDraft.id), { headers: { Authorization: operator.token } })).status).toBe(200)
   expect((await fetch(`${url}/api/collections/purchase_payment_drafts/records/${paymentDraft.id}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: muse.token }, body: JSON.stringify({ notes: 'Muse correction' }),
   })).status).toBe(200)
@@ -227,6 +296,38 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
   expect((await savePayment('eeeeeeeeeeeeeee')).status).toBe(400)
   const supplierPayments = await fetch(`${url}/api/collections/supplier_payments/records`, { headers: { Authorization: operator.token } }).then((response) => response.json()) as { totalItems: number }
   expect(supplierPayments.totalItems).toBe(1)
+
+  const actionPath = '/api/collections/muse_purchase_action_drafts/records'
+  const actionBody = {
+    status: 'pending_review', created_by: muse.record.id, source_message_id: 'bardan-proposal',
+    payload: { kind: 'bardan', billId: 'aaaaaaaaaaaaaaa', lineId: 'bbbbbbbbbbbbbbb', bagCount: 16, weightG: 3080 },
+  }
+  const stageAction = (body: object) => fetch(url + actionPath, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: muse.token }, body: JSON.stringify(body),
+  })
+  expect((await stageAction({ ...actionBody, created_by: operator.record.id })).status).toBe(400)
+  const actionResponse = await stageAction(actionBody)
+  expect(actionResponse.status).toBe(200)
+  const action = await actionResponse.json() as { id: string }
+  const linkedPaymentResponse = await fetch(url + '/api/collections/purchase_payment_drafts/records', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: muse.token },
+    body: JSON.stringify({ schema_version: 1, source_message_id: 'linked-payment', status: 'pending_review', payload: { date: '2026-11-24' }, supplier_draft: action.id }),
+  })
+  expect(linkedPaymentResponse.status).toBe(200)
+  const linkedPayment = await linkedPaymentResponse.json() as { id: string; supplier_draft: string }
+  expect(linkedPayment.supplier_draft).toBe(action.id)
+  expect((await fetch(url + '/api/collections/purchase_payment_drafts/records/' + linkedPayment.id, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: muse.token },
+    body: JSON.stringify({ supplier_draft: 'aaaaaaaaaaaaaaa' }),
+  })).status).toBe(404)
+  expect((await stageAction(actionBody)).status).toBe(400)
+  const updateAction = (token: string, body: object) => fetch(url + actionPath + '/' + action.id, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: token }, body: JSON.stringify(body),
+  })
+  expect((await updateAction(muse.token, { status: 'approved', converted_record: 'aaaaaaaaaaaaaaa' })).status).toBe(404)
+  expect((await updateAction(operator.token, { payload: { kind: 'changed' }, status: 'approved', converted_record: 'aaaaaaaaaaaaaaa' })).status).toBe(404)
+  expect((await updateAction(operator.token, { status: 'approved', converted_record: 'aaaaaaaaaaaaaaa' })).status).toBe(200)
+  expect((await updateAction(operator.token, { status: 'rejected' })).status).toBe(404)
 
   expect((await fetch(`${url}/api/collections/casting_materials/records`, { headers: { Authorization: muse.token } })).status).toBe(200)
   const castingDraftResponse = await fetch(`${url}/api/collections/casting_session_drafts/records`, {

@@ -16,6 +16,7 @@ export type PaymentDraftRecordInput = {
   confidence?: number
   raw_text?: string
   converted_payment?: string
+  rejection_reason?: string
   expand?: {
     customer?: { id: string; name?: string; company_name?: string } | null
   }
@@ -35,6 +36,7 @@ export type PaymentDraftView = {
   note: string
   rawText: string
   convertedPayment: string
+  rejection_reason?: string
 }
 
 export const PAYMENT_MODES: Array<PaymentDraftView['mode']> = ['Cash', 'Bank']
@@ -67,6 +69,7 @@ export function buildPaymentDraftView(draft: PaymentDraftRecordInput): PaymentDr
     note: String(draft.note ?? ''),
     rawText: String(draft.raw_text ?? ''),
     convertedPayment: String(draft.converted_payment ?? ''),
+    rejection_reason: draft.rejection_reason,
   }
 }
 

@@ -35,8 +35,13 @@ import { milliToRateText } from '@/domain/supplier-units'
 import { formatFullDate } from '@/lib/date'
 import { toUserMessage } from '@/app/errors'
 import { exportNodeAsJpg } from '@/lib/image-export'
+import { loadMusePurchaseAction } from '@/data/muse-purchase-action-drafts'
+import { prepareMusePurchaseAction } from '@/domain/muse-purchase-actions'
 
 export const Route = createFileRoute('/purchase-bills/$billId')({
+  validateSearch: (search: Record<string, unknown>): { bardanDraftId?: string } => ({
+    bardanDraftId: typeof search.bardanDraftId === 'string' && /^[a-z0-9]{15}$/.test(search.bardanDraftId) ? search.bardanDraftId : undefined,
+  }),
   component: PurchaseBillChittyPage,
 })
 
@@ -52,6 +57,7 @@ function findVilaityForDate(history: Array<{ date: string; vilaityMilli: number 
 
 function PurchaseBillChittyPage() {
   const { billId: inNo } = Route.useParams()
+  const { bardanDraftId } = Route.useSearch()
   const navigate = useNavigate()
   const exportRef = useRef<HTMLDivElement>(null)
   const [isExporting, setIsExporting] = useState(false)
@@ -67,6 +73,18 @@ function PurchaseBillChittyPage() {
   const billQuery = useQuery(purchaseBillQueryOptions(billId ?? ''))
   const billDetail = billQuery.data
   const bill = billDetail?.bill
+  const bardanDraft = useQuery({
+    queryKey: ['purchase-action-editor', bardanDraftId, billId],
+    enabled: Boolean(bardanDraftId && billId),
+    retry: false,
+    queryFn: async () => {
+      const record = await loadMusePurchaseAction(bardanDraftId!)
+      const action = prepareMusePurchaseAction(record.payload)
+      if (record.status !== 'pending_review' || action.kind !== 'bardan' || action.billId !== billId) throw new Error('This Bardan draft is no longer pending for this bill.')
+      return { ...action, id: record.id }
+    },
+  })
+  const closeBardanDraft = () => void navigate({ to: '/purchase-bills/$billId', params: { billId: inNo }, search: {}, replace: true })
   const supplierId = bill?.supplierId ?? ''
 
   const bundleQuery = useQuery(supplierContextQueryOptions(supplierId))
@@ -254,6 +272,8 @@ function PurchaseBillChittyPage() {
 
       {/* Modals */}
       {modal === 'bardan' && <AddBardanModal billId={bill.id} onClose={() => setModal(null)} />}
+      {bardanDraftId && bardanDraft.data && !bardanDraft.isError && <AddBardanModal key={bardanDraftId} billId={bill.id} draft={bardanDraft.data} onClose={closeBardanDraft} />}
+      {bardanDraftId && bardanDraft.isError && <div role="alert" className="flex items-center gap-2 rounded border bg-white p-3 text-sm">{toUserMessage(bardanDraft.error)} <button type="button" className={buttonClass('secondary')} onClick={closeBardanDraft}>Dismiss</button></div>}
       {modal === 'payment' && (
         <RecordPaymentModal
           supplierId={bill.supplierId}

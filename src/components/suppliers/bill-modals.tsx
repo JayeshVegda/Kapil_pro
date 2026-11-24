@@ -21,6 +21,7 @@ import { formatPaiseInr } from '@/lib/inr-format'
 import { PaymentAmountInput } from '@/components/ui/payment-amount-input'
 import { PurchaseDialog, PurchaseReadNotice } from './purchase-dialog'
 import { getPurchaseReadState, requirePurchaseRecord } from './purchase-read-state'
+import type { MusePurchaseAction } from '@/domain/muse-purchase-actions'
 
 const MODAL_INPUT =
   'h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-400/30'
@@ -35,13 +36,13 @@ function ErrorText({ error }: { error?: string }) {
 // Add Bardan
 // ---------------------------------------------------------------------------
 
-export function AddBardanModal({ billId, onClose }: { billId: string; onClose: () => void }) {
+export function AddBardanModal({ billId, onClose, draft }: { billId: string; onClose: () => void; draft?: Extract<MusePurchaseAction, { kind: 'bardan' }> & { id: string } }) {
   const queryClient = useQueryClient()
-  const [kgStr, setKgStr] = useState('')
-  const [method, setMethod] = useState<'deduct' | 'in_kind' | 'cash_back' | 'advance'>('deduct')
-  const [lineId, setLineId] = useState('')
-  const [bagCountText, setBagCountText] = useState<string | null>(null)
-  const [date, setDate] = useState('')
+  const [kgStr, setKgStr] = useState(draft ? String(draft.weightG / 1000) : '')
+  const [method, setMethod] = useState<'deduct' | 'in_kind' | 'cash_back' | 'advance'>(draft?.method ?? 'deduct')
+  const [lineId, setLineId] = useState(draft?.lineId ?? '')
+  const [bagCountText, setBagCountText] = useState<string | null>(draft ? String(draft.bagCount) : null)
+  const [date, setDate] = useState(draft?.date ?? '')
   const [note, setNote] = useState('')
   const [cashStr, setCashStr] = useState('')
   const [errorText, setErrorText] = useState('')
@@ -71,6 +72,7 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
       if (grams <= 0) throw new Error('Enter a valid bardan weight in kg.')
       if (!canSave) throw new Error('Choose a bill line with a valid bardan rate.')
       await addPurchaseBardanEntry({
+        actionDraftId: draft?.id,
         billId: currentBill.bill.id,
         bardanG: grams,
         bagCount: bagCount || undefined,
@@ -117,7 +119,7 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
           <fieldset disabled={confirming} className="space-y-2">
           <div className="grid grid-cols-2 gap-2.5">
             <label className="flex flex-col gap-1"><span className={MODAL_LABEL}>Bags{expectedCount > 0 ? ` (${remainingBags} remaining)` : ''}</span>
-              <input className={MODAL_INPUT} inputMode="numeric" value={bagCountText ?? (remainingBags || '')} readOnly={!expectedCount} placeholder="Not recorded" onChange={(event) => setBagCountText(event.target.value)} />
+              <input className={MODAL_INPUT} inputMode="numeric" value={bagCountText ?? (remainingBags || '')} readOnly={!expectedCount && !draft} placeholder="Not recorded" onChange={(event) => setBagCountText(event.target.value)} />
             </label>
             <label className="flex flex-col gap-1">
               <span className={MODAL_LABEL}>Bardan Weight (kg)</span>
@@ -437,12 +439,12 @@ export function CancelBillModal({ billId, inNo, onClose }: { billId: string; inN
 
   return (
     <PurchaseDialog
-      title={`Cancel Bill ${inNo || ''}`}
+      title={`Void Bill ${inNo || ''}`}
       onClose={onClose}
       onSubmit={() => cancelMutation.mutate()}
       canSubmit={Boolean(bill) && reason.trim().length > 0}
       submitting={cancelMutation.isPending}
-      submitLabel="Cancel Bill"
+      submitLabel="Void Bill"
       tone="danger"
     >
       {!bill ? <PurchaseReadNotice state={billState} subject="Bill" /> : <>
@@ -474,10 +476,10 @@ export function CancelBillModal({ billId, inNo, onClose }: { billId: string; inN
 // Payment details (view + cancel)
 // ---------------------------------------------------------------------------
 
-export function PaymentDetailsModal({ paymentId, onClose }: { paymentId: string; onClose: () => void }) {
+export function PaymentDetailsModal({ paymentId, onClose, startInVoidMode = false }: { paymentId: string; onClose: () => void; startInVoidMode?: boolean }) {
   const queryClient = useQueryClient()
   const [cancelReason, setCancelReason] = useState('')
-  const [showCancel, setShowCancel] = useState(false)
+  const [showCancel, setShowCancel] = useState(startInVoidMode)
   const [errorText, setErrorText] = useState('')
 
   const paymentsQuery = useQuery(supplierPaymentsQueryOptions())
@@ -499,7 +501,7 @@ export function PaymentDetailsModal({ paymentId, onClose }: { paymentId: string;
 
   return (
     <PurchaseDialog
-      title="Payment Details"
+      title={showCancel ? 'Void Payment' : 'Payment Details'}
       onClose={onClose}
       onSubmit={() => {}}
       canSubmit={false}
@@ -571,14 +573,14 @@ export function PaymentDetailsModal({ paymentId, onClose }: { paymentId: string;
                   onClick={() => cancelMutation.mutate()}
                   className="rounded bg-rose-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
                 >
-                  {cancelMutation.isPending ? 'Cancelling…' : 'Confirm Cancel'}
+                  {cancelMutation.isPending ? 'Cancelling…' : 'Confirm Void'}
                 </button>
               </div>
             </div>
           ) : (
             <div className="flex justify-end">
               <button type="button" onClick={() => setShowCancel(true)} className="rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100">
-                Cancel Payment
+                Void Payment
               </button>
             </div>
           )}

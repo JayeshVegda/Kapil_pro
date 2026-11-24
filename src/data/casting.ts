@@ -447,7 +447,7 @@ function normalizeInputsForSave(rows: CastingInputRow[]): CastingInputRow[] {
     .filter((r) => r.materialName.length > 0 && r.qty > 0 && r.rate > 0)
 }
 
-function normalizeBatchesForSave(payload: SaveCastingSessionPayload): CastingBatchCostInput[] {
+export function normalizeBatchesForSave(payload: SaveCastingSessionPayload): CastingBatchCostInput[] {
   if (payload.batches?.length) {
     return payload.batches
       .map((batch, index) => ({
@@ -603,6 +603,12 @@ export async function saveCastingSession(payload: SaveCastingSessionPayload): Pr
   })
 }
 
+export async function updateCastingSessionHeader(sessionId: string, payload: { date: string; note: string }): Promise<void> {
+  await runDataOperation('update-casting-session-header', async () => {
+    await pb.collection('casting_sessions').update(sessionId, { date: payload.date, note: payload.note })
+  })
+}
+
 export async function updateCastingSession(sessionId: string, payload: SaveCastingSessionPayload): Promise<void> {
   const batches = normalizeBatchesForSave(payload)
   const inputs = batches.flatMap((batch) => batch.inputs)
@@ -637,6 +643,7 @@ export async function updateCastingSession(sessionId: string, payload: SaveCasti
       for (const row of batch.inputs) {
         batchRequest.collection('casting_batch_inputs').create({
           id: generateRecordId(), batch: batchId, material_name: row.materialName,
+          material: row.materialId,
           qty: row.qty, rate: row.rate, amount: row.qty * row.rate,
         })
       }
@@ -650,7 +657,7 @@ export async function updateCastingSession(sessionId: string, payload: SaveCasti
       worker_salary: workerSalary,
       wire_out: cost.totalWireOut,
       wastage: cost.totalMel,
-      chol_in: 0,
+      chol_in: payload.cholIn ?? num(existing.chol_in),
       total_wire_out: cost.totalWireOut,
       total_mel: cost.totalMel,
       cost_per_kg: cost.finalCastingCostPerKg,
@@ -662,7 +669,9 @@ export async function updateCastingSession(sessionId: string, payload: SaveCasti
       total_input_kg: cost.totalInputKg,
       note: String(payload.note ?? ''),
     })
-    await batchRequest.send()
+    const results = await batchRequest.send()
+    const failed = results.find((result) => result.status < 200 || result.status >= 300)
+    if (failed) throw Object.assign(new Error('Casting session update was rejected.'), { status: failed.status, data: failed.body })
   })
 }
 

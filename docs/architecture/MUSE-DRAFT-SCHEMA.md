@@ -6,9 +6,11 @@
 | :--- | :--- | :--- |
 | Arch DEV, local | `http://127.0.0.1:8090/api/` | Development and testing |
 | Arch DEV, Tailscale/Caddy | `http://100.66.74.78:4174/pb/api/` | Development and testing |
-| Windows PROD, local Caddy | `http://127.0.0.1:4174/pb/api/` | Later production deployment; not the current Arch runtime |
+| Windows PROD, local Caddy | `http://127.0.0.1:4174/pb/api/` | On the Windows PC only; from another host, use the owner-approved private connection, not this loopback address |
 
 Authenticate as a normal `users` collection agent with `POST /api/collections/users/auth-with-password`; send the returned bearer token for record calls. Credentials are supplied separately. Never use an administrator identity. Use a unique `source_message_id` for each proposed Purchase/Casting record; `(created_by, source_message_id)` is unique. The server derives `created_by` from authentication.
+
+For the Purchase rollout, first verify authentication, then look up active `suppliers` and `purchase_items`, then create one test proposal in `purchase_bill_drafts` using schema version 2. Do not read or write live `purchase_bills`, `purchase_bill_lines`, or `supplier_payments`. The owner reviews the proposal in AI Drafts → Purchase. Once the bill path is confirmed, use `purchase_payment_drafts` version 1 for on-account payment proposals. Leave Sales as configured and do not enable new Casting Muse flows as part of this rollout.
 
 ## Access and lifecycle
 
@@ -72,12 +74,11 @@ Optional fields include `gst_rate_bp`, `vehicle_no`, `bags_at_receipt` (kg decim
   "mode": "neft",
   "reference": "UTR98765",
   "payee": "Shreeji Metal Traders",
-  "note": "On account",
-  "bill_pins": ["billpin00000001"]
+  "note": "On account"
 }
 ```
 
-Only four draft kinds: `payment`, `paid_on_behalf`, `settle_off`, `refund_received`. `bardan_advance` is generated from bill entries and is not accepted here. `pool` defaults to `kacha`; `mode` has no default and the owner must select it if absent. `amount_rs` is a decimal string with at most two decimals. Pins must belong to the same pool.
+Only four draft kinds: `payment`, `paid_on_behalf`, `settle_off`, `refund_received`. `bardan_advance` is generated from bill entries and is not accepted here. `pool` defaults to `kacha`; `mode` has no default and the owner must select it if absent. `amount_rs` is a decimal string with at most two decimals. Omit `bill_pins` from new Muse proposals. If the message mentions an invoice, keep the reference in `note` and let the operator match it to a real bill in the correct supplier pool. Do not guess a bill ID or stage the same payment both on a bill and separately.
 
 ## Casting session v1
 
