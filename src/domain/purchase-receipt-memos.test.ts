@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { extractUserNote, formatPrivateNoteWithBags, parseBagsAtReceiptKg } from './supplier-purchases'
-import { formatPurchaseLineMemos, parsePurchaseLineMemos, purchaseReceiptMemoText } from './purchase-receipt-memos'
+import { formatPurchaseLineMemos, hasPendingPurchaseBardan, parsePurchaseLineMemos, purchaseReceiptMemoText, readSettledBagCount, writeSettledBagCount } from './purchase-receipt-memos'
 
 describe('purchase receipt memos', () => {
+  it('only counts expected bardan and keeps bills pending while another line still has bags', () => {
+    expect(hasPendingPurchaseBardan([{ id: 'none', receiptMemo: '0' }, { id: 'unknown', receiptMemo: 'check' }], [], null)).toBe(false)
+    const lines = [{ id: 'a', receiptMemo: '3 bags' }, { id: 'b', receiptMemo: '2' }]
+    expect(hasPendingPurchaseBardan(lines, [{ rateLineId: 'a' }], null)).toBe(true)
+    expect(hasPendingPurchaseBardan(lines, [{ rateLineId: 'a' }, { rateLineId: 'b' }], null)).toBe(false)
+    expect(hasPendingPurchaseBardan(lines, [{ rateLineId: 'a', bagCount: 2 }, { rateLineId: 'b', bagCount: 2 }], null)).toBe(true)
+    expect(hasPendingPurchaseBardan(lines, [{ rateLineId: 'a', bagCount: 3 }, { rateLineId: 'b', bagCount: 2 }], null)).toBe(false)
+    expect(readSettledBagCount(writeSettledBagCount('Returned today', 2))).toEqual({ note: 'Returned today', bagCount: 2 })
+  })
   it('round-trips stable line memos including Unicode and punctuation', () => {
     const memos = { line1: '12', line2: 'બોરી [A] · 3.5 kg\nreturned' }
     const saved = formatPurchaseLineMemos('Operator note', memos)

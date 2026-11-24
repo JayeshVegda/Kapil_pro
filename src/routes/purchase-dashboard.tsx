@@ -611,7 +611,7 @@ function PurchaseDashboardPage() {
         >
           {bardanSummary.bills.length === 0 ? (
             <p className="py-8 text-center text-xs text-slate-400">
-              No bardan pending return. All lots reconciled.
+              No recorded bardan pending return.
             </p>
           ) : (
             <div className="overflow-x-auto">

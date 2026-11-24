@@ -183,7 +183,7 @@ function PrintPurchaseBillsPage() {
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold text-slate-900">Preview · {chittyData.inNo}</h2>
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <ActionButton label="Print" icon={<Printer size={13} />} onClick={() => window.print()} />
+                  <ActionButton label="Print" icon={<Printer size={13} />} disabled={!chittyData?.supplierName.trim()} onClick={() => window.print()} />
                   <ActionButton label="JPG" icon={<Download size={13} />} onClick={() => void handleExportJpg()} disabled={isExporting} />
                   <ActionButton label="Edit" icon={<Edit3 size={13} />} tone="blue" onClick={() => void navigate({ to: '/new-purchase-bill', search: { editBillId: selected.id } })} />
                   {!selected.cancelled && (

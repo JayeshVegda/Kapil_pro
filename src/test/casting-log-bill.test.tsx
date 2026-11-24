@@ -6,8 +6,7 @@ import { CastingLogPage } from '@/routes/casting/log'
 import { CastingBillPage } from '@/routes/casting/bill'
 
 // Casting log toolbar and a single shared on-screen/print chitty.
-// The ticket renders only stored session columns, so the same component backs
-// the log "View" modal and the printed bill page output.
+// The same ticket backs the log View modal and the printed bill page.
 
 const state = vi.hoisted(() => ({ queryData: new Map<string, unknown>() }))
 
@@ -42,7 +41,8 @@ const session: CastingSessionWithInputs = {
 }
 
 vi.mock('@tanstack/react-router', () => ({
-  createFileRoute: () => () => ({}),
+  createFileRoute: () => () => ({ useSearch: () => ({}) }),
+  Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
 }))
 
 vi.mock('@tanstack/react-query', () => ({
@@ -66,14 +66,15 @@ vi.mock('@/data/casting', () => ({
 }))
 
 describe('CastingTicket (Phase 4)', () => {
-  it('renders stored session values without recalculating costs', async () => {
+  it('shows the current Brass basis and separately labels the original saved cost', async () => {
     const html = await renderPage(<CastingTicket session={session} />)
 
     // Header facts straight from the record
     expect(html).toContain('Kapil Products')
-    expect(html).toContain('Casting Chitty')
+    expect(html).toContain('Kapil Product Casting')
     expect(html).toContain('05-11-2026')
-    expect(html).toContain('sess_abc')
+    expect(html).toContain('Thursday')
+    expect(html).not.toContain('sess_abc')
     expect(html).toContain('Batches')
 
     // Material rows summarized for display, money total from the record
@@ -82,11 +83,11 @@ describe('CastingTicket (Phase 4)', () => {
     expect(html).toContain('₹25.00')
     expect(html).toContain('24,000')
 
-    // Overhead + final ticket columns — stored, not recomputed
-    expect(html).toContain('40.0 kg')
-    expect(html).toContain('₹12.00')
-    expect(html).toContain('₹40.00')
+    expect(html).toContain('× 7% × 2')
+    expect(html).toContain('₹58.50')
     expect(html).toContain('₹95.00')
+    expect(html).toContain('Original saved cost')
+    expect(html.indexOf('Final ready cost')).toBeGreaterThan(html.indexOf('Cost per kg'))
   })
 
   it('summarizes material inputs by name', () => {
@@ -124,25 +125,21 @@ describe('Casting Log (Phase 4)', () => {
 })
 
 describe('Casting Bill (Phase 4)', () => {
-  it('renders filters and the shared chitty directly on the right', async () => {
+  it('renders a date search and the bill actions above the shared chitti', async () => {
     state.queryData.set('casting-sessions', [session])
     const html = await renderPage(<CastingBillPage />)
 
-    // Left card: search, date range, and material filter feeding the list
-    expect(html).toContain('Search sessions')
-    expect(html).toContain('From date')
-    expect(html).toContain('To date')
-    expect(html).toContain('Filter sessions by material')
-    expect(html).toContain('All materials')
+    expect(html).toContain('Search bills by date or weekday')
+    expect(html).not.toContain('Filter sessions by material')
+    expect(html).not.toContain('From date')
     expect(html).toContain('960.0 kg')
     expect(html).toContain('96.5 kg')
-    expect(html).toContain('batches •')
-    expect(html).toContain('Metal cost')
-
-    expect(html).toContain('Print chitty')
-    expect(html).toContain('Casting Chitty')
-    expect(html).toContain('Material charged')
-    expect(html).toContain('Furnace and labour')
+    expect(html).toContain('Edit')
+    expect(html).toContain('Delete')
+    expect(html).toContain('Print chitti')
+    expect(html).toContain('Kapil Product Casting')
+    expect(html).toContain('Materials')
+    expect(html).toContain('Cost per kg')
     expect(html).toContain('Final ready cost')
     expect(html).not.toContain('hidden print:block')
   })

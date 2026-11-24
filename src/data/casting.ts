@@ -683,45 +683,26 @@ export async function deleteCastingSession(sessionId: string): Promise<void> {
   })
 }
 
-export async function loadLatestMaterialRates(): Promise<Record<string, number>> {
-  try {
-    const latestSessionPage = await pb.collection('casting_sessions').getList(1, 1, { sort: '-date,-created,-id' })
-    const latestSession = (latestSessionPage.items?.[0] as PBRecord | undefined) ?? undefined
-    if (!latestSession?.id) return {}
-
-    const latestBatches = await listAllPaged('casting_batches', { filter: `session = "${latestSession.id}"` }).catch(() => [])
-    const latestInputs = latestBatches.length
-      ? (
-          await Promise.all(
-            chunk(latestBatches.map((batch) => batch.id), 30).map((ids) => listAllPaged('casting_batch_inputs', { filter: ids.map((id) => `batch = "${id}"`).join(' || ') })),
-          )
-        ).flat()
-      : await listAllPaged('casting_inputs', { filter: `session = "${latestSession.id}"` }).catch(() => [])
-    if (latestInputs.length === 0) return {}
-
-    const out: Record<string, number> = {}
-    for (const row of latestInputs) {
-      const material = String(row.material_name ?? '').trim().toLowerCase()
-      const rate = num(row.rate)
-      if (!material || !(rate > 0)) continue
-      out[material] = rate
-    }
-    return out
-  } catch {
-    return {}
-  }
-}
-
 export async function loadLatestCastingDefaults(): Promise<{ coalKg: number; coalRate: number; workerSalary: number; materialRates: Record<string, number> }> {
-  try {
-    const latestSessionPage = await pb.collection('casting_sessions').getList(1, 1, { sort: '-date,-created,-id' })
-    const latestSession = (latestSessionPage.items?.[0] as PBRecord | undefined) ?? undefined
-    if (!latestSession?.id) return { coalKg: 0, coalRate: 0, workerSalary: 0, materialRates: {} }
-    const materialRates = await loadLatestMaterialRates()
-    return { coalKg: num(latestSession.coal_kg), coalRate: num(latestSession.coal_rate), workerSalary: num(latestSession.worker_salary), materialRates }
-  } catch {
-    return { coalKg: 0, coalRate: 0, workerSalary: 0, materialRates: {} }
+  // Older Windows schemas don't have a created field on casting_sessions.
+  const { items: [latest] } = await pb.collection('casting_sessions').getList<PBRecord>(1, 1, { sort: '-date,-id' })
+  if (!latest) return { coalKg: 0, coalRate: 0, workerSalary: 0, materialRates: {} }
+
+  const batches = await listAllPaged('casting_batches', { filter: `session = "${latest.id}"`, sort: 'batch_number,id' })
+  const batchOrder = new Map(batches.map((batch, index) => [batch.id, index]))
+  const inputs = batches.length
+    ? (await Promise.all(chunk(batches.map(({ id }) => id), 30).map((ids) =>
+        listAllPaged('casting_batch_inputs', { filter: ids.map((id) => `batch = "${id}"`).join(' || '), sort: 'id' }),
+      ))).flat().sort((a, b) => (batchOrder.get(String(a.batch)) ?? 0) - (batchOrder.get(String(b.batch)) ?? 0))
+    : await listAllPaged('casting_inputs', { filter: `session = "${latest.id}"`, sort: 'id' })
+
+  const materialRates: Record<string, number> = Object.create(null)
+  for (const row of inputs) {
+    const name = itemNameKey(String(row.material_name ?? ''))
+    const rate = num(row.rate)
+    if (name && rate > 0) materialRates[name] = rate
   }
+  return { coalKg: num(latest.coal_kg), coalRate: num(latest.coal_rate), workerSalary: num(latest.worker_salary), materialRates }
 }
 
 export async function loadMarketRateForDate(dateIso: string): Promise<{ rate: number; rateDate: string } | null> {

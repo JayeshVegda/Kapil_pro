@@ -181,12 +181,12 @@ describe('settlement: opening balance', () => {
 
 /** Spec test 5: bardan methods */
 describe('settlement: bardan', () => {
-  it('deduct lowers taxable and tax on a GST bill; in_kind settles with a note; none rows = pending', () => {
+  it('deduct lowers GST, in_kind preserves the note, and pending requires expected bardan', () => {
     const input = baseInput({
       bills: [
         { id: 'ded', date: '2026-04-01', created: CREATED.a, pool: 'gst', taxMode: 'gst', gstRateBp: 1_800 },
         { id: 'ink', date: '2026-04-02', created: CREATED.b, pool: 'gst', taxMode: 'none', gstRateBp: 0 },
-        { id: 'pnd', date: '2026-04-03', created: CREATED.c, pool: 'gst', taxMode: 'none', gstRateBp: 0 },
+        { id: 'pnd', date: '2026-04-03', created: CREATED.c, pool: 'gst', taxMode: 'none', gstRateBp: 0, bardanPending: true },
       ],
       lines: [
         { billId: 'ded', amountPaise: 10_000_000 },

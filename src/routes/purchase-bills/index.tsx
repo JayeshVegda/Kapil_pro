@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Edit3,
+  Package,
   Search,
   Trash2,
   X,
@@ -14,7 +15,7 @@ import { z } from 'zod'
 import { PurchasesShell } from '@/components/suppliers/purchases-shell'
 import { BillChitty } from '@/components/suppliers/bill-chitty'
 import { buildPurchaseBillPresentation } from '@/components/suppliers/purchase-bill-presentation'
-import { CancelBillModal } from '@/components/suppliers/bill-modals'
+import { AddBardanModal, CancelBillModal } from '@/components/suppliers/bill-modals'
 import { PurchaseBillEditDialog } from '@/components/suppliers/purchase-bill-editor'
 import { itemsSummary } from '@/components/suppliers/purchase-bills-table'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -27,7 +28,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
-import type { EnrichedPurchaseBill } from '@/data/suppliers'
+import { listPurchaseItems, type EnrichedPurchaseBill } from '@/data/suppliers'
 import { purchaseBillQueryOptions, purchaseBillsQueryOptions, supplierContextQueryOptions, supplierPaymentsQueryOptions, suppliersSummaryQueryOptions } from '@/data/purchase-queries'
 import { useSavedViews } from '@/data/use-saved-views'
 import type { PurchaseBillsFilterConfig } from '@/data/saved-views'
@@ -54,7 +55,7 @@ export const Route = createFileRoute('/purchase-bills/')({
 
 type PoolFilter = 'all' | 'kacha' | 'gst'
 type TabKey = 'all' | 'open' | 'partial' | 'nil' | 'cancelled' | 'bardan'
-type ModalKind = null | 'cancelBill'
+type ModalKind = null | 'cancelBill' | 'bardan'
 type PayKindFilter = 'payment' | 'paid_on_behalf' | 'settle_off' | 'refund_received' | 'bardan_advance'
 
 const PAY_KIND_OPTIONS: Array<[PayKindFilter, string]> = [
@@ -85,6 +86,8 @@ function PurchaseBillsRoute() {
 }
 
 function PurchaseBillsPage() {
+  const purchaseItems = useQuery({ queryKey: ['purchase-items'], queryFn: listPurchaseItems })
+  const itemNames = useMemo(() => new Map(purchaseItems.data?.map((item) => [item.id, item.name])), [purchaseItems.data])
   const routeSearch = Route.useSearch()
   const supplierFilter = routeSearch.supplier
   const tab = routeSearch.tab ?? 'all'
@@ -157,12 +160,12 @@ function PurchaseBillsPage() {
         const inMatch = bill.inNo.toLowerCase().includes(needle)
         const supplierMatch = bill.supplierName.toLowerCase().includes(needle)
         const billNoMatch = (bill.supplierBillNo ?? '').toLowerCase().includes(needle)
-        const itemMatch = (bill.lines ?? []).some((l) => l.itemName.toLowerCase().includes(needle))
+        const itemMatch = (bill.lines ?? []).some((l) => [l.itemName, itemNames.get(l.itemId ?? '')].some((name) => name?.toLowerCase().includes(needle)))
         if (!inMatch && !supplierMatch && !billNoMatch && !itemMatch) return false
       }
       return true
     })
-  }, [allBills, supplierFilter, poolFilter, fromDate, toDate, query, routeSearch.billId])
+  }, [allBills, supplierFilter, poolFilter, fromDate, toDate, query, routeSearch.billId, itemNames])
 
   // 3. Tab counts
   const tabCounts = useMemo(() => {
@@ -578,7 +581,7 @@ function PurchaseBillsPage() {
                   )}
                   {billsPager.pageRows.map((bill) => {
                     const active = bill.id === selectedId
-                    const summary = itemsSummary(bill.lines)
+                    const summary = itemsSummary(bill.lines.map((line) => ({ ...line, itemName: itemNames.get(line.itemId ?? '') ?? line.itemName })))
                     const isPaid = !bill.cancelled && (bill.status === 'nil' || bill.duePaise <= 0)
                     const isPartial = !bill.cancelled && (bill.status === 'partial' || (bill.duePaise > 0 && bill.duePaise < bill.netPaise))
 
@@ -720,6 +723,7 @@ function PurchaseBillsPage() {
                       tone="blue"
                       onClick={() => setEditingBill({ id: selected.id, inNo: selected.inNo })}
                     />
+                    {!selected.cancelled && <ActionButton label="Add Bardan" icon={<Package size={12} />} onClick={() => setModal('bardan')} />}
                     {!selected.cancelled && (
                       <ActionButton
                         label="Void"
@@ -766,6 +770,7 @@ function PurchaseBillsPage() {
       </>}
 
       {/* Modals */}
+      {modal === 'bardan' && selected && <AddBardanModal key={selected.id} billId={selected.id} onClose={() => setModal(null)} />}
       {modal === 'cancelBill' && selected && (
         <CancelBillModal
           billId={selected.id}

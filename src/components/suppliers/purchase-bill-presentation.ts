@@ -1,8 +1,38 @@
 import type { PurchaseBillDetail } from '@/data/suppliers'
 import type { SupplierPurchaseContext } from '@/domain/purchase-read-model'
+import type { SupplierSettlementPoolResult } from '@/domain/supplier-settlement'
 import { purchaseReceiptMemoText } from '@/domain/purchase-receipt-memos'
 import { extractUserNote, parseBagsAtReceiptKg } from '@/domain/supplier-purchases'
 import type { BillChittyData, ChittyPaymentRow } from './bill-chitty'
+
+export function purchaseChittyCreditLabel(kind: string | undefined, reference: string | undefined, hasPayment: boolean) {
+  if (kind === 'bardan_advance') return 'Bardan advance applied'
+  if (kind === 'settle_off') return 'Settlement credit applied'
+  if (kind === 'paid_on_behalf') return 'Paid on behalf'
+  if (!hasPayment) return reference === 'Opening Advance' ? 'Opening Advance' : 'Credit applied'
+  return undefined
+}
+
+export function hasPurchasePaymentNote(value?: string): boolean {
+  const note = value?.trim()
+  return Boolean(note && !/^Paid with purchase bill \S+$/i.test(note))
+}
+
+export function purchaseChittyAdvance(
+  billId: string,
+  payments: SupplierSettlementPoolResult['payments'],
+  allocations: ReadonlyArray<{ paymentId: string; billId: string; amountPaise: number }>,
+): number {
+  const linkedPaymentIds = new Set(allocations.filter((pin) => pin.billId === billId && pin.amountPaise > 0).map((pin) => pin.paymentId))
+  for (const pin of allocations) {
+    if (pin.billId !== billId && pin.amountPaise > 0) linkedPaymentIds.delete(pin.paymentId)
+  }
+  return payments.reduce((sum, payment) => (
+    linkedPaymentIds.has(payment.paymentId) && !payment.cancelled && payment.kind === 'payment'
+      ? sum + Math.max(0, payment.amountPaise - payment.appliedPaise)
+      : sum
+  ), 0)
+}
 
 export function buildPurchaseBillPresentation(
   detail: PurchaseBillDetail | null | undefined,
@@ -12,6 +42,7 @@ export function buildPurchaseBillPresentation(
   if (!detail || !context || detail.bill.supplierId !== context.bundle.supplier.id) return null
   const { bundle, settlement } = context
   const { bill } = detail
+  const bagsAtReceiptKg = parseBagsAtReceiptKg(bill.privateNote)
   const settlementBillRow = settlement.pools[bill.pool].bills.find((row) => row.billId === bill.id) ?? null
   const paymentsById = new Map(bundle.payments.map((payment) => [payment.id, payment]))
   const paymentRows: ChittyPaymentRow[] = settlementBillRow?.creditsApplied?.length
@@ -21,6 +52,8 @@ export function buildPurchaseBillPresentation(
         date: credit.date || payment?.date || '',
         mode: payment?.mode ?? '',
         reference: payment?.reference || credit.reference || '',
+        creditLabel: purchaseChittyCreditLabel(payment?.kind, credit.reference, Boolean(payment)),
+        ...(hasPurchasePaymentNote(payment?.privateNote) ? { hasNote: true } : {}),
         amountPaise: credit.amountPaise,
         pinned: credit.pinned,
       }
@@ -30,10 +63,13 @@ export function buildPurchaseBillPresentation(
       if (pin.amountPaise <= 0 || payment?.cancelled) return []
       return [{
         date: payment?.date ?? '', mode: payment?.mode ?? '', reference: payment?.reference ?? '',
+        creditLabel: purchaseChittyCreditLabel(payment?.kind, undefined, Boolean(payment)),
+        ...(hasPurchasePaymentNote(payment?.privateNote) ? { hasNote: true } : {}),
         amountPaise: pin.amountPaise, pinned: true,
       }]
     })
 
+  const advancePaise = purchaseChittyAdvance(bill.id, settlement.pools[bill.pool].payments, bundle.allocations)
   const chitty: BillChittyData = {
     inNo: bill.inNo,
     date: bill.date,
@@ -42,6 +78,8 @@ export function buildPurchaseBillPresentation(
     taxMode: bill.taxMode,
     gstRateBp: bill.gstRateBp,
     supplierBillNo: bill.supplierBillNo,
+    bagsAtReceiptKg,
+    vehicleNo: bill.vehicleNo,
     lines: detail.lines.map((line) => {
       const memo = purchaseReceiptMemoText(line.receiptMemo ?? '')
       return {
@@ -51,9 +89,12 @@ export function buildPurchaseBillPresentation(
       }
     }),
     adjustments: detail.adjustments.map(({ type, amountPaise, note }) => ({ type, amountPaise, note })),
-    bardan: detail.bardan.map(({ bardanG, rateMilli, method, creditPaise, cashAmountPaise, date, note }) =>
-      ({ bardanG, rateMilli, method, creditPaise, cashAmountPaise, date, note })),
+    bardan: detail.bardan.map((entry) => ({
+      ...entry,
+      itemName: detail.lines.find((line) => line.id === entry.rateLineId)?.itemName,
+    })),
     paidRows: paymentRows,
+    advancePaise,
     cancelled: bill.cancelled,
     cancelReason: bill.cancelReason,
     statusOverride: settlementBillRow?.status,
@@ -62,6 +103,6 @@ export function buildPurchaseBillPresentation(
     chitty, paymentRows, settlementBillRow,
     privateNote: bill.privateNote,
     userNote: extractUserNote(bill.privateNote),
-    bagsAtReceiptKg: parseBagsAtReceiptKg(bill.privateNote),
+    bagsAtReceiptKg,
   }
 }

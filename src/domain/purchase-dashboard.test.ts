@@ -40,7 +40,7 @@ describe('purchase dashboard contracts', () => {
     const bills = [
       bill({ id: 'future', date: '2026-11-09', duePaise: 100 }),
       bill({ id: 'day30', date: '2026-10-09', duePaise: 200 }),
-      bill({ id: 'day31', date: '2026-10-08', duePaise: 300 }),
+      bill({ id: 'day31', date: '2026-10-08', duePaise: 300, bardanPending: true }),
       bill({ id: 'day60', date: '2026-09-09', duePaise: 400 }),
       bill({ id: 'day61', date: '2026-09-08', duePaise: 500 }),
       bill({ id: 'nil', date: '2026-09-01', duePaise: 0, bardanPending: false }),
@@ -49,7 +49,7 @@ describe('purchase dashboard contracts', () => {
     const result = buildPurchaseDashboard({ ...emptyInput, bills })
 
     expect(result.snapshot.aging).toEqual({ bucket0to30: 300, bucket31to60: 700, bucket60plus: 500 })
-    expect(result.snapshot).toMatchObject({ billCount: 6, bardanPendingBills: 5, totalProcuredKg: 600, totalProcuredPaise: 600_000 })
+    expect(result.snapshot).toMatchObject({ billCount: 6, bardanPendingBills: 1, totalProcuredKg: 600, totalProcuredPaise: 600_000 })
   })
 
   it('counts only outgoing credit kinds as paid while retaining non-cash months and cancelled recent operations', () => {

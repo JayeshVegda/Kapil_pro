@@ -33,6 +33,7 @@ export type PurchaseBillSettlementInput = {
   taxMode: string
   gstRateBp: number
   cancelled?: boolean
+  bardanPending?: boolean
 }
 
 export type PurchaseCollectionInput = {
@@ -335,7 +336,7 @@ export function computeSupplierSettlement(input: SupplierSettlementInput): Suppl
         duePaise: bill.cancelled ? 0 : net,
         status: bill.cancelled ? 'cancelled' : openStatus(net),
         bardanEntryCount: (bardanByBill.get(bill.id) ?? []).length,
-        bardanPending: !bill.cancelled && (bardanByBill.get(bill.id) ?? []).length === 0,
+        bardanPending: !bill.cancelled && bill.bardanPending === true,
         bardanNotes: (bardanByBill.get(bill.id) ?? []).map((entry) => entry.note ?? ''),
       }
       result.bills.push(row)

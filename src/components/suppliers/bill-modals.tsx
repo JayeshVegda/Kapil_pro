@@ -15,6 +15,7 @@ import { computeBillNet } from '@/domain/supplier-purchases'
 import { buildSupplierPaymentWorkflow, prepareSupplierPaymentInput, type SupplierPaymentDraft } from '@/domain/supplier-payment-workflow'
 import { SUPPLIER_PAYMENT_MODES, supplierPaymentNeedsReference, type SupplierPaymentMode } from '@/domain/supplier-payment-modes'
 import { lineAmountPaise, rupeesToPaise } from '@/domain/supplier-units'
+import { purchaseReceiptBagCount, remainingPurchaseBags } from '@/domain/purchase-receipt-memos'
 import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatPaiseInr } from '@/lib/inr-format'
 import { PaymentAmountInput } from '@/components/ui/payment-amount-input'
@@ -39,27 +40,40 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
   const [kgStr, setKgStr] = useState('')
   const [method, setMethod] = useState<'deduct' | 'in_kind' | 'cash_back' | 'advance'>('deduct')
   const [lineId, setLineId] = useState('')
+  const [bagCountText, setBagCountText] = useState<string | null>(null)
   const [date, setDate] = useState('')
   const [note, setNote] = useState('')
   const [cashStr, setCashStr] = useState('')
   const [errorText, setErrorText] = useState('')
+  const [confirming, setConfirming] = useState(false)
 
   const billQuery = useQuery(purchaseBillQueryOptions(billId))
   const billState = getPurchaseReadState(billQuery, billQuery.data?.bill.id === billId ? billQuery.data : null)
   const bill = billState.status === 'ready' ? billState.record : null
   const lines = bill?.lines ?? []
-  const selectedLine = lines.find((l) => l.id === lineId) ?? lines[0]
-  const grams = Math.round((parseFloat(kgStr) || 0) * 1000)
+  const expectedLines = lines.filter((line) => purchaseReceiptBagCount(line.receiptMemo) > 0)
+  const pendingLines = expectedLines.filter((line) => remainingPurchaseBags(line, bill?.bardan ?? []) > 0)
+  const selectedLine = lines.find((l) => l.id === lineId) ?? (pendingLines.length === 1 ? pendingLines[0] : lines.length === 1 ? lines[0] : undefined)
+  const expectedCount = purchaseReceiptBagCount(selectedLine?.receiptMemo)
+  const remainingBags = selectedLine ? remainingPurchaseBags(selectedLine, bill?.bardan ?? []) : 0
+  const bagCount = bagCountText === null ? remainingBags : purchaseReceiptBagCount(bagCountText)
+  const grams = /^\d{1,9}(?:\.\d{1,3})?$/.test(kgStr.trim()) ? Math.round(Number(kgStr) * 1000) : 0
   const creditPaise = method === 'deduct' || method === 'advance' ? lineAmountPaise(grams, selectedLine?.rateMilli ?? 0) : 0
   const cashPaise = method === 'cash_back' ? rupeesToPaise(parseFloat(cashStr) || 0) : 0
+  const needsRate = method === 'deduct' || method === 'advance'
+  const canSave = Boolean(bill && !bill.bill.cancelled && grams > 0 && (!needsRate || (selectedLine && creditPaise > 0))
+    && (!expectedCount || (bagCount > 0 && bagCount <= remainingBags)))
+  const revisedNet = bill && method === 'deduct' ? computeBillNet(lines, bill.adjustments, [...bill.bardan, { method, creditPaise, cashAmountPaise: 0 }], bill.bill.taxMode, bill.bill.gstRateBp).netPaise : null
 
   const addMutation = useMutation({
     mutationFn: async () => {
       const currentBill = requirePurchaseRecord(billState, 'Bill')
       if (grams <= 0) throw new Error('Enter a valid bardan weight in kg.')
+      if (!canSave) throw new Error('Choose a bill line with a valid bardan rate.')
       await addPurchaseBardanEntry({
         billId: currentBill.bill.id,
         bardanG: grams,
+        bagCount: bagCount || undefined,
         rateLineId: selectedLine?.id,
         rateMilli: selectedLine?.rateMilli ?? 0,
         method,
@@ -81,20 +95,45 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
     <PurchaseDialog
       title="Add Bardan"
       onClose={onClose}
-      onSubmit={() => addMutation.mutate()}
-      canSubmit={Boolean(bill) && grams > 0}
+      onSubmit={() => {
+        if (!canSave || addMutation.isPending) return
+        if (confirming) {
+          addMutation.mutate()
+        } else {
+          setLineId(selectedLine?.id ?? '')
+          setBagCountText(bagCount ? String(bagCount) : null)
+          setConfirming(true)
+        }
+      }}
+      canSubmit={canSave}
       submitting={addMutation.isPending}
-      submitLabel="Save Bardan"
+      submitLabel={confirming ? 'Confirm Bardan' : 'Review Bardan'}
     >
       {!bill ? (
         <PurchaseReadNotice state={billState} subject="Bill" />
       ) : (
-        <>
+        <div className="space-y-2">
+          {confirming && <button type="button" className="text-xs font-semibold text-blue-700" disabled={addMutation.isPending} onClick={() => setConfirming(false)}>Back to edit</button>}
+          <fieldset disabled={confirming} className="space-y-2">
           <div className="grid grid-cols-2 gap-2.5">
+            <label className="flex flex-col gap-1"><span className={MODAL_LABEL}>Bags{expectedCount > 0 ? ` (${remainingBags} remaining)` : ''}</span>
+              <input className={MODAL_INPUT} inputMode="numeric" value={bagCountText ?? (remainingBags || '')} readOnly={!expectedCount} placeholder="Not recorded" onChange={(event) => setBagCountText(event.target.value)} />
+            </label>
             <label className="flex flex-col gap-1">
               <span className={MODAL_LABEL}>Bardan Weight (kg)</span>
               <input className={MODAL_INPUT} type="text" placeholder="e.g. 24.000" value={kgStr} onChange={(e) => setKgStr(e.target.value)} autoFocus />
             </label>
+            <label className="flex flex-col gap-1">
+              <span className={MODAL_LABEL}>Rate</span>
+              <select aria-label="Bardan rate line" className={MODAL_INPUT} value={selectedLine?.id ?? ''} onChange={(e) => { setLineId(e.target.value); setBagCountText(null) }}>
+                <option value="" disabled>Choose a bill line</option>
+                {lines.map((line) => <option key={line.id} value={line.id}>{line.itemName} (₹{line.rateMilli / 1000}/kg)</option>)}
+              </select>
+            </label>
+          </div>
+          <details className="text-xs text-slate-600">
+          <summary className="cursor-pointer py-1">More options</summary>
+          <div className="grid grid-cols-2 gap-2.5">
             <label className="flex flex-col gap-1">
               <span className={MODAL_LABEL}>Method</span>
               <select className={MODAL_INPUT} value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
@@ -102,16 +141,6 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
                 <option value="in_kind">In Kind (settled, nil)</option>
                 <option value="cash_back">Cash Back (memo only)</option>
                 <option value="advance">Advance (future pool payment)</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className={MODAL_LABEL}>Rate Line</span>
-              <select className={MODAL_INPUT} value={selectedLine?.id ?? ''} onChange={(e) => setLineId(e.target.value)}>
-                {lines.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.itemName} (₹{l.rateMilli / 1000}/kg)
-                  </option>
-                ))}
               </select>
             </label>
             {method === 'cash_back' ? (
@@ -130,10 +159,13 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
             <span className={MODAL_LABEL}>Note</span>
             <input className={MODAL_INPUT} type="text" placeholder="e.g. 24 plastic bags returned" value={note} onChange={(e) => setNote(e.target.value)} />
           </label>
+          </details>
+          </fieldset>
           <p className="rounded-md border border-blue-100 bg-blue-50/60 px-2.5 py-1.5 text-xs text-slate-700">
             {method === 'deduct' && (
               <>
-                Credit preview: <strong className="font-mono">{formatPaiseInr(creditPaise)}</strong> — deducted from the bill payable.
+                {grams / 1000} kg × ₹{(selectedLine?.rateMilli ?? 0) / 1000}/kg = <strong className="font-mono">{formatPaiseInr(creditPaise)}</strong>
+                {revisedNet !== null && <span className="block">Revised bill net {formatPaiseInr(revisedNet)}</span>}
               </>
             )}
             {method === 'in_kind' && 'Settled in kind — no money effect.'}
@@ -149,7 +181,7 @@ export function AddBardanModal({ billId, onClose }: { billId: string; onClose: (
             )}
           </p>
           <ErrorText error={errorText} />
-        </>
+        </div>
       )}
     </PurchaseDialog>
   )

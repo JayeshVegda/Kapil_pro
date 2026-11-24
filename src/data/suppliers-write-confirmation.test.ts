@@ -160,7 +160,13 @@ describe('supplier write confirmation', () => {
     expect(readCalls).toBe(0)
   })
 
-  it('bill and bill-day payment are not duplicated after an uncertain bill response', async () => {
+  it.each(['2026-04-01', '2026-05-01'])('keeps a separate payment date of %s', async (date) => {
+    const saved = await createPurchaseBill({ ...billInput, payment: { amountPaise: 50_000, mode: 'cash', date } })
+    expect(saved.date).toBe(billInput.date)
+    expect([...table('supplier_payments').values()]).toEqual([expect.objectContaining({ date })])
+  })
+
+  it('bill and bill payment are not duplicated after an uncertain bill response', async () => {
     responseLost = true
     readFailure = true
     const input = { ...billInput, requestId: 'operation000004', payment: { amountPaise: 50_000, mode: 'cash' as const } }

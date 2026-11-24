@@ -120,7 +120,15 @@ function CalendarPage() {
   const navigate = Route.useNavigate()
   const [monthKey, setMonthKey] = useState(() => search.month ?? today.slice(0, 7))
   const [selectedDay, setSelectedDay] = useState<string | null>(null)
+  const [wideCalendar, setWideCalendar] = useState(false)
   const calendarRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const query = window.matchMedia('(min-width: 1280px)')
+    const update = () => setWideCalendar(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
 
   const calendarQuery = useQuery({
     queryKey: ['calendar-month', monthKey],
@@ -193,7 +201,17 @@ function CalendarPage() {
   const monthBills = [...aggregates.dailyBillCount.values()].reduce((sum, count) => sum + count, 0)
   const monthPayments = [...aggregates.paymentsByDate.values()].reduce((sum, rows) => sum + rows.length, 0)
 
+  const formatBags = (value: number) => value.toLocaleString('en-IN', { maximumFractionDigits: 2 })
   const topCards = [
+    {
+      label: 'Gas bags sold',
+      value: calendarQuery.isLoading ? 'Loading…' : calendarQuery.isError ? 'Unavailable' : formatBags(aggregates.gasByItem.reduce((sum, item) => sum + item.bags, 0)),
+      details: [
+        { label: 'Spindle', value: formatBags(aggregates.itemComparisons.spindle75.bags + aggregates.itemComparisons.spindle85.bags) },
+        { label: 'Tapper Plug', value: formatBags(aggregates.itemComparisons.tapperPlug.bags) },
+      ],
+      icon: PackageCheck,
+    },
     {
       label: 'Sales billed',
       value: calendarQuery.isLoading ? 'Loading…' : calendarQuery.isError ? 'Unavailable' : formatInrInteger(aggregates.monthSales),
@@ -211,8 +229,19 @@ function CalendarPage() {
   ]
 
   const selectedSidebarData = selectedDay ? makeDaySidebarData(selectedDay, aggregates) : null
+  const dayDetails = selectedDay ? (
+      <div className="min-h-0 space-y-4 overflow-y-auto overflow-x-hidden px-4 py-3">
+        {selectedSidebarData && <section className="space-y-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sales</h3><div className="grid grid-cols-2 gap-2 text-xs"><div className="rounded-lg border border-slate-200 p-2">Billed <strong className="block font-mono text-sm">{formatInrInteger(selectedSidebarData.sales)}</strong></div><div className="rounded-lg border border-slate-200 p-2">Collected <strong className="block font-mono text-sm">{formatInrInteger(selectedSidebarData.collections)}</strong></div></div>{selectedSidebarData.bills.map((bill) => <Link key={bill.id} to="/transactions" search={{ focusKind: 'bill', focusId: bill.id }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{bill.billRefDisplay} · {bill.customerName} <span className="font-mono">{formatInrInteger(bill.total)}</span></Link>)}{selectedSidebarData.payments.map((payment) => <Link key={payment.id} to="/transactions" search={{ focusKind: 'payment', focusId: payment.id }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{payment.customerName} · Collected <span className="font-mono">{formatInrInteger(payment.amount)}</span></Link>)}</section>}
+        {purchaseEnabled && showPurchase && <section className="space-y-2 border-t border-slate-200 pt-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase</h3>
+          {(purchaseQuery.data?.bills ?? []).filter((bill) => bill.date === selectedDay && !bill.cancelled).map((bill) => <Link key={bill.id} to="/purchase-bills/$billId" params={{ billId: bill.id }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{bill.inNo} · {bill.supplierName} · {formatPaiseInr(bill.netPaise)}</Link>)}
+          {(purchaseQuery.data?.payments ?? []).filter((payment) => payment.date === selectedDay && !payment.cancelled).map((payment) => <Link key={payment.id} to="/purchase-bills" search={{ view: 'payments', from: selectedDay ?? undefined, to: selectedDay ?? undefined }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{payment.supplierName} · {payment.kind} · {formatPaiseInr(payment.amountPaise)}</Link>)}
+        </section>}
+        {castingEnabled && showCasting && <section className="space-y-2 border-t border-slate-200 pt-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Casting</h3>{(castingQuery.data ?? []).filter((session) => session.date === selectedDay).map((session) => <Link key={session.id} to="/casting/log" className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{session.totalWireOut.toFixed(2)} kg wire out</Link>)}</section>}
+      </div>
+  ) : null
 
   function changeMonth(nextMonth: string) {
+    setSelectedDay(null)
     setMonthKey(nextMonth)
     void navigate({ search: { month: nextMonth }, replace: true })
   }
@@ -226,7 +255,7 @@ function CalendarPage() {
   return (
     <div className="w-full px-3 pb-6 pt-3 sm:px-4 lg:px-6">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2"><h2 className="text-sm font-semibold text-slate-900">{formatMonthYear(monthKey)} at a glance</h2><p className="text-xs text-slate-500">{monthKey === today.slice(0, 7) ? `Through ${formatFullDate(today)}` : 'Full month'}</p></div>
-      <section className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
         {topCards.map((card) => <TopKpiCard key={card.label} {...card} />)}
       </section>
 
@@ -316,8 +345,14 @@ function CalendarPage() {
 
           <aside className="hidden xl:block">
             <div className="sticky top-20 max-h-[calc(100dvh-6rem)] overflow-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm transition">
-              <GasSellingStrip items={aggregates.gasByItem} />
-              {(
+              {selectedDay ? <>
+                <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
+                  <h3 className="text-sm font-semibold">{formatFullDate(selectedDay)}</h3>
+                  <button type="button" className="text-xs font-medium text-blue-700" onClick={() => setSelectedDay(null)}>Month overview</button>
+                </div>
+                {dayDetails}
+              </> : <>
+                <GasSellingStrip items={aggregates.gasByItem} />
                 <CalendarMonthOverview
                   monthKey={monthKey}
                   avgRate={aggregates.monthAvgMarketRate}
@@ -328,24 +363,17 @@ function CalendarPage() {
                   leadingGasItem={aggregates.leadingGasItem}
                   bestDay={bestDay}
                 />
-              )}
+              </>}
             </div>
           </aside>
           <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:hidden"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sales gas detail</h3><p className="mt-1 text-sm text-slate-700">Average bill market rate: <span className="font-mono font-semibold">{formatRate(aggregates.monthAvgMarketRate)}</span></p><GasSellingStrip items={aggregates.gasByItem} /></section>
 
         </div>
       ) : null}
-      <Dialog open={Boolean(selectedDay)} onOpenChange={(open) => { if (!open) setSelectedDay(null) }}>
+      <Dialog open={!wideCalendar && Boolean(selectedDay)} onOpenChange={(open) => { if (!open) setSelectedDay(null) }}>
         <DialogContent className="flex max-h-[min(85dvh,700px)] w-[calc(100vw-1.5rem)] max-w-2xl flex-col overflow-hidden p-0">
           <div className="shrink-0 border-b border-slate-200 px-4 py-3"><DialogTitle className="text-base font-semibold">{selectedDay ? formatFullDate(selectedDay) : 'Day details'}</DialogTitle></div>
-          <div className="min-h-0 space-y-4 overflow-y-auto overflow-x-hidden px-4 py-3">
-            {selectedSidebarData && <section className="space-y-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sales</h3><div className="grid grid-cols-2 gap-2 text-xs"><div className="rounded-lg border border-slate-200 p-2">Billed <strong className="block font-mono text-sm">{formatInrInteger(selectedSidebarData.sales)}</strong></div><div className="rounded-lg border border-slate-200 p-2">Collected <strong className="block font-mono text-sm">{formatInrInteger(selectedSidebarData.collections)}</strong></div></div>{selectedSidebarData.bills.map((bill) => <Link key={bill.id} to="/transactions" search={{ focusKind: 'bill', focusId: bill.id }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{bill.billRefDisplay} · {bill.customerName} <span className="font-mono">{formatInrInteger(bill.total)}</span></Link>)}{selectedSidebarData.payments.map((payment) => <Link key={payment.id} to="/transactions" search={{ focusKind: 'payment', focusId: payment.id }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{payment.customerName} · Collected <span className="font-mono">{formatInrInteger(payment.amount)}</span></Link>)}</section>}
-            {purchaseEnabled && showPurchase && <section className="space-y-2 border-t border-slate-200 pt-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase</h3>
-              {(purchaseQuery.data?.bills ?? []).filter((bill) => bill.date === selectedDay && !bill.cancelled).map((bill) => <Link key={bill.id} to="/purchase-bills/$billId" params={{ billId: bill.inNo }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{bill.inNo} · {bill.supplierName} · {formatPaiseInr(bill.netPaise)}</Link>)}
-              {(purchaseQuery.data?.payments ?? []).filter((payment) => payment.date === selectedDay && !payment.cancelled).map((payment) => <Link key={payment.id} to="/purchase-bills" search={{ view: 'payments', from: selectedDay ?? undefined, to: selectedDay ?? undefined }} className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{payment.supplierName} · {payment.kind} · {formatPaiseInr(payment.amountPaise)}</Link>)}
-            </section>}
-            {castingEnabled && showCasting && <section className="space-y-2 border-t border-slate-200 pt-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Casting</h3>{(castingQuery.data ?? []).filter((session) => session.date === selectedDay).map((session) => <Link key={session.id} to="/casting/log" className="block rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 hover:bg-slate-50">{session.totalWireOut.toFixed(2)} kg wire out</Link>)}</section>}
-          </div>
+          {dayDetails}
         </DialogContent>
       </Dialog>
     </div>

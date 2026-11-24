@@ -61,6 +61,13 @@ function flattenInputs(input: CastingInputRow[] | CastingCostParams): CastingInp
   return input.batches.flatMap((batch) => batch.inputs)
 }
 
+export function calculateCastingReadyCost(metalPerKg: number, brassPerKg: number, coalPerKg: number, workerPerKg: number, formulaVersion: 1 | 2 = 2) {
+  const baravoCostPerKg = formulaVersion === 1 ? metalPerKg * 0.075 : brassPerKg * 0.07
+  const overhead1Kg = baravoCostPerKg + coalPerKg + workerPerKg
+  const overhead2Kg = overhead1Kg * 2
+  return { baravoCostPerKg, overhead1Kg, overhead2Kg, finalProductCostPerKg: metalPerKg + overhead2Kg }
+}
+
 export function calculateCastingCost(input: CastingInputRow[] | CastingCostParams): CastingCostResult {
   const inputs = flattenInputs(input)
   const totalWireOut = Array.isArray(input) ? 0 : input.batches.reduce((sum, batch) => sum + safeNumber(batch.wireOut), 0)
@@ -92,10 +99,7 @@ export function calculateCastingCost(input: CastingInputRow[] | CastingCostParam
   const workerCostPerKg = totalWireOut > 0 ? workerSalary / totalWireOut : 0
   const finalCastingCostPerKg = metalCostPerKg + coalCostPerKg + workerCostPerKg
   const formulaVersion = Array.isArray(input) ? 2 : input.formulaVersion ?? 2
-  const baravoCostPerKg = formulaVersion === 1 ? metalCostPerKg * 0.075 : brassRatePerKg * 0.07
-  const overhead1Kg = baravoCostPerKg + coalCostPerKg + workerCostPerKg
-  const overhead2Kg = overhead1Kg * 2
-  const finalProductCostPerKg = metalCostPerKg + overhead2Kg
+  const readyCost = calculateCastingReadyCost(metalCostPerKg, brassRatePerKg, coalCostPerKg, workerCostPerKg, formulaVersion)
 
   return {
     totalInputKg,
@@ -109,10 +113,7 @@ export function calculateCastingCost(input: CastingInputRow[] | CastingCostParam
     workerCostPerKg,
     finalCastingCostPerKg,
     brassRatePerKg,
-    baravoCostPerKg,
-    overhead1Kg,
-    overhead2Kg,
-    finalProductCostPerKg,
+    ...readyCost,
     costPerKg: finalCastingCostPerKg || metalCostPerKg,
     perMaterial,
   }

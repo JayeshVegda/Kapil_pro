@@ -102,7 +102,7 @@ describe('buildPurchaseBillPresentation', () => {
     const presentation = buildPurchaseBillPresentation(detail, context)!
 
     expect(presentation.paymentRows).toEqual([
-      { date: '', mode: '', reference: 'Opening Advance', amountPaise: 20_000, pinned: false },
+      { date: '', mode: '', reference: 'Opening Advance', creditLabel: 'Opening Advance', amountPaise: 20_000, pinned: false },
       { date: '2026-10-03', mode: 'bank', reference: 'UTR-1', amountPaise: 30_000, pinned: true },
     ])
     expect(computeChittyTotals(presentation.chitty)).toMatchObject({ paidPaise: 50_000, duePaise: 50_000, status: 'partial' })
@@ -133,7 +133,7 @@ describe('buildPurchaseBillPresentation', () => {
     context.settlement.pools.kacha.bills[0].creditsApplied = []
 
     expect(buildPurchaseBillPresentation(detail, context)!.paymentRows).toEqual([
-      { date: '', mode: '', reference: '', amountPaise: 3000, pinned: true },
+      { date: '', mode: '', reference: '', creditLabel: 'Credit applied', amountPaise: 3000, pinned: true },
       { date: '2026-10-03', mode: 'cash', reference: 'Live', amountPaise: 2000, pinned: true },
     ])
   })
@@ -145,7 +145,7 @@ describe('buildPurchaseBillPresentation', () => {
     ]
 
     expect(buildPurchaseBillPresentation(detail, context)!.paymentRows).toEqual([
-      { date: '2026-10-01', mode: '', reference: 'Legacy credit', amountPaise: 1000, pinned: false },
+      { date: '2026-10-01', mode: '', reference: 'Legacy credit', creditLabel: 'Credit applied', amountPaise: 1000, pinned: false },
     ])
   })
 

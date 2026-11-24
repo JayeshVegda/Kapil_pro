@@ -741,7 +741,7 @@ function AppShellContent() {
               title={`${marketRate.status}${marketRate.rateDate ? ` | ${marketRate.rateDate}` : ''}${mktDelta ? ` | ${mktDelta.delta >= 0 ? '+' : '-'}₹${Math.abs(mktDelta.delta)} vs previous saved rate` : ''}`}
               onClick={() => void refreshMarketRate()}
             >
-              <span>MKT</span>
+              <span>Brass MKT</span>
               <span className="font-mono tabular-nums">{marketRate.rate > 0 ? formatInrInteger(Math.round(marketRate.rate)) : '—'}</span>
             </button>
             <button

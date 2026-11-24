@@ -1,12 +1,12 @@
 import type { CastingSessionWithInputs } from '@/domain/casting-types'
+import { calculateCastingReadyCost } from '@/domain/casting-calculations'
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
 /**
  * CastingTicket, the shared on-screen and printed furnace chitty.
  *
- * Shared by Casting Log View, Casting Bill and print. The final figure comes
- * from the versioned saved session; the breakdown uses its saved material lines.
+ * Shared by Casting Log View, Casting Bill and print.
  */
 
 export type CastingMaterialSummaryRow = {
@@ -36,67 +36,100 @@ export function formatKg(value: number) {
   return `${(Number.isFinite(value) ? value : 0).toFixed(1)} kg`
 }
 
+const moneyPerKg = (value: number) => `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+export function formatCastingWeekday(date: string) {
+  const day = new Date(`${date.slice(0, 10)}T12:00:00`)
+  return Number.isNaN(day.getTime()) ? '' : day.toLocaleDateString('en-IN', { weekday: 'long' })
+}
+
 export function CastingTicket({ session }: { session: CastingSessionWithInputs }) {
   const materials = summarizeMaterials(session)
-  const rate = (value: number) => value > 0 ? `₹${value.toFixed(2)}` : '—'
-  const brassRate = materials.find((material) => material.name.toLowerCase() === 'brass')?.avgRate ?? 0
-  const originalFormula = session.costFormulaVersion === 1
-  const baravoPerKg = originalFormula ? session.metalCostPerKg * 0.075 : brassRate * 0.07
+  const brass = materials.filter((material) => material.name.toLowerCase() === 'brass')
+  const brassKg = brass.reduce((sum, material) => sum + material.qty, 0)
+  const brassRate = brassKg > 0 ? brass.reduce((sum, material) => sum + material.amount, 0) / brassKg : 0
+  const ready = calculateCastingReadyCost(session.metalCostPerKg, brassRate, session.coalCostPerKg, session.workerCostPerKg)
 
   return (
-    <article aria-label="Casting chitty" className="mx-auto w-full max-w-[21cm] min-w-0 bg-white p-4 text-slate-900 shadow-sm ring-1 ring-slate-300 sm:p-6 print:max-w-none print:p-0 print:shadow-none print:ring-0">
-      <header className="border-b-2 border-slate-900 pb-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-600">Kapil Products · Foundry</p><h2 className="mt-1 text-xl font-black uppercase tracking-tight sm:text-2xl">Casting Chitty</h2></div>
-          <div className="text-left text-xs sm:text-right"><p className="font-semibold">{formatFullDate(session.date)}</p><p className="mt-1 font-mono text-[11px] text-slate-600">Session {session.id.slice(0, 8)}</p></div>
+    <article aria-label="Casting chitti" className="mx-auto w-full min-w-0 space-y-4 rounded-xl border border-slate-200 bg-white p-4 text-slate-900 shadow-sm sm:p-6 print:space-y-2 print:border-0 print:p-0 print:shadow-none">
+      <header className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 print:bg-white">
+        <div>
+          <p className="text-xs font-semibold text-slate-600">Kapil Products</p>
+          <h2 className="mt-0.5 text-xl font-semibold text-slate-950">Kapil Product Casting</h2>
+        </div>
+        <div className="sm:text-right">
+          <p className="text-sm font-semibold tabular-nums">{formatFullDate(session.date)}</p>
+          <p className="text-xs text-slate-600">{formatCastingWeekday(session.date)}</p>
         </div>
       </header>
 
-      <div className="grid grid-cols-2 border-b border-slate-300 text-xs sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 print:grid-cols-4">
         <ChittyFact label="Batches" value={String(session.unit)} />
         <ChittyFact label="Metal in" value={formatKg(session.totalInputKg)} />
-        <ChittyFact label="Wire out" value={formatKg(session.totalWireOut)} />
-        <ChittyFact label="Mel / wastage" value={formatKg(session.totalMel)} />
+        <ChittyFact label="Metal out" value={formatKg(session.totalWireOut)} />
+        <ChittyFact label="Wastage" value={formatKg(session.totalMel)} />
       </div>
 
-      <section className="py-4">
-        <h3 className="mb-2 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600">Material charged</h3>
+      <section className="rounded-lg border border-slate-200">
+        <h3 className="border-b border-slate-200 px-3 py-2.5 text-sm font-semibold">Materials</h3>
         <table className="hidden w-full table-fixed border-collapse text-xs sm:table print:table">
-          <thead><tr className="border-y border-slate-900 text-left text-[11px] uppercase text-slate-600"><th className="w-[38%] py-2 pr-2">Material</th><th className="w-[20%] py-2 text-right">Weight</th><th className="w-[20%] py-2 text-right">Avg rate / kg</th><th className="w-[22%] py-2 text-right">Amount</th></tr></thead>
-          <tbody>{materials.map((row) => <tr key={row.name} className="border-b border-slate-200"><td className="break-words py-2 pr-2 font-medium">{row.name}</td><td className="py-2 text-right font-mono tabular-nums">{formatKg(row.qty)}</td><td className="py-2 text-right font-mono tabular-nums">{rate(row.avgRate)}</td><td className="py-2 text-right font-mono tabular-nums">{formatInrInteger(row.amount)}</td></tr>)}</tbody>
-          <tfoot><tr className="border-y-2 border-slate-900 font-bold"><td className="py-2">Total metal</td><td className="py-2 text-right font-mono">{formatKg(session.totalInputKg)}</td><td className="py-2 text-right font-mono">{rate(session.metalCostPerKg)}</td><td className="py-2 text-right font-mono">{formatInrInteger(session.totalInputCost)}</td></tr></tfoot>
+          <thead>
+            <tr className="bg-slate-50 text-left text-slate-600">
+              <th scope="col" className="w-[34%] px-3 py-2">Material</th>
+              <th scope="col" className="w-[20%] px-2 py-2 text-right">Weight</th>
+              <th scope="col" className="w-[24%] px-2 py-2 text-right">Avg rate/kg</th>
+              <th scope="col" className="w-[22%] px-3 py-2 text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {materials.map((row) => (
+              <tr key={row.name}>
+                <th scope="row" className="break-words px-3 py-2.5 text-left font-medium">{row.name}</th>
+                <td className="px-2 py-2.5 text-right tabular-nums">{formatKg(row.qty)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums">{moneyPerKg(row.avgRate)}</td>
+                <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{formatInrInteger(row.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
         </table>
-        <div className="divide-y divide-slate-200 border-y border-slate-900 sm:hidden print:hidden">{materials.map((row) => <div key={row.name} className="py-2 text-xs"><div className="flex justify-between gap-2"><strong className="min-w-0 break-words">{row.name}</strong><span className="shrink-0 font-mono">{formatInrInteger(row.amount)}</span></div><p className="mt-0.5 font-mono text-slate-600">{formatKg(row.qty)} · {rate(row.avgRate)}/kg</p></div>)}<div className="flex justify-between gap-2 py-2 font-bold"><span>Total metal · {formatKg(session.totalInputKg)}</span><span className="font-mono">{formatInrInteger(session.totalInputCost)}</span></div></div>
-        {materials.length === 0 && <p className="py-3 text-xs text-slate-500">No material inputs recorded.</p>}
+        <ul className="divide-y divide-slate-100 sm:hidden print:hidden">
+          {materials.map((row) => (
+            <li key={row.name} className="px-3 py-2.5 text-xs">
+              <div className="flex justify-between gap-2 font-semibold"><span className="break-words">{row.name}</span><span>{formatInrInteger(row.amount)}</span></div>
+              <p className="mt-0.5 tabular-nums text-slate-600">{formatKg(row.qty)} · {moneyPerKg(row.avgRate)}/kg</p>
+            </li>
+          ))}
+        </ul>
+        {materials.length === 0 && <p className="px-3 py-2 text-xs text-slate-500">No materials recorded.</p>}
+        <div className="flex justify-between gap-2 border-t border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold"><span>Total material cost</span><span className="tabular-nums">{formatInrInteger(session.totalInputCost)}</span></div>
       </section>
 
-      <section className="grid gap-x-6 gap-y-3 border-b border-slate-300 pb-4 text-xs sm:grid-cols-2 print:grid-cols-2">
-        <div><h3 className="mb-1 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600">Furnace and labour</h3><ChittyLine label="Coal consumed" value={formatKg(session.coalKg)} /><ChittyLine label="Coal rate / kg" value={rate(session.coalRate)} /><ChittyLine label="Coal cost / wire kg" value={rate(session.coalCostPerKg)} /><ChittyLine label="Worker wages" value={formatInrInteger(session.workerSalary)} /><ChittyLine label="Wages / wire kg" value={rate(session.workerCostPerKg)} /></div>
-        <div><h3 className="mb-1 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600">Output and cost</h3><ChittyLine label="Wire out" value={formatKg(session.totalWireOut)} /><ChittyLine label="Mel / wastage" value={formatKg(session.totalMel)} /><ChittyLine label="Chol in" value={formatKg(session.cholIn)} /><ChittyLine label="Metal cost / kg" value={rate(session.metalCostPerKg)} /><ChittyLine label="Casting cost / kg" value={rate(session.costPerKg)} /></div>
+      <section className="rounded-lg border border-slate-200 px-3 py-2.5">
+        <h3 className="mb-1 text-sm font-semibold">Cost per kg</h3>
+        <dl className="divide-y divide-slate-100 text-xs">
+          <ChittyLine label="Metal/kg" value={moneyPerKg(session.metalCostPerKg)} />
+          <ChittyLine label={brassKg > 0 ? `Baravo · Chitti Brass ${moneyPerKg(brassRate)}/kg × 7% × 2` : 'Baravo · No Brass line on chitti'} value={moneyPerKg(ready.baravoCostPerKg * 2)} />
+          <ChittyLine label="Coal × 2 + worker × 2" value={moneyPerKg((session.coalCostPerKg + session.workerCostPerKg) * 2)} />
+        </dl>
       </section>
 
-      <section className="border-b border-slate-300 py-3 text-xs">
-        <h3 className="mb-2 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600">Ready cost per kg</h3>
-        <ChittyLine label="A · Metal / kg" value={rate(session.metalCostPerKg)} />
-        <ChittyLine label={originalFormula ? 'B · Original Baravo 7.5% × 2' : `B · Chitty Brass ${rate(brassRate)}/kg × 7% × 2`} value={rate(baravoPerKg * 2)} />
-        <ChittyLine label="C · Coal / wire kg × 2" value={rate(session.coalCostPerKg * 2)} />
-        <ChittyLine label="C · Worker / wire kg × 2" value={rate(session.workerCostPerKg * 2)} />
+      <section className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 print:bg-white">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h3 className="text-sm font-semibold text-emerald-950">Final ready cost</h3>
+          <strong className="text-xl tabular-nums text-emerald-950">{moneyPerKg(ready.finalProductCostPerKg)}<span className="text-xs font-medium"> / kg</span></strong>
+        </div>
+        {session.costFormulaVersion === 1 && (
+          <p className="mt-1 text-xs text-slate-600">Recalculated above. Original saved cost {moneyPerKg(session.finalProductCostPerKg)}/kg · 7.5% of metal rate × 2</p>
+        )}
       </section>
-
-      <div className="mt-4 flex flex-wrap items-end justify-between gap-3 border-y-2 border-slate-900 py-3">
-        <div><p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600">Final ready cost</p><p className="mt-1 text-xs text-slate-500">{originalFormula ? 'Original session formula' : 'A + B + C from this chitty'}</p></div>
-        <strong className="font-mono text-xl tabular-nums">{rate(session.finalProductCostPerKg)}<span className="text-xs"> / kg</span></strong>
-      </div>
-      {session.note && <p className="mt-4 whitespace-pre-wrap break-words border-b border-slate-200 pb-3 text-xs"><strong>Remarks: </strong>{session.note}</p>}
-      <p className="mt-4 text-[11px] text-slate-500">Internal foundry cost record · Session {session.id}</p>
     </article>
   )
 }
 
 function ChittyFact({ label, value }: { label: string; value: string }) {
-  return <div className="min-w-0 border-r border-slate-200 px-2 py-2 last:border-r-0"><p className="text-[11px] font-semibold uppercase text-slate-500">{label}</p><p className="mt-0.5 break-words font-mono text-sm font-bold tabular-nums">{value}</p></div>
+  return <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2.5"><p className="text-xs text-slate-600">{label}</p><p className="mt-0.5 break-words text-base font-semibold tabular-nums">{value}</p></div>
 }
 
 function ChittyLine({ label, value }: { label: string; value: string }) {
-  return <div className="flex justify-between gap-2 border-b border-dotted border-slate-200 py-1 last:border-b-0"><span className="text-slate-600">{label}</span><span className="shrink-0 font-mono font-semibold tabular-nums">{value}</span></div>
+  return <div className="flex items-baseline justify-between gap-3 py-2"><dt className="text-slate-600">{label}</dt><dd className="shrink-0 font-semibold tabular-nums">{value}</dd></div>
 }

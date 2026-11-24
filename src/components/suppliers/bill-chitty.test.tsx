@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { computeChittyTotals, BillChitty, BillChittyKpiBox, type BillChittyData } from './bill-chitty'
+import { isBrassBenchmarkItem } from '@/domain/purchase-market-benchmark'
 
 function sampleData(): BillChittyData {
   return {
@@ -79,12 +80,13 @@ describe('BillChitty UI standardization', () => {
     expect(html).not.toContain('₹8,000')
   })
 
-  it('explains bardan deduction before the already-netted bill total', () => {
+  it('explains bardan after the net and labels the deduction with a minus sign', () => {
     const html = renderToStaticMarkup(<BillChitty data={sampleData()} />)
 
-    expect(html).toContain('Less: Bardan')
-    expect(html.indexOf('Less: Bardan')).toBeLessThan(html.indexOf('Bill Net Amount'))
-    expect(html).toContain('Included in bill net')
+    expect(html).toContain('BARDAN')
+    expect(html.indexOf('BARDAN')).toBeGreaterThan(html.indexOf('BILL NET AMOUNT'))
+    expect(html).not.toContain('Bardan total')
+    expect(html).not.toContain('Included in bill net')
   })
 
   it('shows bardan advance once as an applied payment and separately as a memo', () => {
@@ -123,13 +125,23 @@ describe('BillChitty UI standardization', () => {
   })
 
   it('renders table with Bardan column between item description and weight', () => {
-    const html = renderToStaticMarkup(<BillChitty data={sampleData()} />)
+    const data = sampleData()
+    data.lines[0].bardanText = '3 bags'
+    const html = renderToStaticMarkup(<BillChitty data={data} />)
     expect(html).toContain('>#<')
-    expect(html).toContain('>Item Description<')
-    expect(html).toContain('>Bardan<')
-    expect(html).toContain('>Weight<')
+    expect(html).toContain('>Item<')
+    expect(html).toContain('>Bags<')
+    expect(html).toContain('>Gross weight<')
     expect(html).toContain('>Rate<')
     expect(html).toContain('>Amount<')
+  })
+
+  it('hides an empty or zero Bardan column while keeping saved settlements', () => {
+    const data = sampleData()
+    data.lines[0].bardanText = '0 bags'
+    const html = renderToStaticMarkup(<BillChitty data={data} />)
+    expect(html).not.toContain('>Bags<')
+    expect(html).toContain('−₹300.00')
   })
 
   it('renders material lines via table on tablet/desktop and a stacked list on phones with no horizontal scroll container', () => {
@@ -137,37 +149,125 @@ describe('BillChitty UI standardization', () => {
     // The former overflow-x-auto wrapper is banned on the paper chitty: it never scrolls horizontally.
     expect(html).not.toContain('overflow-x-auto')
     // Phone fallback stacks the same line data without duplicating the amounts differently.
-    expect(html).toContain('Bardan')
+    expect(html).toContain('kg gross')
   })
 
   it('renders bold Bill Net Amount and removes duplicate gross subtotal', () => {
     const html = renderToStaticMarkup(<BillChitty data={sampleData()} />)
-    expect(html).toContain('Bill Net Amount')
+    expect(html).toContain('BILL NET AMOUNT')
     expect(html).not.toContain('Items Gross Subtotal')
   })
 
-  it('renders Payments & Credits Applied with grayish background', () => {
+  it('renders dated payments as deductions', () => {
     const html = renderToStaticMarkup(<BillChitty data={sampleData()} />)
-    expect(html).toContain('Payments &amp; Credits Applied')
-    expect(html).toContain('bg-slate-100')
+    expect(html).toContain('>PAYMENT<')
+    expect(html).toContain('Paid on 03-11-2026 (cash)')
+    expect(html).toContain('−₹15,000.00')
   })
 
-  it('renders Balance Due with nil when fully paid and no trailing formula noise', () => {
+  it('renders paid in full for an exact payment and advance for an overpayment', () => {
+    const balance = computeChittyTotals(sampleData()).netPaise
     const paidInFull: BillChittyData = {
       ...sampleData(),
-      paidRows: [{ date: '2026-11-04', mode: 'bank', reference: 'FULL', amountPaise: 50_000_000, pinned: false }],
+      paidRows: [{ date: '2026-11-04', mode: 'bank', reference: 'FULL', amountPaise: balance, pinned: false }],
     }
     const html = renderToStaticMarkup(<BillChitty data={paidInFull} />)
-    expect(html).toContain('Balance Due')
-    expect(html).toContain('>nil<')
+    expect(html).toContain('BALANCE DUE')
+    expect(html).toContain('>PAID IN FULL<')
     expect(html).not.toContain('(Bill ₹')
     expect(html).not.toContain('(Payable for this bill)')
+    const advance = renderToStaticMarkup(<BillChitty data={{ ...paidInFull, advancePaise: 50_000 }} />)
+    expect(advance).toContain('>ADVANCE<')
+    expect(advance).toContain('₹500.00')
+    expect(advance).not.toContain('PAID IN FULL')
   })
 
   it('turns Bill No red for GST bills', () => {
     const gstData: BillChittyData = { ...sampleData(), pool: 'gst', taxMode: 'gst' }
     const html = renderToStaticMarkup(<BillChitty data={gstData} />)
     expect(html).toContain('text-rose-600')
+  })
+
+  it('shows charged GST in the item table and narrow preview, not in adjustments', () => {
+    const data: BillChittyData = {
+      ...sampleData(), taxMode: 'gst', gstRateBp: 1800, adjustments: [], bardan: [], paidRows: [],
+      lines: [{ itemName: 'Brass', weightG: 1000, rateMilli: 100_000, amountPaise: 10_000, bardanText: '1 bag' }],
+    }
+    const html = renderToStaticMarkup(<BillChitty data={data} />)
+    expect(computeChittyTotals(data)).toMatchObject({ taxPaise: 1800, netPaise: 11_800 })
+    expect(html.match(/<tbody.*?<\/tbody>/)?.[0]).toMatch(/<td[^>]*>GST 18%<\/td><td[^>]*>\+₹18\.00<\/td>/)
+    expect(html.match(/<ol.*?<\/ol>/)?.[0]).toContain('GST 18%')
+    expect(html).not.toContain('>ADJUSTMENTS<')
+    const rcm = renderToStaticMarkup(<BillChitty data={{ ...data, taxMode: 'rcm' }} />)
+    expect(rcm).not.toContain('GST 18%')
+    expect(rcm).toContain('RCM liability')
+  })
+
+  it('keeps the supplied net and due amounts and shows the same breakdown in preview and print', () => {
+    const data: BillChittyData = {
+      ...sampleData(), taxMode: 'none', gstRateBp: 0,
+      lines: [
+        { itemName: 'Brass', weightG: 1_500_000, rateMilli: 880_000, amountPaise: 132_000_000, bardanText: '15 bags' },
+        { itemName: 'Lead', weightG: 680_000, rateMilli: 370_000, amountPaise: 25_160_000, bardanText: '10 bags' },
+      ],
+      adjustments: [
+        { type: 'quality_cut', amountPaise: 500_000, note: 'Quality Cut (Dhur)' },
+        { type: 'labour', amountPaise: 50_000 },
+        { type: 'transport', amountPaise: 200_000 },
+        { type: 'other', amountPaise: -90_000, note: 'Delay' },
+      ],
+      bardan: [
+        { ...sampleData().bardan[0], itemName: 'Brass', bagCount: 15, bardanG: 23_000, rateMilli: 880_000, creditPaise: 2_024_000, note: 'private bardan text' },
+        { ...sampleData().bardan[0], itemName: 'Lead', bagCount: 10, bardanG: 15_000, rateMilli: 370_000, creditPaise: 555_000 },
+      ],
+      paidRows: [{ ...sampleData().paidRows[0], amountPaise: 80_000_000, hasNote: true }],
+      bagsAtReceiptKg: 38,
+      vehicleNo: 'GJ-10-AB-1234',
+    }
+    expect(computeChittyTotals(data)).toMatchObject({ netPaise: 154_241_000, duePaise: 74_241_000 })
+    const html = renderToStaticMarkup(<BillChitty data={data} />)
+    expect(renderToStaticMarkup(<BillChitty data={data} mode="preview" />)).toBe(html)
+    expect(html).not.toContain('Rupees Fifteen Lakh')
+    expect(html).not.toContain('already in net')
+    expect(html).toContain('₹7,42,410.00')
+    expect(html).toContain('1500.000 kg gross')
+    expect(html).toContain('Paid on 03-11-2026 (cash)')
+    expect(html).toContain('Payment note recorded')
+    expect(html).toContain('Supplier invoice no.')
+    expect(html).toContain('SB-9')
+    expect(html).toContain('Bag weight memo')
+    expect(html).toContain('GJ-10-AB-1234')
+    expect(html).not.toContain('<tfoot')
+    expect(html).not.toContain('PURCHASE BILL')
+    expect(html).not.toContain('Received by')
+    expect(html).toContain('Less: Quality Cut (Dhur)')
+    expect(html).toContain('Less: Delay')
+    expect(html).toContain('× ₹880')
+    expect(html).not.toContain('₹880.000')
+    expect(html).not.toContain('private bardan text')
+  })
+
+  it('excludes an unselected supplier chitti from print and only benchmarks Brass', () => {
+    const html = renderToStaticMarkup(<BillChitty data={{ ...sampleData(), supplierName: ' ', paidRows: [] }} mode="preview" />)
+    expect(html).toContain('Supplier not selected')
+    expect(html).not.toContain('print-chitty')
+    expect(html).not.toContain('>PAYMENT<')
+    expect(isBrassBenchmarkItem('Brass Scrap')).toBe(true)
+    expect(isBrassBenchmarkItem('Lead')).toBe(false)
+    expect(isBrassBenchmarkItem('Brass Copper Mix')).toBe(false)
+  })
+
+  it('omits blank optional details, round-off and duplicate single-entry totals', () => {
+    const data: BillChittyData = {
+      ...sampleData(), supplierBillNo: ' ', taxMode: 'none',
+      lines: [{ itemName: 'Brass', weightG: 1000, rateMilli: 100_001, amountPaise: 10_099 }],
+      adjustments: [{ type: 'transport', amountPaise: 100 }],
+      bardan: [{ ...sampleData().bardan[0], creditPaise: 100 }],
+    }
+    expect(computeChittyTotals(data).roundOffPaise).not.toBe(0)
+    const html = renderToStaticMarkup(<BillChitty data={data} />)
+    expect(html).not.toMatch(/Round off|Adjustments total|Bardan total|Supplier invoice no\.|Bag weight memo|Vehicle no\./)
+    expect(html).toContain('₹101.00')
   })
 })
 

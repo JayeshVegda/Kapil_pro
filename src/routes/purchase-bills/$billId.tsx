@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { BillChitty } from '@/components/suppliers/bill-chitty'
+import { isBrassBenchmarkItem } from '@/domain/purchase-market-benchmark'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { buttonClass } from '@/components/ui/form-control-classes'
 import { buildPurchaseBillPresentation } from '@/components/suppliers/purchase-bill-presentation'
@@ -46,7 +47,7 @@ function findVilaityForDate(history: Array<{ date: string; vilaityMilli: number 
   const exact = history.find((h) => h.date === targetDate)
   if (exact) return exact
   const earlier = history.filter((h) => h.date < targetDate)
-  return earlier[earlier.length - 1] ?? history[0]
+  return earlier[earlier.length - 1] ?? null
 }
 
 function PurchaseBillChittyPage() {
@@ -170,7 +171,7 @@ function PurchaseBillChittyPage() {
           </>
         )}
         <span className="ml-auto inline-flex items-center gap-1.5">
-          <ActionButton icon={<Printer size={13} />} label="Print" onClick={() => window.print()} />
+          <ActionButton icon={<Printer size={13} />} label="Print" disabled={!chittyData.supplierName.trim()} onClick={() => window.print()} />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button type="button" aria-label="More bill actions" className={`${buttonClass('secondary')} h-8 px-2.5 text-xs`}>
@@ -200,10 +201,10 @@ function PurchaseBillChittyPage() {
           </p>
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="min-w-0">
-              <p className="text-xs font-semibold text-slate-600">Premium vs Vilaity</p>
-              {vilaityMatch ? (
+              <p className="text-xs font-semibold text-slate-600">Brass premium vs Vilaity</p>
+              {vilaityMatch && chittyData.lines.some((line) => isBrassBenchmarkItem(line.itemName)) ? (
                 <div className="mt-0.5 space-y-0.5 font-mono">
-                  {chittyData.lines.map((line, index) => {
+                  {chittyData.lines.filter((line) => isBrassBenchmarkItem(line.itemName)).map((line, index) => {
                     const diff = line.rateMilli - vilaityMatch.vilaityMilli
                     return (
                       <p key={index} className="flex min-w-0 justify-between gap-2">
@@ -217,7 +218,7 @@ function PurchaseBillChittyPage() {
                   <p className="break-words text-xs text-slate-500">Vilaity ₹{milliToRateText(vilaityMatch.vilaityMilli)}/kg · {formatFullDate(vilaityMatch.date)}</p>
                 </div>
               ) : (
-                <p className="mt-0.5 text-slate-500">No vilaity rate on record.</p>
+                <p className="mt-0.5 text-slate-500">No matching market comparison.</p>
               )}
             </div>
             <div className="min-w-0">

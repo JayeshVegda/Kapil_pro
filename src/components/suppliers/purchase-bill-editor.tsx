@@ -27,7 +27,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Panel } from '@/components/ui/panel'
 import { PaymentAmountInput } from '@/components/ui/payment-amount-input'
 import { SearchableCombobox } from '@/components/ui/searchable-combobox'
-import { BillChitty, type BillChittyData } from '@/components/suppliers/bill-chitty'
+import { BillChitty, formatChittyRate, type BillChittyData } from '@/components/suppliers/bill-chitty'
+import { hasPurchasePaymentNote, purchaseChittyAdvance, purchaseChittyCreditLabel } from '@/components/suppliers/purchase-bill-presentation'
 import {
   bundleToSettlementInput,
   createPurchaseBill,
@@ -42,7 +43,7 @@ import {
   type SupplierBundle,
 } from '@/data/suppliers'
 import { purchaseBillQueryOptions, purchaseBillsQueryOptions, supplierBundleQueryOptions, supplierListQueryOptions } from '@/data/purchase-queries'
-import { useMarketRate } from '@/domain/market-rate'
+import { isBrassBenchmarkItem } from '@/domain/purchase-market-benchmark'
 import {
   computeBillNet,
   extractUserNote,
@@ -55,7 +56,7 @@ import {
 } from '@/domain/supplier-purchases'
 import { computeSupplierSettlement } from '@/domain/supplier-settlement'
 import { SUPPLIER_PAYMENT_MODES, supplierPaymentNeedsReference, type SupplierPaymentMode } from '@/domain/supplier-payment-modes'
-import { purchaseReceiptMemoText } from '@/domain/purchase-receipt-memos'
+import { purchaseReceiptBagCount, purchaseReceiptMemoText } from '@/domain/purchase-receipt-memos'
 import {
   gramsToKgText,
   milliToRateText,
@@ -89,6 +90,7 @@ type DraftBardanFormItem = {
   weightKgStr: string
   rateRupeesStr: string
   rateLineIndex?: number
+  rateLineKey?: string
   method: 'deduct' | 'in_kind' | 'cash_back' | 'advance'
   creditRupeesStr: string
   cashRupeesStr: string
@@ -123,8 +125,7 @@ function findVilaityBenchmark(
     const prev = earlier[earlier.length - 1]
     return { milli: prev.vilaityMilli, date: prev.date, isFallback: true }
   }
-  const first = history[0]
-  return { milli: first?.vilaityMilli ?? null, date: first?.date ?? targetDate, isFallback: true }
+  return { milli: null, date: targetDate, isFallback: false }
 }
 
 function ItemDropdownCell({
@@ -349,7 +350,7 @@ function snapshotDraft(d: DraftSnapshot): string {
 /** Rate vs Jamnagar market: red above, green below, grey equal. Milli-rupees in, two-decimal ₹/kg out. */
 function MktDeltaBadge({ rateMilli, marketMilli }: { rateMilli: number; marketMilli: number | null | undefined }) {
   if (marketMilli == null || rateMilli <= 0) {
-    return <span className="inline-flex w-16 justify-center font-mono text-[11px] text-slate-300">—</span>
+    return null
   }
   const diffMilli = rateMilli - marketMilli
   const EPS = 5 // below half a paisa of the market rate counts as equal for display
@@ -360,7 +361,7 @@ function MktDeltaBadge({ rateMilli, marketMilli }: { rateMilli: number; marketMi
       ? 'border-rose-200 bg-rose-50 text-rose-700'
       : 'border-emerald-200 bg-emerald-50 text-emerald-700'
   const text = equal ? '0.00' : `${diffMilli > 0 ? '+' : ''}${(diffMilli / 1000).toFixed(2)}`
-  const title = `Rate ₹${milliToRateText(rateMilli)}/kg vs market ₹${milliToRateText(marketMilli)}/kg`
+  const title = `Rate ${formatChittyRate(rateMilli)}/kg vs Brass market ${formatChittyRate(marketMilli)}/kg`
   return (
     <span
       title={title}
@@ -475,6 +476,8 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
   const [paymentMode, setPaymentMode] = useState<SupplierPaymentMode>('cash')
   const [paymentReference, setPaymentReference] = useState('')
   const [paymentNote, setPaymentNote] = useState('')
+  const [paymentDateOverride, setPaymentDateOverride] = useState<string | null>(null)
+  const paymentDate = paymentDateOverride ?? date
   const [inNoPreview, setInNoPreview] = useState<string>('')
   const [hasManualAllocationsWarning, setHasManualAllocationsWarning] = useState(false)
 
@@ -489,6 +492,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
   const todayIso = useMemo(() => getLocalIsoDate(), [])
   const [moreDetailsOpen, setMoreDetailsOpen] = useState(false)
   const [adjustedOpen, setAdjustedOpen] = useState(false)
+  const [bardanOpen, setBardanOpen] = useState(false)
   const [notesOpen, setNotesOpen] = useState(false)
   const [paymentOpen, setPaymentOpen] = useState(false)
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false)
@@ -572,6 +576,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     const nextGstRate = (p.gst_rate_bp ?? (p.pool === 'gst' ? 1800 : 0)) / 100
     setSupplierId(nextSupplierId)
     setDate(p.date)
+    setPaymentDateOverride(null)
     setPool(p.pool)
     setTaxMode(nextTaxMode)
     setGstRatePercent(nextGstRate)
@@ -607,7 +612,6 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     draftAppliedRef.current = draftId
   }, [draftId, draftQuery.data, suppliersQuery.data, itemsQuery.data])
 
-  const { marketRate } = useMarketRate(date)
 
   const recentBillsQuery = useQuery(purchaseBillsQueryOptions())
 
@@ -676,7 +680,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     if ((userNote.trim() !== '' || (bill.photos && bill.photos.length > 0)) && !notesTouchedRef.current) {
       setNotesOpen(true)
     }
-    if ((bill.supplierBillNo?.trim() || memoBags.trim() || bill.pool === 'gst') && !moreTouchedRef.current) {
+    if ((bill.supplierBillNo?.trim() || bill.vehicleNo?.trim() || memoBags.trim() || bill.pool === 'gst') && !moreTouchedRef.current) {
       setMoreDetailsOpen(true)
     }
     setBaselineDraft(snapshotDraft({
@@ -712,7 +716,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
       }),
     [supplierId, date, pool, taxMode, gstRatePercent, supplierBillNo, vehicleNo, bagsAtReceiptStr, privateNote, lines, adjustments],
   )
-  const isDirty = baselineReady && (serializedDraft !== baselineDraft || (draftId && JSON.stringify(draftBardan) !== draftBardanBaseline) || photos.length > 0 || (!editBillId && ((draftId ? draftPaymentStr.trim() !== '' : paymentAmountRupees > 0) || paymentNote.trim() !== '' || Boolean(paymentReference.trim()))))
+  const isDirty = baselineReady && (serializedDraft !== baselineDraft || (!editBillId && JSON.stringify(draftBardan) !== draftBardanBaseline) || photos.length > 0 || (!editBillId && ((draftId ? draftPaymentStr.trim() !== '' : paymentAmountRupees > 0) || paymentNote.trim() !== '' || Boolean(paymentReference.trim()))))
   const requestBack = () => (isDirty ? setDiscardOpen(true) : onDiscard ? onDiscard() : window.history.back())
 
   useEffect(() => {
@@ -782,56 +786,45 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
 
   const parsedDraftBardan = useMemo(() => {
     try {
+      const manualLines = new Set<string>()
       return draftBardan.map((b, index) => {
         const bardanG = parsePurchaseDecimal(b.weightKgStr, 3, `Bardan ${index + 1} weight`)
-        const rateMilli = parsePurchaseDecimal(b.rateRupeesStr, 3, `Bardan ${index + 1} rate`)
+        const target = draftId
+          ? b.rateLineIndex === undefined ? undefined : parsedLines[b.rateLineIndex]
+          : parsedLines.find((line) => line.id === b.rateLineKey)
+        const rateMilli = draftId ? parsePurchaseDecimal(b.rateRupeesStr, 3, `Bardan ${index + 1} rate`) : target?.rateMilli ?? 0
         const creditPaise = b.creditRupeesStr.trim() ? parsePurchaseDecimal(b.creditRupeesStr, 2, `Bardan ${index + 1} credit`) :
           b.method === 'deduct' ? calculateDraftLinePaise(bardanG, rateMilli) : 0
         const cashAmountPaise = b.cashRupeesStr.trim() ? parsePurchaseDecimal(b.cashRupeesStr, 2, `Bardan ${index + 1} cash`) : 0
-        if (bardanG <= 0) throw new Error('Bardan weight must be positive')
-        return { bardanG, rateMilli, rateLineIndex: b.rateLineIndex, method: b.method, creditPaise, cashAmountPaise, date: b.date, note: b.note }
+        if (bardanG <= 0 || (!draftId && rateMilli <= 0)) throw new Error('Enter bardan weight and choose a bill line with a rate.')
+        if (!draftId && target) {
+          if (manualLines.has(target.id)) throw new Error('Use one bardan entry per bill line.')
+          manualLines.add(target.id)
+        }
+        const rateLineIndex = target ? parsedLines.filter((line) => line.itemName.trim() && line.weightG > 0 && line.rateMilli > 0).indexOf(target) : undefined
+        if (rateLineIndex === -1) throw new Error('Complete the line used for the bardan rate.')
+        return { bardanG, bagCount: !draftId && target ? purchaseReceiptBagCount(target.bardanStr) || undefined : undefined, rateMilli, rateLineIndex, method: b.method, creditPaise, cashAmountPaise, date: draftId ? b.date : date, note: b.note }
       })
     } catch { return null }
-  }, [draftBardan])
+  }, [draftBardan, parsedLines, date, draftId])
 
   const billNet = useMemo(() => {
     const gstRateBp = taxMode === 'none' ? 0 : percentToBasisPoints(gstRatePercent)
     return computeBillNet(
       parsedLines.map((l) => ({ amountPaise: l.amountPaise })),
       parsedAdjustments.map((a) => ({ type: a.type, amountPaise: a.amountPaise })),
-      draftId ? (parsedDraftBardan ?? []) : (editBillQuery.data?.bardan ?? []),
+      editBillId ? (editBillQuery.data?.bardan ?? []) : (parsedDraftBardan ?? []),
       taxMode,
       gstRateBp,
     )
-  }, [parsedLines, parsedAdjustments, taxMode, gstRatePercent, editBillQuery.data, draftId, parsedDraftBardan])
+  }, [parsedLines, parsedAdjustments, taxMode, gstRatePercent, editBillQuery.data, editBillId, parsedDraftBardan])
 
   // Vilaity benchmark rate for the current date
   const vilaityBenchmark = useMemo(() => {
     return findVilaityBenchmark(vilaityQuery.data ?? [], date)
   }, [vilaityQuery.data, date])
 
-  // Resolved market benchmark rate in milli-rupees:
-  // Derived from date-specific vilaity record or live header market rate (marketRate.rate)
-  const currentVilaityMilli = useMemo(() => {
-    if (vilaityBenchmark.milli != null && vilaityBenchmark.milli > 0) {
-      return vilaityBenchmark.milli
-    }
-    if (marketRate.rate > 0) {
-      return Math.round(marketRate.rate * 1000)
-    }
-    try {
-      const raw = localStorage.getItem('billing.marketRate.cache.v1')
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (Number(parsed.localRate) > 0) {
-          return Math.round(Number(parsed.localRate) * 1000)
-        }
-      }
-    } catch {
-      // An invalid local cache falls back to the benchmark.
-    }
-    return 860000 // default benchmark 860.00
-  }, [vilaityBenchmark.milli, marketRate.rate])
+  const currentVilaityMilli = vilaityBenchmark.milli
 
   // Supplier brief card (right pane, bottom): dues, advance, counts, last bill/rate.
   const supplierContext = useMemo(() => {
@@ -861,46 +854,60 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     }
   }, [supplierBundleQuery.data])
 
+  const billDayPaymentPaise = (() => { try { return parsePurchaseDecimal(draftId ? draftPaymentStr || '0' : String(paymentAmountRupees), 2, 'Payment') } catch { return 0 } })()
   const projectedSettlement = useMemo(() => {
     if (!supplierBundleQuery.data) return null
     const input = bundleToSettlementInput(supplierBundleQuery.data)
     const previewBillId = editBillId || 'billpreview'
     const previewPaymentId = 'paymentpreview'
-    const paidPaise = editBillId ? 0 : (() => { try { return parsePurchaseDecimal(draftId ? draftPaymentStr || '0' : String(paymentAmountRupees), 2, 'Payment') } catch { return 0 } })()
+    const paidPaise = editBillId ? 0 : billDayPaymentPaise
     const oldBill = input.bills.find((bill) => bill.id === previewBillId)
     const simulated = computeSupplierSettlement({
       ...input,
       bills: [...input.bills.filter((bill) => bill.id !== previewBillId), { ...oldBill, id: previewBillId, date, created: oldBill?.created ?? '9999-12-31 23:59:59', pool, taxMode, gstRateBp: taxMode === 'none' ? 0 : percentToBasisPoints(gstRatePercent) }],
       lines: [...input.lines.filter((line) => line.billId !== previewBillId), ...parsedLines.filter((line) => line.itemName.trim() && line.weightG > 0 && line.rateMilli > 0).map((line) => ({ billId: previewBillId, amountPaise: line.amountPaise }))],
       adjustments: [...input.adjustments.filter((adjustment) => adjustment.billId !== previewBillId), ...parsedAdjustments.filter((adjustment) => adjustment.amountPaise !== 0).map((adjustment) => ({ billId: previewBillId, type: adjustment.type, amountPaise: adjustment.amountPaise }))],
-      payments: paidPaise > 0 ? [...input.payments, { id: previewPaymentId, date, created: '9999-12-31 23:59:59', pool, kind: 'payment', amountPaise: paidPaise }] : input.payments,
+      bardan: editBillId ? input.bardan : [...input.bardan, ...(parsedDraftBardan ?? []).map((entry) => ({ ...entry, billId: previewBillId }))],
+      payments: paidPaise > 0 ? [...input.payments, { id: previewPaymentId, date: paymentDate, created: '9999-12-31 23:59:59', pool, kind: 'payment', amountPaise: paidPaise }] : input.payments,
       allocations: paidPaise > 0 && billNet.netPaise > 0 ? [...input.allocations, { paymentId: previewPaymentId, billId: previewBillId, amountPaise: Math.min(paidPaise, billNet.netPaise) }] : input.allocations,
     })
     const projectedBill = simulated.pools[pool].bills.find((bill) => bill.billId === previewBillId)
+    const proposedPayment = simulated.pools[pool].payments.find((payment) => payment.paymentId === previewPaymentId)
     const paymentById = new Map(supplierBundleQuery.data.payments.map((payment) => [payment.id, payment]))
     return {
       supplierDuePaise: simulated.combined.outstandingPaise,
       billDuePaise: projectedBill?.duePaise ?? billNet.netPaise,
+      advancePaise: editBillId
+        ? purchaseChittyAdvance(editBillId, simulated.pools[pool].payments, input.allocations)
+        : proposedPayment ? Math.max(0, proposedPayment.amountPaise - proposedPayment.appliedPaise) : undefined,
       paidRows: (projectedBill?.creditsApplied ?? []).map((credit) => {
         const payment = credit.paymentId ? paymentById.get(credit.paymentId) : null
         const proposed = credit.paymentId === previewPaymentId
-        return { date: credit.date, mode: proposed ? paymentMode : payment?.mode ?? '', reference: proposed ? paymentReference : payment?.reference || credit.reference || '', amountPaise: credit.amountPaise, pinned: credit.pinned }
+        return { date: credit.date, hasNote: hasPurchasePaymentNote(proposed ? paymentNote : payment?.privateNote), creditLabel: proposed ? undefined : purchaseChittyCreditLabel(payment?.kind, credit.reference, Boolean(payment)), mode: proposed ? paymentMode : payment?.mode ?? '', reference: proposed ? paymentReference : payment?.reference || credit.reference || '', amountPaise: credit.amountPaise, pinned: credit.pinned }
       }),
     }
-  }, [supplierBundleQuery.data, editBillId, draftId, draftPaymentStr, paymentAmountRupees, paymentMode, paymentReference, paymentNote, date, pool, taxMode, gstRatePercent, parsedLines, parsedAdjustments, billNet.netPaise])
+  }, [supplierBundleQuery.data, editBillId, billDayPaymentPaise, paymentMode, paymentReference, paymentNote, paymentDate, date, pool, taxMode, gstRatePercent, parsedLines, parsedAdjustments, parsedDraftBardan, billNet.netPaise])
 
+  const memoBagsKg = parseFloat(bagsAtReceiptStr)
   const billChittyData = useMemo<BillChittyData>(() => ({
     inNo: inNoPreview, date, supplierName, pool, taxMode,
     gstRateBp: taxMode === 'none' ? 0 : percentToBasisPoints(gstRatePercent),
     supplierBillNo: supplierBillNo.trim(),
+    bagsAtReceiptKg: Number.isFinite(memoBagsKg) && memoBagsKg > 0 ? Number(memoBagsKg.toFixed(3)) : null,
+    vehicleNo: vehicleNo.trim(),
     lines: parsedLines.filter((line) => line.itemName.trim() && line.weightG > 0).map((line) => ({
       itemName: line.itemName, weightG: line.weightG, rateMilli: line.rateMilli, amountPaise: line.amountPaise,
       bardanText: purchaseReceiptMemoText(line.bardanStr) || undefined,
     })),
     adjustments: parsedAdjustments.filter((adjustment) => adjustment.amountPaise !== 0).map((adjustment) => ({ type: adjustment.type, amountPaise: adjustment.amountPaise, note: adjustment.note.trim() || undefined })),
-    bardan: editBillQuery.data?.bardan ?? [],
-    paidRows: projectedSettlement?.paidRows ?? [],
-  }), [inNoPreview, date, supplierName, pool, taxMode, gstRatePercent, supplierBillNo, parsedLines, parsedAdjustments, editBillQuery.data, projectedSettlement])
+    bardan: editBillId
+      ? (editBillQuery.data?.bardan ?? []).map((entry) => ({ ...entry, itemName: editBillQuery.data?.lines.find((line) => line.id === entry.rateLineId)?.itemName }))
+      : (parsedDraftBardan ?? []).map((entry) => ({ ...entry, date: entry.date || date, itemName: entry.rateLineIndex === undefined ? undefined : parsedLines.filter((line) => line.itemName.trim() && line.weightG > 0 && line.rateMilli > 0)[entry.rateLineIndex]?.itemName })),
+    paidRows: projectedSettlement?.paidRows ?? (!editBillId && billDayPaymentPaise > 0
+      ? [{ date: paymentDate, hasNote: hasPurchasePaymentNote(paymentNote), mode: paymentMode, reference: paymentReference, amountPaise: Math.min(billDayPaymentPaise, billNet.netPaise), pinned: true }]
+      : []),
+    advancePaise: projectedSettlement?.advancePaise ?? (!editBillId ? Math.max(0, billDayPaymentPaise - billNet.netPaise) : undefined),
+  }), [inNoPreview, date, supplierName, pool, taxMode, gstRatePercent, supplierBillNo, memoBagsKg, vehicleNo, parsedLines, parsedAdjustments, editBillQuery.data, editBillId, parsedDraftBardan, projectedSettlement, billDayPaymentPaise, paymentDate, paymentMode, paymentReference, paymentNote, billNet.netPaise])
 
   // Bardan "advance" entries mint a supplier payment in the bill's pool; moving
   // the bill to the other pool would strand that payment, so the pool is locked.
@@ -979,7 +986,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
       if (!editBillId && paidNowPaise > 0 && supplierPaymentNeedsReference(paymentMode) && !paymentReference.trim()) throw new Error('Enter the payment reference.')
       if (!supplierId) throw new Error('Please select a supplier.')
       if (draftId && lines.some((line) => line.itemName.trim() && !line.itemId)) throw new Error('Match every draft item to a Purchase item before saving.')
-      if (draftId && !parsedDraftBardan) throw new Error('Complete every bardan entry or remove it.')
+      if (!editBillId && !parsedDraftBardan) throw new Error('Complete every bardan entry or remove it.')
       if (!date) throw new Error('Bill date is required.')
 
       const validLines = parsedLines.filter((l) => l.itemName.trim() && l.weightG > 0 && l.rateMilli > 0)
@@ -989,7 +996,6 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
         throw new Error('Enter at least one item line with valid weight and rate.')
       }
 
-      const memoBagsKg = parseFloat(bagsAtReceiptStr)
       const fullNote = formatPrivateNoteWithBags(privateNote, !isNaN(memoBagsKg) && memoBagsKg > 0 ? memoBagsKg : null)
 
       if (editBillId) {
@@ -1034,7 +1040,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
           gstRateBp: taxMode === 'none' ? 0 : percentToBasisPoints(gstRatePercent),
           privateNote: fullNote,
           photos: photos.length > 0 ? photos : undefined,
-          payment: paidNowPaise > 0 ? { amountPaise: paidNowPaise, mode: paymentMode, reference: paymentReference.trim(), note: paymentNote.trim() || undefined } : undefined,
+          payment: paidNowPaise > 0 ? { amountPaise: paidNowPaise, date: paymentDate, mode: paymentMode, reference: paymentReference.trim(), note: paymentNote.trim() || undefined } : undefined,
           lines: validLines.map((l) => ({
             itemId: l.itemId || undefined,
             itemName: l.itemName.trim(),
@@ -1050,7 +1056,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
               amountPaise: a.amountPaise,
               note: a.note.trim(),
             })),
-          bardan: draftId ? parsedDraftBardan ?? [] : undefined,
+          bardan: parsedDraftBardan ?? [],
         }
         return await createPurchaseBill(payload)
       }
@@ -1094,8 +1100,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
     validationHint = 'Complete every entered item, weight and rate'
   }
 
-  const isFormValid = hasValidSupplier && hasValidDate && hasValidLines && (!draftId || (draftQuery.data?.status === 'pending_review' && draftQuery.data.parsed.kind === 'valid' && parsedDraftBardan !== null))
-  const billDayPaymentPaise = (() => { try { return parsePurchaseDecimal(draftId ? draftPaymentStr || '0' : String(paymentAmountRupees), 2, 'Payment') } catch { return 0 } })()
+  const isFormValid = hasValidSupplier && hasValidDate && hasValidLines && (editBillId || parsedDraftBardan !== null) && (!draftId || (draftQuery.data?.status === 'pending_review' && draftQuery.data.parsed.kind === 'valid'))
 
   // Save goes through a preview-confirmation dialog first.
   const requestSave = useCallback(() => {
@@ -1351,15 +1356,15 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
                   <tr className="border-b border-border bg-slate-50 text-[11px] font-bold uppercase tracking-wider text-slate-700 h-9">
                     <th className="w-10 min-w-[36px] px-2.5 py-2 text-left">#</th>
                     <th className="min-w-[180px] px-3 py-2 text-left">Item</th>
-                    <th className="w-24 min-w-[85px] px-2 py-2 text-right">Begs(bardan)</th>
+                    <th className="w-24 min-w-[85px] px-2 py-2 text-right">Bags (Bardan)</th>
                     <th className="w-28 min-w-[100px] px-2 py-2 text-right">Weight (kg)</th>
                     <th className="w-28 min-w-[100px] px-2 py-2 text-right">Rate (₹/kg)</th>
                     <th
                       className="w-20 min-w-[75px] px-2 py-2 text-center"
                       title={
                         currentVilaityMilli
-                          ? `Market difference vs Jamnagar benchmark (₹${milliToRateText(currentVilaityMilli)}/kg)`
-                          : 'Market difference'
+                          ? `Difference vs Jamnagar Brass benchmark (${formatChittyRate(currentVilaityMilli)}/kg)`
+                          : 'No Brass benchmark for this date'
                       }
                     >
                       Mkt Δ
@@ -1452,7 +1457,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
                           )}
                         </td>
                         <td className="w-20 min-w-[75px] px-2 py-2 text-center">
-                          <MktDeltaBadge rateMilli={parsed.rateMilli} marketMilli={currentVilaityMilli} />
+                          <MktDeltaBadge rateMilli={parsed.rateMilli} marketMilli={isBrassBenchmarkItem(parsed.itemName) ? currentVilaityMilli : null} />
                         </td>
                         <td className="w-32 min-w-[110px] px-3 py-2 text-right font-mono font-semibold tabular-nums text-foreground">
                           {formatPaiseInr(parsed.amountPaise)}
@@ -1510,7 +1515,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
                     <div className="grid grid-cols-2 gap-2 items-start pt-1">
                       <div>
                         <label htmlFor={`bardan-mob-${l.id}`} className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground block mb-1">
-                          Begs (bardan)
+                          Bags (Bardan)
                         </label>
                         <input
                           id={`bardan-mob-${l.id}`}
@@ -1540,7 +1545,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
                           <label htmlFor={`rate-mob-${l.id}`} className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                             Rate (₹)
                           </label>
-                          <MktDeltaBadge rateMilli={parsed.rateMilli} marketMilli={currentVilaityMilli} />
+                          <MktDeltaBadge rateMilli={parsed.rateMilli} marketMilli={isBrassBenchmarkItem(parsed.itemName) ? currentVilaityMilli : null} />
                         </div>
                         <input
                           id={`rate-mob-${l.id}`}
@@ -1589,7 +1594,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
               </div>
               <div className="flex flex-wrap items-center gap-4 sm:gap-6 font-mono tabular-nums">
                 <div className="text-right">
-                  <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Weight</span>
+                  <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Gross weight</span>
                   <span className="font-bold text-foreground">{totalWeightText} kg</span>
                 </div>
                 <div className="text-right">
@@ -1607,6 +1612,10 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
                     </div>
                   )
                 })()}
+                <div className="text-right">
+                  <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Bardan</span>
+                  <span className={billNet.bardanDeductPaise ? 'font-bold text-rose-700' : 'font-bold text-foreground'}>{billNet.bardanDeductPaise ? `−${formatPaiseInr(billNet.bardanDeductPaise)}` : formatPaiseInr(0)}</span>
+                </div>
                 <div className="text-right">
                   <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Net Payable</span>
                   <span className="font-bold text-emerald-800">{formatPaiseInr(billNet.netPaise)}</span>
@@ -1628,6 +1637,48 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
               <button type="button" className={buttonClass('secondary')} onClick={() => setDraftBardan((rows) => rows.filter((row) => row.id !== entry.id))}>Remove {index + 1}</button>
             </div>)}
             {parsedDraftBardan === null && <p role="alert" className="text-xs font-semibold text-rose-700">Complete each bardan number before saving.</p>}
+          </Panel>}
+
+          {!editBillId && !draftId && <Panel className="p-3">
+            <button type="button" onClick={() => setBardanOpen((open) => !open)} aria-expanded={bardanOpen} className="flex w-full items-center justify-between gap-2 rounded-md px-1 py-1.5 text-left transition hover:bg-secondary">
+              <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                Settle bardan on this bill
+                {draftBardan.length > 0 && <span className="rounded-full bg-secondary px-1.5 py-0.5 font-bold text-foreground normal-case tracking-normal">{draftBardan.length}</span>}
+              </span>
+              <ChevronDown size={14} className={`text-muted-foreground transition-transform ${bardanOpen ? '' : '-rotate-90'}`} />
+            </button>
+            {bardanOpen && <div className="mt-2 rounded-lg border border-border bg-secondary/50 p-2">
+              {draftBardan.length > 0 && <div className="mt-2 overflow-x-auto">
+                <table className="w-full min-w-[375px] border-collapse text-left text-xs">
+                  <thead className="border-b border-slate-200 text-slate-600">
+                    <tr><th scope="col" className="py-1.5 pr-2">Item / rate</th><th scope="col" className="px-2 py-1.5">Bardan kg</th><th scope="col" className="px-2 py-1.5">Bags / kg per bag</th><th scope="col"><span className="sr-only">Remove</span></th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {draftBardan.map((entry, index) => {
+                      const line = parsedLines.find((row) => row.id === entry.rateLineKey)
+                      const bags = purchaseReceiptBagCount(line?.bardanStr)
+                      const kg = Number(entry.weightKgStr)
+                      return <tr key={entry.id}>
+                        <td className="py-1.5 pr-2"><select aria-label={`Bardan item and rate, row ${index + 1}`} className={`${inputClass} w-full`} value={entry.rateLineKey ?? ''} onChange={(event) => setDraftBardan((rows) => rows.map((row) => row.id === entry.id ? { ...row, rateLineKey: event.target.value } : row))}>
+                          <option value="">Choose a bill line</option>
+                          {parsedLines.map((row) => row.itemName && row.rateMilli > 0 && <option value={row.id} key={row.id}>{row.itemName} · {formatChittyRate(row.rateMilli)}/kg</option>)}
+                        </select></td>
+                        <td className="w-24 px-2 py-1.5"><input aria-label={`Bardan weight in kg, row ${index + 1}`} className={`${inputClass} w-full`} inputMode="decimal" value={entry.weightKgStr} onChange={(event) => setDraftBardan((rows) => rows.map((row) => row.id === entry.id ? { ...row, weightKgStr: event.target.value } : row))} /></td>
+                        <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-600">{bags > 0 ? `${bags} bags` : '—'}{bags > 0 && Number.isFinite(kg) && kg > 0 && <span className="block">{(kg / bags).toFixed(2)} kg/bag</span>}</td>
+                        <td className="py-1.5 text-right"><button type="button" className="rounded p-1.5 text-slate-500 hover:bg-rose-50 hover:text-rose-700" aria-label={`Remove bardan row ${index + 1}`} onClick={() => setDraftBardan((rows) => rows.filter((row) => row.id !== entry.id))}>×</button></td>
+                      </tr>
+                    })}
+                  </tbody>
+                </table>
+              </div>}
+              {draftBardan.length > 0 && <p className="mt-2 text-xs" role="status">{parsedDraftBardan ? `Bardan credit ${formatPaiseInr(billNet.bardanDeductPaise)} · Bill net ${formatPaiseInr(billNet.netPaise)}` : 'Enter a weight and select a rate line for each entry.'}</p>}
+              <button type="button" className={`${buttonClass('secondary')} mt-2`} onClick={() => {
+                const eligible = parsedLines.flatMap((line, index) => line.itemName && line.rateMilli > 0 ? [index] : [])
+                const marked = eligible.filter((index) => purchaseReceiptMemoText(parsedLines[index].bardanStr))
+                const choices = marked.length ? marked : eligible
+                setDraftBardan((rows) => [...rows, { id: generateLineId(), rateLineKey: choices.length === 1 ? parsedLines[choices[0]].id : undefined, weightKgStr: '', rateRupeesStr: '', method: 'deduct', creditRupeesStr: '', cashRupeesStr: '', date, note: '' }])
+              }}>Add Bardan</button>
+            </div>}
           </Panel>}
 
           {/* Adjustments — collapsible with count */}
@@ -1783,7 +1834,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
               className="flex w-full items-center justify-between gap-2 rounded-md px-1 py-1.5 text-left transition hover:bg-secondary"
             >
               <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                Paid on bill day
+                Payment with bill
                 {billDayPaymentPaise > 0 && (
                   <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-bold text-emerald-700 normal-case tracking-normal">
                     {formatPaiseInr(billDayPaymentPaise)}
@@ -1797,13 +1848,16 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
                 <p className="px-1 text-[11px] text-muted-foreground">
                   Optional. Amount accepts shorthand like 350, 3.5l, 50k. Saved with this bill and applied to it first.
                 </p>
-                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px_minmax(0,1fr)]">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <label className="text-xs font-medium text-slate-600">Amount paid (₹)
                     {draftId ? <input type="text" inputMode="decimal" value={draftPaymentStr} onChange={(event) => setDraftPaymentStr(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm" /> : <PaymentAmountInput
                       value={paymentAmountRupees}
                       onChange={setPaymentAmountRupees}
                       className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm"
                     />}
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">Payment date
+                    <input type="date" className={`${inputClass} mt-1`} value={paymentDate} onChange={(event) => setPaymentDateOverride(event.target.value || null)} />
                   </label>
                   <label className="text-xs font-medium text-slate-600">Mode
                     <select value={paymentMode} onChange={(e) => setPaymentMode(e.target.value as typeof paymentMode)} className="mt-1 h-10 w-full rounded-md border border-slate-300 px-2 text-sm">
@@ -1869,7 +1923,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
           aria-label="Live bill preview"
           className="flex min-w-0 w-full flex-col gap-3 xl:sticky xl:top-4 xl:self-start"
         >
-        <section aria-label="Bill chitty preview" className="min-w-0 rounded-xl border border-slate-200 bg-white p-2 shadow-sm sm:p-3">
+        <section aria-label="Bill chitty preview" className={`min-w-0 rounded-xl border border-slate-200 bg-white p-2 shadow-sm sm:p-3 ${saveConfirmOpen ? 'print:hidden' : ''}`}>
           <BillChitty data={billChittyData} mode="preview" />
         </section>
 
@@ -1981,7 +2035,7 @@ export function PurchaseBillEditor({ variant = 'page', initialSupplierId = '', e
           {billDayPaymentPaise > 0 && (
             <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900">
               This bill records {paymentMode === 'cash' ? 'a cash' : paymentMode === 'cheque' ? 'a cheque' : 'an'} payment of{' '}
-              <strong className="whitespace-nowrap font-mono tabular-nums">{formatPaiseInr(billDayPaymentPaise)}</strong>
+              <strong className="whitespace-nowrap font-mono tabular-nums">{formatPaiseInr(billDayPaymentPaise)}</strong> dated {formatFullDate(paymentDate)}
               {paymentNote.trim() ? <> — “{paymentNote.trim()}”</> : null}.
             </p>
           )}

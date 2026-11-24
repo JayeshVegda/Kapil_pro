@@ -3,7 +3,7 @@ import type {
   PurchaseBillView, PurchaseLineView, SupplierAllocationView, SupplierBundle, SupplierPaymentView,
   SupplierSummary, SupplierView,
 } from '@/data/suppliers'
-import { parsePurchaseLineMemos } from './purchase-receipt-memos'
+import { hasPendingPurchaseBardan, parsePurchaseLineMemos } from './purchase-receipt-memos'
 import { bundleToSettlementInput } from './supplier-bundle'
 import { computeDaysSince, extractUserNote, parseBagsAtReceiptKg } from './supplier-purchases'
 import {
@@ -146,7 +146,7 @@ export function buildPurchaseReadModel(
       paidPaise: settlement?.paidPaise ?? 0,
       duePaise: settlement?.duePaise ?? (bill.cancelled ? 0 : netPaise),
       status: settlement?.status ?? (bill.cancelled ? 'cancelled' : 'open'),
-      bardanPending: settlement?.bardanPending ?? (!bill.cancelled && bardan.length === 0),
+      bardanPending: settlement?.bardanPending ?? (!bill.cancelled && hasPendingPurchaseBardan(lines, bardan, parseBagsAtReceiptKg(bill.privateNote))),
       bardanEntryCount: bardan.length, lines, adjustments: groups.adjustmentsByBill.get(bill.id) ?? [], bardan,
     }
   })

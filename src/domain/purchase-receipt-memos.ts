@@ -31,5 +31,50 @@ export function formatPurchaseLineMemos(note: string, memos: Readonly<Record<str
 
 export function purchaseReceiptMemoText(memo: string): string {
   const clean = memo.trim()
+  if (/^0+(?:\.0+)?(?:\s*(?:bags?|kg))?$/i.test(clean)) return ''
   return clean && Number.isFinite(Number(clean)) ? `${clean} bags` : clean
+}
+
+export function purchaseReceiptBagCount(memo = ''): number {
+  const match = /^\s*(\d+)(?:\s*bags?)?\s*$/i.exec(memo)
+  const count = match ? Number(match[1]) : 0
+  return Number.isSafeInteger(count) ? count : 0
+}
+
+const settledBagCountTag = /^\[settled_bags_v1:(\d+)\]\n?/
+
+export function readSettledBagCount(note: string) {
+  return {
+    bagCount: purchaseReceiptBagCount(settledBagCountTag.exec(note)?.[1]) || undefined,
+    note: note.replace(settledBagCountTag, ''),
+  }
+}
+
+export function writeSettledBagCount(note: string, bagCount?: number) {
+  const clean = readSettledBagCount(note).note
+  return bagCount && Number.isSafeInteger(bagCount) && bagCount > 0
+    ? `[settled_bags_v1:${bagCount}]\n${clean}`
+    : clean
+}
+
+export function remainingPurchaseBags(
+  line: { id: string; receiptMemo?: string },
+  entries: ReadonlyArray<{ rateLineId: string; bagCount?: number }>,
+) {
+  const count = purchaseReceiptBagCount(line.receiptMemo)
+  const linked = entries.filter((entry) => entry.rateLineId === line.id)
+  // Old entries recorded weight only. Treat a linked historical entry as settled.
+  if (linked.some((entry) => entry.bagCount === undefined)) return 0
+  return Math.max(0, count - linked.reduce((sum, entry) => sum + (entry.bagCount ?? 0), 0))
+}
+
+export function hasPendingPurchaseBardan(
+  lines: ReadonlyArray<{ id: string; receiptMemo?: string }>,
+  entries: ReadonlyArray<{ rateLineId: string; bagCount?: number }>,
+  receiptKg: number | null,
+): boolean {
+  const expected = lines.filter((line) => purchaseReceiptBagCount(line.receiptMemo) > 0)
+  if (!expected.length) return (receiptKg ?? 0) > 0 && entries.length === 0
+  if (expected.length === 1 && entries.some((entry) => !entry.rateLineId)) return false
+  return expected.some((line) => remainingPurchaseBags(line, entries) > 0)
 }

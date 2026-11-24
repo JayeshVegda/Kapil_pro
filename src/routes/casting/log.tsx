@@ -3,7 +3,7 @@ import { LogsPager, LogsTableCard, LogsToolbarCard, defaultLogFromDate, useLogsP
 import { createFileRoute } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Edit3, Eye, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
 import { deleteCastingSession, loadCastingMaterials, loadCastingSessions, saveCastingSession, updateCastingSession } from '@/data/casting'
@@ -18,6 +18,11 @@ import { formatFullDate, getLocalIsoDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 
 export const Route = createFileRoute('/casting/log')({
+  validateSearch: z.object({
+    sessionId: z.string().optional(),
+    sessionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    action: z.enum(['edit', 'delete']).optional(),
+  }),
   component: CastingLogPage,
 })
 
@@ -152,8 +157,10 @@ const editSchema = z
 
 export function CastingLogPage() {
   const queryClient = useQueryClient()
+  const { sessionId, sessionDate, action } = Route.useSearch()
+  const handledAction = useRef('')
   const [search, setSearch] = useState('')
-  const [dateFrom, setDateFrom] = useState(() => defaultLogFromDate(getLocalIsoDate()))
+  const [dateFrom, setDateFrom] = useState(() => sessionDate ?? defaultLogFromDate(getLocalIsoDate()))
   const [dateTo, setDateTo] = useState('')
   const [viewMode, setViewMode] = useState<'active' | 'deleted'>('active')
   const [trashEntries, setTrashEntries] = useState<CastingTrashEntry[]>(() => readTrash())
@@ -168,6 +175,13 @@ export function CastingLogPage() {
   const [editChol, setEditChol] = useState(0)
   const [editNote, setEditNote] = useState('')
   const [editRows, setEditRows] = useState<UiRow[]>([])
+
+  useEffect(() => {
+    if (sessionId && sessionDate && action) {
+      setDateFrom(sessionDate)
+      setDateTo(sessionDate)
+    }
+  }, [action, sessionDate, sessionId])
 
   const sessionsQuery = useQuery({
     queryKey: [...CASTING_LOG_KEY, dateFrom, dateTo],
@@ -359,6 +373,7 @@ export function CastingLogPage() {
     await Promise.all([
       qc.invalidateQueries({ queryKey: CASTING_SESSIONS_KEY }),
       qc.invalidateQueries({ queryKey: CASTING_LOG_KEY }),
+      qc.invalidateQueries({ queryKey: ['latest-casting-defaults'] }),
     ])
   }
 
@@ -372,6 +387,20 @@ export function CastingLogPage() {
     setEditNote(s.note)
     setEditRows(toUiRows(s.inputs))
   }
+
+  useEffect(() => {
+    if (!sessionId || !action) {
+      handledAction.current = ''
+      return
+    }
+    const actionKey = `${sessionId}:${action}`
+    if (handledAction.current === actionKey) return
+    const session = sessionsQuery.data?.find((row) => row.id === sessionId)
+    if (!session) return
+    handledAction.current = actionKey
+    if (action === 'edit') openEdit(session)
+    else setDeletingSession(session)
+  }, [action, sessionId, sessionsQuery.data])
 
   function closeEdit() {
     setEditing(null)

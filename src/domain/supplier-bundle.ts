@@ -1,6 +1,8 @@
 import type { SupplierBundle } from '@/data/suppliers'
 import type { SupplierLedgerInput } from './supplier-ledger'
 import type { SupplierSettlementInput } from './supplier-settlement'
+import { hasPendingPurchaseBardan } from './purchase-receipt-memos'
+import { parseBagsAtReceiptKg } from './supplier-purchases'
 
 export function bundleToSettlementInput(bundle: SupplierBundle): SupplierSettlementInput {
   return {
@@ -11,6 +13,11 @@ export function bundleToSettlementInput(bundle: SupplierBundle): SupplierSettlem
     bills: bundle.bills.map((bill) => ({
       id: bill.id, date: bill.date, created: bill.created, pool: bill.pool,
       taxMode: bill.taxMode, gstRateBp: bill.gstRateBp, cancelled: bill.cancelled,
+      bardanPending: hasPendingPurchaseBardan(
+        bundle.lines.filter((line) => line.billId === bill.id),
+        bundle.bardan.filter((entry) => entry.billId === bill.id),
+        parseBagsAtReceiptKg(bill.privateNote),
+      ),
     })),
     lines: bundle.lines.map((line) => ({ billId: line.billId, amountPaise: line.amountPaise })),
     adjustments: bundle.adjustments.map((row) => ({ billId: row.billId, type: row.type, amountPaise: row.amountPaise })),

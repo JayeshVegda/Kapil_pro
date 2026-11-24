@@ -8,6 +8,7 @@ import { AppError } from '@/app/errors'
 import { loadCastingMaterials, loadLatestCastingDefaults, loadMarketRateForDate, saveCastingSession } from '@/data/casting'
 import { loadCastingSessionDraft } from '@/data/casting-session-drafts'
 import { matchCastingMaterial } from '@/domain/casting-session-draft'
+import { itemNameKey } from '@/domain/purchase-item-name'
 import { Panel } from '@/components/ui/panel'
 import { buttonClass } from '@/components/ui/form-control-classes'
 import { z } from 'zod'
@@ -27,7 +28,7 @@ type MaterialRow = {
   id: string
   materialId?: string
   name: string
-  rate: number
+  rate?: number
   qtyByBatch: number[]
 }
 
@@ -35,7 +36,6 @@ function emptyRows(): MaterialRow[] {
   return DEFAULT_MATERIALS.map((name) => ({
     id: name.toLowerCase().replace(/\s+/g, '-'),
     name,
-    rate: 0,
     qtyByBatch: Array(DEFAULT_BATCH_COUNT).fill(0),
   }))
 }
@@ -66,29 +66,19 @@ type MathInputProps = {
 }
 
 function MathInput({ value, onChange, className, placeholder }: MathInputProps) {
-  const [tempValue, setTempValue] = useState<string>('')
-  const [isFocused, setIsFocused] = useState(false)
-
-  useEffect(() => {
-    if (!isFocused) {
-      setTempValue(value ? String(value) : '')
-    }
-  }, [value, isFocused])
+  const [tempValue, setTempValue] = useState<string>()
 
   const handleBlur = () => {
-    setIsFocused(false)
-    const evaluated = parseExpression(tempValue)
-    onChange(evaluated)
-    setTempValue(evaluated ? String(evaluated) : '')
+    if (tempValue !== undefined) onChange(parseExpression(tempValue))
+    setTempValue(undefined)
   }
 
   return (
     <input
       type="text"
       className={className}
-      value={tempValue}
+      value={tempValue ?? (value ? String(value) : '')}
       onChange={(e) => setTempValue(e.target.value)}
-      onFocus={() => setIsFocused(true)}
       onBlur={handleBlur}
       placeholder={placeholder}
     />
@@ -100,17 +90,16 @@ function CastingNewSessionPage() {
   const queryClient = useQueryClient()
   const today = useMemo(() => getLocalIsoDate(), [])
   const [date, setDate] = useState(today)
-  const [coalKg, setCoalKg] = useState(0)
-  const [coalRate, setCoalRate] = useState(0)
-  const [workerSalary, setWorkerSalary] = useState(0)
+  const [coalKgOverride, setCoalKg] = useState<number>()
+  const [coalRateOverride, setCoalRate] = useState<number>()
+  const [workerSalaryOverride, setWorkerSalary] = useState<number>()
   const [note, setNote] = useState('')
-  const [rows, setRows] = useState<MaterialRow[]>(() => emptyRows())
+  const [baseRows, setRows] = useState<MaterialRow[]>(emptyRows)
   const [wireOutByBatch, setWireOutByBatch] = useState<number[]>(() => Array(DEFAULT_BATCH_COUNT).fill(0))
   const [melByBatch, setMelByBatch] = useState<number[]>(() => Array(DEFAULT_BATCH_COUNT).fill(0))
   const [statusText, setStatusText] = useState('')
   const [draftSaved, setDraftSaved] = useState(false)
   const [convertedSessionId, setConvertedSessionId] = useState('')
-  const defaultsAppliedRef = useRef(false)
   const draftAppliedRef = useRef('')
 
   const draftQuery = useQuery({ queryKey: ['casting-session-draft', draftId], queryFn: () => loadCastingSessionDraft(draftId!), enabled: Boolean(draftId), refetchOnWindowFocus: true })
@@ -142,7 +131,8 @@ function CastingNewSessionPage() {
   const defaultsQuery = useQuery({
     queryKey: ['latest-casting-defaults'],
     queryFn: loadLatestCastingDefaults,
-    staleTime: 60_000,
+    enabled: !draftId,
+    staleTime: 0,
   })
 
   const marketRateQuery = useQuery({
@@ -151,22 +141,15 @@ function CastingNewSessionPage() {
     staleTime: 60_000,
   })
 
-  useEffect(() => {
-    if (draftId) return
-    if (!defaultsQuery.isSuccess || defaultsAppliedRef.current) return
-    defaultsAppliedRef.current = true
-    const defaults = defaultsQuery.data
-    if (defaults.coalKg > 0) setCoalKg(defaults.coalKg)
-    if (defaults.coalRate > 0) setCoalRate(defaults.coalRate)
-    if (defaults.workerSalary > 0) setWorkerSalary(defaults.workerSalary)
-    setRows((prev) =>
-      prev.map((row) => {
-        const rate = defaults.materialRates[row.name.trim().toLowerCase()]
-        return rate > 0 ? { ...row, rate } : row
-      }),
-    )
-    setStatusText('')
-  }, [draftId, defaultsQuery.data, defaultsQuery.isSuccess])
+  // Keep defaults separate from inputs so loading or refreshing can't overwrite edits.
+  const defaults = draftId ? undefined : defaultsQuery.data
+  const coalKg = coalKgOverride ?? defaults?.coalKg ?? 0
+  const coalRate = coalRateOverride ?? defaults?.coalRate ?? 0
+  const workerSalary = workerSalaryOverride ?? defaults?.workerSalary ?? 0
+  const rows = useMemo(() => baseRows.map((row) => ({
+    ...row,
+    rate: row.rate ?? defaults?.materialRates[itemNameKey(row.name)] ?? 0,
+  })), [baseRows, defaults])
 
   const batchCount = wireOutByBatch.length
   const batches = useMemo<CastingBatchCostInput[]>(() => {
@@ -237,14 +220,13 @@ function CastingNewSessionPage() {
 
   function resetForm() {
     setDate(getLocalIsoDate())
-    setCoalKg(0)
-    setWorkerSalary(0)
+    setCoalKg(undefined)
+    setCoalRate(undefined)
+    setWorkerSalary(undefined)
     setNote('')
     setRows(emptyRows())
     setWireOutByBatch(Array(DEFAULT_BATCH_COUNT).fill(0))
     setMelByBatch(Array(DEFAULT_BATCH_COUNT).fill(0))
-    defaultsAppliedRef.current = false
-    void defaultsQuery.refetch()
   }
 
   function addBatch() {
@@ -293,6 +275,11 @@ function CastingNewSessionPage() {
           {helperStatus}
         </div>
       ) : null}
+      {!draftId && defaultsQuery.isError && !defaults && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900" role="status">
+          Couldn’t load values from the last casting log. You can enter them manually.
+        </p>
+      )}
 
       {/* Section 1: Session Parameters */}
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

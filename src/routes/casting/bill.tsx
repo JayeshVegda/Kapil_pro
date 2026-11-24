@@ -1,176 +1,68 @@
-import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Printer, Search } from 'lucide-react'
-import { useMemo, useState } from 'react'
-import { CastingTicket, formatKg, summarizeMaterials } from '@/components/casting/casting-ticket'
+import { CalendarDays, Edit3, Printer, Search, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { CastingTicket, formatCastingWeekday } from '@/components/casting/casting-ticket'
+import { inputClass } from '@/components/ui/form-control-classes'
+import { Panel } from '@/components/ui/panel'
 import { loadCastingSessions } from '@/data/casting'
 import { formatFullDate } from '@/lib/date'
 
-/**
- * Casting Bill (operational redesign Phase 4).
- *
- * Left card filters and selects a session. The right pane renders the same
- * physical chitty used by print and Casting Log View. Costs come from the
- * stored session; this route does not recalculate them.
- */
-export const Route = createFileRoute('/casting/bill')({
-  component: CastingBillPage,
-})
+export const Route = createFileRoute('/casting/bill')({ component: CastingBillPage })
+
+const actionClass = 'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-blue-600'
 
 export function CastingBillPage() {
   const [search, setSearch] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [materialFilter, setMaterialFilter] = useState('all')
   const [selectedId, setSelectedId] = useState('')
-
-  const sessionsQuery = useQuery({
-    queryKey: ['casting-sessions'],
-    queryFn: () => loadCastingSessions(),
-  })
-
-  const sessions = sessionsQuery.data ?? []
-
-  const materialOptions = useMemo(() => {
-    const names = new Set<string>()
-    for (const session of sessions) {
-      for (const row of summarizeMaterials(session)) names.add(row.name)
-    }
-    return [...names].sort((a, b) => a.localeCompare(b))
-  }, [sessions])
-
-  const filtered = useMemo(() => {
-    const needle = search.trim().toLowerCase()
-    return sessions.filter((session) => {
-      if (dateFrom && session.date < dateFrom) return false
-      if (dateTo && session.date > dateTo) return false
-      if (needle) {
-        const haystack = `${session.date} ${session.note} ${session.inputs.map((input) => input.materialName).join(' ')}`.toLowerCase()
-        if (!haystack.includes(needle)) return false
-      }
-      if (materialFilter !== 'all') {
-        const names = session.inputs.map((input) => input.materialName.trim() || 'Unknown')
-        if (!names.includes(materialFilter)) return false
-      }
-      return true
-    })
-  }, [sessions, search, dateFrom, dateTo, materialFilter])
-
-  const selected = useMemo(
-    () => filtered.find((session) => session.id === selectedId) ?? filtered[0] ?? null,
-    [filtered, selectedId],
+  const sessionsQuery = useQuery({ queryKey: ['casting-sessions'], queryFn: () => loadCastingSessions() })
+  const needle = search.trim().toLowerCase()
+  const sessions = (sessionsQuery.data ?? []).filter((session) =>
+    [session.date, formatFullDate(session.date), formatCastingWeekday(session.date)].some((value) => value.toLowerCase().includes(needle)),
   )
+  const selected = sessions.find((session) => session.id === selectedId) ?? sessions[0]
 
   return (
-    <div className="w-full px-3 pb-8 pt-3 sm:px-4 lg:px-6">
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-12 print:block">
-        {/* Left card: filters + compact session list */}
-        <div className="space-y-4 lg:col-span-5 print:hidden">
-          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Select casting session</h4>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <div className="relative w-full sm:w-56">
-                <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  aria-label="Search sessions"
-                  className={`${inputClass} h-9 pl-8 pr-2.5`}
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search date, note, material..."
-                />
-              </div>
-              <div className="w-[150px]">
-                <label className="flex items-center gap-1.5">
-                  <span className="text-xs font-medium text-slate-500">From</span>
-                  <input aria-label="From date" className={`${inputClass} w-[104px]`} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-                </label>
-              </div>
-              <div className="w-[150px]">
-                <label className="flex items-center gap-1.5">
-                  <span className="text-xs font-medium text-slate-500">To</span>
-                  <input aria-label="To date" className={`${inputClass} w-[104px]`} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-                </label>
-              </div>
-              <div className="w-44">
-                <label className="flex items-center gap-1.5">
-                  <span className="text-xs font-medium text-slate-500">Material</span>
-                  <select
-                    aria-label="Filter sessions by material"
-                    value={materialFilter}
-                    onChange={(event) => setMaterialFilter(event.target.value)}
-                    className={`${inputClass} w-28`}
-                  >
-                    <option value="all">All materials</option>
-                    {materialOptions.map((name) => (
-                      <option key={name} value={name}>{name}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </div>
-
-            {sessionsQuery.isLoading && <p className="mt-3 text-xs text-slate-500">Loading sessions...</p>}
-            {sessionsQuery.isError && <p role="alert" className="mt-3 text-xs text-rose-600 font-semibold">Unable to load casting sessions.</p>}
-
-            <div className="mt-3 max-h-[520px] overflow-y-auto no-scrollbar space-y-1.5">
-              {filtered.map((session) => {
-                const isSelected = selected?.id === session.id
-                return (
-                  <button
-                    key={session.id}
-                    type="button"
-                    aria-pressed={isSelected}
-                    className={`w-full text-left p-3 rounded-lg border text-xs transition flex justify-between items-center ${isSelected ? 'border-slate-900 bg-slate-100/70 shadow-sm' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-                    onClick={() => setSelectedId(session.id)}
-                  >
-                    <div>
-                      <span className="block font-bold text-slate-800">{formatFullDate(session.date)}</span>
-                      <span className="block text-[11px] text-slate-500 mt-0.5">
-                        {session.unit} batches • {formatKg(session.totalInputKg)} in • {formatKg(session.totalWireOut)} out
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <span className={`block font-mono font-bold ${isSelected ? 'text-slate-900' : 'text-slate-750'}`}>
-                        {session.metalCostPerKg > 0 ? `₹${session.metalCostPerKg.toFixed(2)}/kg` : '—'}
-                      </span>
-                      <span className="block text-[11px] uppercase font-bold text-slate-400">Metal cost</span>
-                    </div>
-                  </button>
-                )
-              })}
-              {filtered.length === 0 && !sessionsQuery.isLoading && (
-                <span className="text-xs text-slate-400 block py-4 text-center">No casting sessions match filters.</span>
-              )}
-            </div>
-            <p className="mt-2 border-t border-slate-100 pt-2 text-[11px] text-slate-400">
-              Showing {filtered.length} of {sessions.length} sessions
-            </p>
-          </section>
+    <div className="mx-auto grid w-full max-w-7xl items-start gap-5 px-3 pb-8 pt-4 sm:px-5 lg:grid-cols-[17rem_minmax(0,1fr)] print:block print:p-0">
+      <Panel className="space-y-3 print:hidden">
+        <h1 className="text-sm font-semibold text-slate-950">Casting bills</h1>
+        <div className="relative">
+          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input className={`${inputClass} w-full pl-9`} aria-label="Search bills by date or weekday" placeholder="Search date or weekday" value={search} onChange={(event) => setSearch(event.target.value)} />
         </div>
-
-        {/* The same chitty is shown here, in the log View dialog, and on paper. */}
-        <div className="min-w-0 lg:col-span-7 print:w-full">
-          {sessionsQuery.isLoading && <p className="py-6 text-sm text-slate-500 print:hidden">Loading casting chitty...</p>}
-          {sessionsQuery.isError && <p role="alert" className="py-6 text-sm font-semibold text-rose-700 print:hidden">Unable to load casting sessions.</p>}
-          {!sessionsQuery.isLoading && !selected && (
-            <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 print:hidden">
-              No casting sessions match these filters.
-            </div>
-          )}
-          {selected && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2 print:hidden">
-                <p className="text-xs text-slate-500">Casting chitty · {formatFullDate(selected.date)}</p>
-                <button type="button" onClick={() => window.print()} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white"><Printer size={14} /> Print chitty</button>
-              </div>
-              <CastingTicket session={selected} />
-            </div>
-          )}
+        <div className="max-h-48 space-y-1 overflow-y-auto lg:max-h-[34rem]">
+          {sessions.map((session) => (
+            <button key={session.id} type="button" aria-pressed={selected?.id === session.id} onClick={() => setSelectedId(session.id)}
+              className="flex w-full items-center justify-between gap-2 rounded-md border border-transparent px-2.5 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 aria-pressed:border-blue-200 aria-pressed:bg-blue-50 aria-pressed:font-semibold aria-pressed:text-blue-900">
+              <span className="tabular-nums">{formatFullDate(session.date)}</span>
+              <span className="text-xs">{formatCastingWeekday(session.date)}</span>
+            </button>
+          ))}
+          {!sessionsQuery.isLoading && !sessionsQuery.isError && sessions.length === 0 && <p className="py-2 text-sm text-slate-500">No matching casting bills.</p>}
         </div>
+      </Panel>
+
+      <div className="min-w-0 space-y-4 print:space-y-0">
+        {sessionsQuery.isLoading && <Panel className="text-sm text-slate-500 print:hidden">Loading casting bills…</Panel>}
+        {sessionsQuery.isError && <Panel className="text-sm text-rose-700 print:hidden" role="alert">Unable to load casting bills.</Panel>}
+        {selected && !sessionsQuery.isError && <>
+          <Panel className="flex flex-wrap items-center justify-between gap-3 print:hidden">
+            <div className="flex items-center gap-2.5">
+              <CalendarDays size={18} className="text-slate-500" aria-hidden="true" />
+              <div>
+                <p className="text-sm font-semibold tabular-nums text-slate-950">{formatFullDate(selected.date)}</p>
+                <p className="text-xs text-slate-500">{formatCastingWeekday(selected.date)}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Link to="/casting/log" search={{ sessionId: selected.id, sessionDate: selected.date, action: 'edit' }} className={actionClass}><Edit3 size={15} /> Edit</Link>
+              <Link to="/casting/log" search={{ sessionId: selected.id, sessionDate: selected.date, action: 'delete' }} className={`${actionClass} border-rose-200 text-rose-700 hover:bg-rose-50`}><Trash2 size={15} /> Delete</Link>
+              <button type="button" onClick={() => window.print()} className="inline-flex h-9 items-center gap-1.5 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-700"><Printer size={15} /> Print chitti</button>
+            </div>
+          </Panel>
+          <CastingTicket session={selected} />
+        </>}
       </div>
     </div>
   )
 }
-
-const inputClass = `${baseInputClass}`

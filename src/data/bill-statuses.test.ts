@@ -1,5 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { recalculateAndPersistBillStatusesForCustomer } from '@/data/bill-statuses'
+import { allocateBillPayments } from '@/domain/bills'
+
+it('ages only unpaid principal after paying the opening balance and oldest bill first', () => {
+  const allocation = allocateBillPayments({
+    openingBalance: 50,
+    bills: [
+      { id: 'recent', businessDate: '2026-11-12', createdAt: '', amount: 200 },
+      { id: 'old', businessDate: '2026-08-12', createdAt: '', amount: 100 },
+    ],
+    payments: [{ id: 'payment', businessDate: '2026-11-13', createdAt: '', amount: 175 }],
+  })
+  expect(allocation.openingRemaining).toBe(0)
+  expect(allocation.bills.map(({ id, remaining, status }) => ({ id, remaining, status }))).toEqual([
+    { id: 'old', remaining: 0, status: 'paid' },
+    { id: 'recent', remaining: 175, status: 'partial' },
+  ])
+})
 
 type MockRecord = Record<string, unknown> & { id: string }
 

@@ -13,6 +13,9 @@ import { loadCastingSessions } from '@/data/casting'
 import { useModuleSettings } from '@/lib/use-module-settings'
 import { computeSupplierPositions } from '@/domain/supplier-settlement'
 import { computeSafeRecoveryAndWastage } from '@/domain/casting-dashboard-calculations'
+import { allocateBillPayments } from '@/domain/bills'
+import { computeCustomerOutstanding } from '@/domain/records'
+import { remainingPurchaseBags } from '@/domain/purchase-receipt-memos'
 import { fiscalYearStart } from '@/domain/dashboard'
 import {
   formatCompactInr,
@@ -229,6 +232,7 @@ export function CompanyReportPage() {
       return {
         id,
         date,
+        createdAt: String(b.created ?? ''),
         billNo: Number(b.bill_no ?? 0),
         customerId,
         customerName: custInfo?.name || String(b.customer_name ?? 'Unknown'),
@@ -245,6 +249,7 @@ export function CompanyReportPage() {
     const canonicalPayments = paymentsRaw.map((p) => ({
       id: String(p.id ?? ''),
       date: String(p.date ?? '').slice(0, 10),
+      createdAt: String(p.created ?? ''),
       customerId: String(p.customer ?? ''),
       customerName: customerDirectory.get(String(p.customer ?? ''))?.name || String(p.customer_name ?? 'Unknown'),
       amount: Number(p.amount ?? 0),
@@ -261,36 +266,52 @@ export function CompanyReportPage() {
     const activeCustomers = new Set(periodBills.map((b) => b.customerId)).size
 
     // Customer running ledger balances as of range.to
-    const customerBalances = new Map<string, number>()
-    const customerLastBillDate = new Map<string, string>()
-
-    for (const [cid, cdata] of customerDirectory.entries()) {
-      customerBalances.set(cid, cdata.opening)
-      if (cdata.openingDate) customerLastBillDate.set(cid, cdata.openingDate)
-    }
+    const billsByCustomer = new Map<string, typeof canonicalBills>()
+    const paymentsByCustomer = new Map<string, typeof canonicalPayments>()
 
     for (const b of canonicalBills) {
       if (b.date <= range.to) {
-        customerBalances.set(b.customerId, (customerBalances.get(b.customerId) ?? 0) + b.total)
-        customerLastBillDate.set(b.customerId, b.date)
+        const rows = billsByCustomer.get(b.customerId) ?? []
+        rows.push(b)
+        billsByCustomer.set(b.customerId, rows)
       }
     }
 
     for (const p of canonicalPayments) {
       if (p.date <= range.to) {
-        customerBalances.set(p.customerId, (customerBalances.get(p.customerId) ?? 0) - p.amount)
+        const rows = paymentsByCustomer.get(p.customerId) ?? []
+        rows.push(p)
+        paymentsByCustomer.set(p.customerId, rows)
       }
     }
 
     let totalReceivable = 0
     let totalCustomerAdvance = 0
     const debtorList: Array<{ id: string; name: string; amount: number; lastDate: string; days: number }> = []
+    const unpaidRows: Array<(typeof debtorList)[number] & { sourceId: string }> = []
 
-    for (const [cid, bal] of customerBalances.entries()) {
-      const cname = customerDirectory.get(cid)?.name || 'Unknown'
-      if (bal > 0) {
+    const customerIds = new Set([...customerDirectory.keys(), ...billsByCustomer.keys(), ...paymentsByCustomer.keys()])
+    for (const cid of customerIds) {
+      const customer = customerDirectory.get(cid)
+      const cname = customer?.name || 'Unknown'
+      const opening = customer && (!customer.openingDate || customer.openingDate <= range.to) ? customer.opening : 0
+      const bills = billsByCustomer.get(cid) ?? []
+      const payments = paymentsByCustomer.get(cid) ?? []
+      const bal = computeCustomerOutstanding({ openingBalance: opening, bills, payments, asOfDate: range.to }).netBalance
+      if (bal >= 0.005) {
         totalReceivable += bal
-        const lastDate = customerLastBillDate.get(cid) || range.to
+        const allocation = allocateBillPayments({
+          openingBalance: opening,
+          bills: bills.map((bill) => ({ ...bill, businessDate: bill.date, amount: bill.total })),
+          payments: payments.map((payment) => ({ ...payment, businessDate: payment.date })),
+        })
+        const openBills = allocation.bills.filter((bill) => bill.remaining > 0)
+        for (const bill of openBills) unpaidRows.push({ id: cid, name: cname, amount: bill.remaining, lastDate: bill.businessDate, days: dateDiffDays(bill.businessDate, range.to), sourceId: bill.id })
+        if (allocation.openingRemaining >= 0.005) {
+          const openingDate = customer?.openingDate || range.to
+          unpaidRows.push({ id: cid, name: cname, amount: allocation.openingRemaining, lastDate: openingDate, days: dateDiffDays(openingDate, range.to), sourceId: `opening-${cid}` })
+        }
+        const lastDate = (allocation.openingRemaining >= 0.005 && customer?.openingDate) || openBills[0]?.businessDate || range.to
         const days = dateDiffDays(lastDate, range.to)
         debtorList.push({ id: cid, name: cname, amount: bal, lastDate, days })
       } else if (bal < 0) {
@@ -303,13 +324,13 @@ export function CompanyReportPage() {
     // Ageing classification
     const ageingBuckets = { current: 0, days31to60: 0, days61to90: 0, above90: 0 }
     const ageingDebtors = {
-      current: [] as typeof debtorList,
-      days31to60: [] as typeof debtorList,
-      days61to90: [] as typeof debtorList,
-      above90: [] as typeof debtorList,
+      current: [] as typeof unpaidRows,
+      days31to60: [] as typeof unpaidRows,
+      days61to90: [] as typeof unpaidRows,
+      above90: [] as typeof unpaidRows,
     }
 
-    for (const d of debtorList) {
+    for (const d of unpaidRows.sort((a, b) => b.amount - a.amount)) {
       if (d.days <= 30) {
         ageingBuckets.current += d.amount
         ageingDebtors.current.push(d)
@@ -411,7 +432,7 @@ export function CompanyReportPage() {
     for (const b of billsWithPendingBardan) {
       const age = dateDiffDays(b.date, range.to)
       if (age > oldestBardanDays) oldestBardanDays = age
-      totalPendingBags += (b.bagsAtReceiptKg ? Math.round(b.bagsAtReceiptKg) : 1)
+      totalPendingBags += b.lines.reduce((sum, line) => sum + remainingPurchaseBags(line, b.bardan), 0)
     }
 
     // Top Suppliers by Spend in Period
@@ -1040,7 +1061,7 @@ export function CompanyReportPage() {
                     'font-mono text-[11px] font-bold',
                     purchaseData.bardanSummary.oldestDays > 10 ? 'text-amber-700' : 'text-slate-600'
                   )}>
-                    {purchaseData.bardanSummary.pendingLots} lots ({purchaseData.bardanSummary.totalBags} bags)
+                    {purchaseData.bardanSummary.pendingLots} lots ({purchaseData.bardanSummary.totalBags} recorded bags)
                   </span>
                 </div>
                 <p className="mt-0.5 text-[11px] text-slate-400">
@@ -1334,7 +1355,7 @@ export function CompanyReportPage() {
                   <div className="flex items-center justify-between">
                     <span className="font-semibold text-amber-900">Bardan (Gunny Bags) Action Required</span>
                     <span className="font-mono font-bold text-amber-800">
-                      {purchaseData.bardanSummary.totalBags} bags pending return
+                      {purchaseData.bardanSummary.totalBags} recorded bags pending return
                     </span>
                   </div>
                   <p className="mt-1 text-[11px] text-amber-700">
@@ -1367,7 +1388,7 @@ export function CompanyReportPage() {
             segments={[
               { key: '0-30', label: '0–30d (Current)', value: salesData?.ageingBuckets.current ?? 0, color: CHART_THEME.ageing.b0to30 },
               { key: '31-60', label: '31–60d (Due)', value: salesData?.ageingBuckets.days31to60 ?? 0, color: CHART_THEME.ageing.b31to60 },
-              { key: '61-90', label: '61–90d (Watch)', value: salesData?.ageingBuckets.days61to90 ?? 0, color: '#ea580c' },
+              { key: '61-90', label: '61–90d (Overdue)', value: salesData?.ageingBuckets.days61to90 ?? 0, color: '#ea580c' },
               { key: '90+', label: '90d+ (Overdue Risk)', value: salesData?.ageingBuckets.above90 ?? 0, color: CHART_THEME.ageing.b60plus },
             ]}
             formatValue={(v) => formatCompactInr(v)}
@@ -1406,14 +1427,14 @@ export function CompanyReportPage() {
                 <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   <th className="px-3 py-2">Customer Name</th>
                   <th className="px-3 py-2 text-right">Age (Days)</th>
-                  <th className="px-3 py-2 text-right">Last Bill Date</th>
+                  <th className="px-3 py-2 text-right">Unpaid Entry Date</th>
                   <th className="px-3 py-2 text-right">Outstanding Amount</th>
                   <th className="px-3 py-2 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                 {(salesData?.ageingDebtors[selectedAgingBucket] ?? []).slice(0, 10).map((row) => (
-                  <tr key={row.id} className="hover:bg-slate-50/80 transition-colors">
+                  <tr key={row.sourceId} className="hover:bg-slate-50/80 transition-colors">
                     <td className="px-3 py-2 text-slate-900 font-semibold">{row.name}</td>
                     <td className="px-3 py-2 text-right font-mono tabular-nums">
                       <span className={cn(
@@ -1434,7 +1455,7 @@ export function CompanyReportPage() {
                     <td className="px-3 py-2 text-right">
                       <Link
                         to="/ledger"
-                        search={{ tab: 'customers' }}
+                        search={{ tab: 'customers', customerId: row.id }}
                         className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50 hover:text-slate-900"
                       >
                         Ledger

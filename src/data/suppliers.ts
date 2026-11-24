@@ -4,8 +4,9 @@ import { AppError } from '@/app/errors'
 import { pb } from '@/data/pocketbase'
 import { runDataOperation } from '@/data/reliability'
 import { executeConfirmedBatch, generatePurchaseRecordId } from '@/data/confirmed-write'
+import { isValidCalendarDay } from '@/lib/date'
 import { validateSupplierPaymentMode, type SupplierPaymentMode } from '@/domain/supplier-payment-modes'
-import { formatPurchaseLineMemos, parsePurchaseLineMemos } from '@/domain/purchase-receipt-memos'
+import { formatPurchaseLineMemos, parsePurchaseLineMemos, readSettledBagCount, remainingPurchaseBags, writeSettledBagCount } from '@/domain/purchase-receipt-memos'
 import { nextPurchaseInNo } from '@/domain/in-no'
 import { findItemNameCollision, itemNameKey, normalizeItemName } from '@/domain/purchase-item-name'
 import { normalizePurchaseAliases } from '@/domain/purchase-bill-draft'
@@ -110,6 +111,7 @@ export type PurchaseAdjustmentView = {
 }
 
 export type PurchaseBardanView = {
+  bagCount?: number
   id: string
   billId: string
   bardanG: number
@@ -280,7 +282,7 @@ const mapBardan = (row: PBRow): PurchaseBardanView => ({
   creditPaise: num(row.credit_paise),
   cashAmountPaise: num(row.cash_amount_paise),
   date: day(row.date),
-  note: text(row.note),
+  ...readSettledBagCount(text(row.note)),
   created: text(row.created),
 })
 
@@ -511,10 +513,10 @@ export type PurchaseBillCreateInput = {
   privateNote?: string
   groupId?: string
   photos?: File[]
-  payment?: { amountPaise: number; mode: SupplierPaymentMode; reference?: string; note?: string }
+  payment?: { amountPaise: number; date?: string; mode: SupplierPaymentMode; reference?: string; note?: string }
   lines: Array<{ itemId?: string; itemName: string; weightG: number; rateMilli: number; amountPaise: number; receiptMemo?: string }>
   adjustments?: Array<{ type: string; amountPaise: number; note?: string }>
-  bardan?: Array<{ bardanG: number; rateLineIndex?: number; rateMilli: number; method: string; creditPaise?: number; cashAmountPaise?: number; date?: string; note?: string }>
+  bardan?: Array<{ bardanG: number; bagCount?: number; rateLineIndex?: number; rateMilli: number; method: string; creditPaise?: number; cashAmountPaise?: number; date?: string; note?: string }>
 }
 
 function generateRecordId(): string {
@@ -553,9 +555,12 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
       if (draft.status !== 'pending_review') throw new AppError({ code: 'CONFLICT', message: 'This draft was already processed.' })
     }
     validatePurchaseLines(input.lines)
+    const paymentDate = input.payment?.date ?? input.date
     if (input.payment) {
       requirePositiveInteger(input.payment.amountPaise, 'Payment amount')
       validateSupplierPaymentMode(input.payment.mode, input.payment.reference)
+      const parts = /^\d{4}-\d{2}-\d{2}$/.test(paymentDate) ? paymentDate.split('-').map(Number) : []
+      if (parts.length !== 3 || !isValidCalendarDay(parts[0], parts[1], parts[2])) throw new Error('Enter a valid payment date.')
     }
     let inNo = (input.inNo || '').trim()
     if (!inNo) {
@@ -614,7 +619,7 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
             credit_paise: entry.creditPaise ?? 0,
             cash_amount_paise: entry.cashAmountPaise ?? 0,
             date: entry.date ?? input.date,
-            note: entry.note ?? '',
+            note: writeSettledBagCount(entry.note ?? '', entry.bagCount),
           })
           if (entry.method === 'advance' && (entry.creditPaise ?? 0) > 0) {
             const paymentId = generateRecordId()
@@ -634,7 +639,7 @@ export async function createPurchaseBill(input: PurchaseBillCreateInput): Promis
         if (input.payment) {
           const paymentId = generateRecordId()
           const paymentPayload = {
-            id: paymentId, supplier: input.supplierId, date: input.date, pool: input.pool,
+            id: paymentId, supplier: input.supplierId, date: paymentDate, pool: input.pool,
             kind: 'payment', amount_paise: input.payment.amountPaise,
             mode: input.payment.mode, reference: input.payment.reference ?? '',
             payee_name: '', private_note: input.payment.note?.trim() || `Paid with purchase bill ${inNo}`,
@@ -835,6 +840,7 @@ export async function updatePurchaseBill(billId: string, input: PurchaseBillUpda
 }
 
 export type PurchaseBardanEntryInput = {
+  bagCount?: number
   requestId?: string
   billId: string
   bardanG: number
@@ -850,10 +856,21 @@ export type PurchaseBardanEntryInput = {
 export async function addPurchaseBardanEntry(input: PurchaseBardanEntryInput): Promise<PurchaseBardanView> {
   return runDataOperation('add-purchase-bardan-entry', async () => {
     const bill = (await pb.collection('purchase_bills').getOne(input.billId)) as PBRow
+    if (bool(bill.cancelled)) throw new Error('Bardan cannot be added to a voided bill.')
     const saved = await executeConfirmedBatch({
       confirmationCollection: 'purchase_bardan', scope: input.billId,
       label: `Bardan entry for bill ${text(bill.in_no)}`, input,
-      build: (bardanId) => {
+      build: async (bardanId) => {
+    if (input.bagCount !== undefined) {
+      const detail = await loadPurchaseBill(input.billId)
+      const line = detail.lines.find((row) => row.id === input.rateLineId)
+      if (detail.bill.cancelled || !line || !Number.isSafeInteger(input.bagCount) || input.bagCount <= 0 || input.bagCount > remainingPurchaseBags(line, detail.bardan)) {
+        throw new Error('The remaining bag count changed. Reopen Add Bardan and review the bill.')
+      }
+      if ((input.method === 'deduct' || input.method === 'advance') && line.rateMilli !== input.rateMilli) {
+        throw new Error('The bill rate changed. Reopen Add Bardan and review the rate.')
+      }
+    }
     const bardanPayload = {
       id: bardanId,
       bill: input.billId,
@@ -864,7 +881,7 @@ export async function addPurchaseBardanEntry(input: PurchaseBardanEntryInput): P
       credit_paise: input.creditPaise ?? 0,
       cash_amount_paise: input.cashAmountPaise ?? 0,
       date: input.date || String(bill.date ?? ''),
-      note: input.note ?? '',
+      note: writeSettledBagCount(input.note ?? '', input.bagCount),
     }
 
     const batch = pb.createBatch()
@@ -1239,18 +1256,9 @@ export async function loadVilaityHistory(): Promise<Array<{ date: string; vilait
  * pulling lines/payments or running the settlement.
  */
 export async function loadBardanPendingCount(): Promise<number> {
-  return runDataOperation('load-bardan-pending-count', async () => {
-    const [bills, bardan] = await Promise.all([
-      pb.collection('purchase_bills').getFullList({ fields: 'id,cancelled' }),
-      pb.collection('purchase_bardan').getFullList({ fields: 'bill' }),
-    ])
-    const billsWithBardan = new Set(
-      (bardan as unknown as Array<{ bill?: string }>).map((row) => String(row.bill ?? '')),
-    )
-    return (bills as unknown as Array<{ id: string; cancelled?: boolean }>).filter(
-      (bill) => !bill.cancelled && !billsWithBardan.has(bill.id),
-    ).length
-  })
+  return runDataOperation('load-bardan-pending-count', async () =>
+    (await readPurchaseModel()).bills.filter((bill) => bill.bardanPending).length,
+  )
 }
 
 
