@@ -11,7 +11,7 @@ import { loadCustomerAutoBalanceContext } from '@/data/customer-balance'
 import { loadPaymentCustomers } from '@/data/payments'
 import { buildDraftView, type DraftView } from '@/domain/drafts'
 import { composeReceiptNote, PAYMENT_MODES, type PaymentDraftView } from '@/domain/payment-drafts'
-import { draftAge, filterDraftInbox, type InboxEntry, type InboxKind, type InboxModule, type InboxStatus } from '@/domain/draft-inbox'
+import { draftAge, filterDraftInbox, groupOpeningDrafts, type InboxEntry, type InboxKind, type InboxModule, type InboxStatus } from '@/domain/draft-inbox'
 import { formatFullDate } from '@/lib/date'
 import { formatInrInteger } from '@/lib/inr-format'
 import { formatPaiseInr } from '@/lib/inr-format'
@@ -55,6 +55,7 @@ type InboxRow = InboxEntry & {
   label?: string
   waitingFor?: string
   isOpeningBalance?: boolean
+  projectedPosition?: string
 }
 
 function DraftsPage() {
@@ -124,9 +125,29 @@ function DraftsPage() {
     ...(purchasePayments.data ?? []).map((view): InboxRow => ({ id: view.id, module: 'purchase', kind: 'payment', source: 'purchase-payment', status: view.status, created: view.created, view, party: view.parsed.kind === 'valid' ? view.parsed.value.supplier_name : 'Invalid draft', date: view.parsed.kind === 'valid' ? view.parsed.value.date : '', amount: view.parsed.kind === 'valid' ? formatPaiseInr(view.parsed.amountPaise) : '—', confidence: view.confidence, warning: view.parsed.kind === 'invalid' ? 'Invalid draft' : !matchPurchaseMaster(view.parsed.value.supplier_name, view.parsed.value.supplier_id, supplierMasters) ? 'Unmatched' : view.confidence < 0.7 ? 'Low confidence' : '', invalid: view.parsed.kind === 'invalid', searchText: [view.raw_text, view.notes, view.parsed.kind === 'valid' ? view.parsed.value.supplier_name : ''].join(' ') })),
     ...(castingSessions.data ?? []).map((view): InboxRow => ({ id: view.id, module: 'casting', kind: 'session', source: 'casting-session', status: view.status, created: view.created, view, party: view.parsed.kind === 'valid' ? view.parsed.value.batches.flatMap((batch) => batch.inputs.map((input) => input.material_name)).slice(0, 2).join(', ') || 'Casting session' : 'Invalid draft', date: view.parsed.kind === 'valid' ? view.parsed.value.date : '', amount: view.parsed.kind === 'valid' ? `${view.parsed.batches.reduce((sum, batch) => sum + batch.wireOut, 0).toFixed(3)} kg` : '—', confidence: view.confidence, warning: view.parsed.kind === 'invalid' ? 'Invalid draft' : view.parsed.value.batches.some((batch) => batch.inputs.some((input) => !matchCastingMaterial(input.material_name, input.material_id, castingMaterials.data ?? []))) ? 'Unmatched' : view.confidence < 0.7 ? 'Low confidence' : '', invalid: view.parsed.kind === 'invalid', searchText: [view.raw_text, view.notes, view.parsed.kind === 'valid' ? view.parsed.value.batches.flatMap((batch) => batch.inputs.map((input) => input.material_name)).join(' ') : ''].join(' ') })),
   ]
+  const openingBySupplier = new Map<string, { row: InboxRow; values: { kachaPaise: number; gstPaise: number } }>()
+  for (const row of allRows.filter((item) => item.isOpeningBalance && item.status === 'pending_review').reverse()) {
+    const action = prepareMusePurchaseAction((row.view as MusePurchaseActionRecord).payload)
+    if (action.kind === 'opening_balance') openingBySupplier.set(action.supplierId, { row, values: action })
+  }
   for (const row of allRows) {
     if ((row.source === 'purchase-bill' || row.source === 'purchase-payment') && row.status === 'pending_review') {
       const view = row.view as PurchaseBillDraftView | PurchasePaymentDraftView
+      if (view.parsed.kind === 'valid') {
+        const p = view.parsed.value
+        const id = p.supplier_id || matchPurchaseMaster(p.supplier_name, undefined, supplierMasters)?.id
+        const dependency = id ? openingBySupplier.get(id) : undefined
+        if (dependency) {
+          row.warning = 'Opening balance first'
+          row.waitingFor = dependency.row.id
+          if (row.source === 'purchase-bill' && 'lines' in p) {
+            const summary = getPurchaseDraftSummary(p)
+            const position = (p.pool === 'gst' ? dependency.values.gstPaise : dependency.values.kachaPaise) + summary.net.netPaise
+            row.projectedPosition = `${p.pool === 'gst' ? 'GST' : 'Kacha'} after both, before payments: ${formatPaiseInr(Math.abs(position))} ${position < 0 ? 'advance' : 'payable'}`
+          }
+          continue
+        }
+      }
       if (!view.supplier_draft) continue
       const parent = actionById.get(view.supplier_draft)
       if (parent?.status === 'approved' && parent.converted_record && supplierMasters.some((supplier) => supplier.id === view.supplier_draft && supplier.active)) continue
@@ -134,8 +155,8 @@ function DraftsPage() {
       row.waitingFor = view.supplier_draft
     }
   }
-  const rows = filterDraftInbox(allRows, { purchaseEnabled, castingEnabled, showHistory, module, kind, status, search })
-    .filter((row) => !needsCorrection || (row.status === 'pending_review' && Boolean(row.warning)))
+  const rows = groupOpeningDrafts(filterDraftInbox(allRows, { purchaseEnabled, castingEnabled, showHistory, module, kind, status, search })
+    .filter((row) => !needsCorrection || (row.status === 'pending_review' && Boolean(row.warning))))
   const counts = { sales: (salesBillCount.data ?? 0) + (salesPaymentCount.data ?? 0), purchase: purchaseEnabled ? (purchaseBillCount.data ?? 0) + (purchasePaymentCount.data ?? 0) + (purchaseActions.data ?? []).filter((row) => row.status === 'pending_review').length : 0, casting: castingEnabled ? castingCount.data ?? 0 : 0 }
   const firstError = [salesBills, salesPayments, purchaseBills, purchasePayments, purchaseActions, castingSessions].find((query) => query.isError)?.error
   const refresh = () => { for (const key of ['muse_purchase_action_drafts', 'bill-drafts-page', 'payment-drafts-page', 'purchase-bill-drafts', 'purchase-payment-drafts', 'casting-session-drafts', 'bill-drafts-pending-count', 'payment-drafts-pending-count', 'purchase-bill-drafts-count', 'purchase-payment-drafts-count', 'casting-session-drafts-count']) void client.invalidateQueries({ queryKey: [key] }) }
@@ -187,13 +208,16 @@ function DraftsPage() {
     { header: 'Module / Type', cell: ({ row }) => <div className="flex flex-wrap gap-1"><StatusChip tone="selection">{row.original.module}</StatusChip><StatusChip>{row.original.label || row.original.kind}</StatusChip></div> },
     { header: 'Party / Material', cell: ({ row }) => <span className="font-medium text-slate-900">{row.original.party}</span> },
     { header: 'Date', cell: ({ row }) => <div>{row.original.date ? formatFullDate(row.original.date) : '—'}<div className="text-[11px] text-slate-500">{draftAge(row.original.created)}</div></div> },
-    { header: 'Amount / Weight', cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.amount}</span> },
+    { header: 'Amount / Weight', cell: ({ row }) => <div><span className="font-mono tabular-nums">{row.original.amount}</span>{row.original.projectedPosition && <p className="text-xs text-slate-600">{row.original.projectedPosition}</p>}</div> },
     // Age is displayed under the business date.
     // Low confidence is shown only when it needs the operator's attention.
     { header: 'Status', cell: ({ row }) => <div className="flex flex-wrap gap-1"><StatusChip tone={row.original.status === 'pending_review' ? 'warning' : 'neutral'}>{row.original.status.replace('_', ' ')}</StatusChip>{row.original.warning && <StatusChip tone="danger">{row.original.warning}</StatusChip>}{row.original.status === 'rejected' && row.original.view.rejection_reason && <p className="basis-full break-words text-xs text-slate-600">{row.original.view.rejection_reason}</p>}</div> },
     { header: 'Actions', cell: ({ row: { original: row } }) => <div className="flex flex-wrap items-center gap-1.5">
       {row.status === 'pending_review' ? <>
-        <button type="button" className={buttonClass('primary')} onClick={() => setReviewing({ row, intent: 'confirm' })}>Preview and confirm</button>
+        <button type="button" className={buttonClass('primary')} onClick={() => {
+          const opening = allRows.find((item) => item.id === row.waitingFor && item.isOpeningBalance)
+          setReviewing({ row: opening ?? row, intent: 'confirm' })
+        }}>{allRows.some((item) => item.id === row.waitingFor && item.isOpeningBalance) ? 'Review opening balance first' : 'Preview and confirm'}</button>
         <button type="button" className={buttonClass('secondary')} onClick={() => setReviewing({ row, intent: 'load' })}>Preview and load</button>
         <button type="button" className={buttonClass('secondary')} onClick={() => setReviewing({ row, intent: 'reject' })}>Preview and reject</button>
       </> : !row.invalid && row.source !== 'sales-payment' && <button type="button" className={buttonClass('secondary')} onClick={() => setSelected(row)}>View</button>}

@@ -34,10 +34,17 @@ const draftCollections = {
   casting: 'casting_session_drafts',
 } as const
 type DraftKind = keyof typeof draftCollections
-type DraftRecord = { id: string; status: string; payload: unknown; raw_text: string; supplier_draft?: string; rejection_reason?: string }
+type RecordOutcome = { id: string; status: string; rejection_reason?: string; converted_record?: string; converted_bill?: string; converted_payment?: string; converted_session?: string }
+type DraftRecord = RecordOutcome & { payload: unknown; raw_text: string; supplier_draft?: string }
 const sourceIdSchema = z.string().min(1).max(160).regex(/^[A-Za-z0-9:_./-]+$/)
 const draftCursor = z.tuple([z.string().regex(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/), z.string().regex(/^[a-z0-9]{15}$/), z.enum(['bill', 'payment', 'action'])])
 type GatewayDraftKind = 'bill' | 'payment' | 'action'
+
+function publicDraftOutcome(row: RecordOutcome, path?: string) {
+  const recordId = row.status === 'approved' ? row.converted_bill || row.converted_payment || row.converted_session || row.converted_record : undefined
+  return { draftId: row.id, status: row.status, ...(row.status === 'rejected' && row.rejection_reason ? { rejectionReason: row.rejection_reason } : {}),
+    ...(recordId ? { recordId, ...(path ? { kapilPath: path } : {}) } : {}) }
+}
 type ListRow = { id: string; created: string; status: string; supplier_draft?: string; source_message_id?: string; muse_source_id?: string;
   customer_name?: string; date?: string; bill_total?: number; amount?: number; muse_new_customer?: boolean; payload?: unknown }
 
@@ -132,16 +139,17 @@ export function createDraftWriter(email: string, password: string) {
     const collection = kind === 'payment' ? 'payment_drafts' : 'bill_drafts'
     const owner = (await credentials()).id
     const search = new URLSearchParams({ filter: 'created_by = "' + owner + '" && muse_source_id = "' + source + '"', perPage: '1',
-      fields: 'id,status,muse_request_hash,rejection_reason', skipTotal: 'true' })
+      fields: 'id,status,muse_request_hash,rejection_reason,' + (kind === 'payment' ? 'converted_payment' : 'converted_bill'), skipTotal: 'true' })
     const response = await request('/' + collection + '/records?' + search)
     if (!response.ok) throw new MusePurchaseError(503, 'SALES_DRAFT_STORAGE_UNAVAILABLE', 'Sales draft storage is not ready. Check the new Sales migration and the local draft account.')
-    const data = await response.json() as { items: { id: string; status: string; muse_request_hash: string; rejection_reason?: string }[] }
+    const data = await response.json() as { items: (RecordOutcome & { muse_request_hash: string })[] }
     return { owner, collection, record: data.items[0] }
   }
   const sales = {
     async status(kind: SalesProposalKind, source: string) {
       const { record } = await findSales(kind, source)
-      return record ? { draftId: record.id, status: record.status, ...(record.rejection_reason ? { rejectionReason: record.rejection_reason } : {}) } : null
+      const converted = record?.converted_bill || record?.converted_payment
+      return record ? publicDraftOutcome(record, converted ? `/transactions?focusKind=${kind === 'payment' ? 'payment' : 'bill'}&focusId=${encodeURIComponent(converted)}` : undefined) : null
     },
     async write(input: ReturnType<typeof parseSalesRequest>, build: () => ReturnType<typeof prepareSalesProposal>) {
       const hash = createHash('sha256').update(stable(input.kind === 'new-customer-bill' ? [input.kind, input.originalMessage, input.payload] : [input.originalMessage, input.payload])).digest('hex')
@@ -239,7 +247,14 @@ export function createDraftWriter(email: string, password: string) {
     },
     status: async (kind: DraftKind, source: string) => {
       const { record } = await findDraft(kind, source)
-      return record ? { draftId: record.id, status: record.status, ...(record.rejection_reason ? { rejectionReason: record.rejection_reason } : {}) } : null
+      if (!record) return null
+      const info = kind === 'action' ? describePurchaseDraft(kind, record.payload) : null
+      const payload = record.payload as { billId?: unknown } | null
+      const path = info?.action === 'opening_balance' && record.converted_record
+        ? '/ledger?tab=suppliers&supplierId=' + encodeURIComponent(record.converted_record)
+        : kind === 'casting' && record.converted_session
+          ? `/casting/log?sessionId=${encodeURIComponent(record.converted_session)}&action=view` : undefined
+      return { ...publicDraftOutcome(record, path), ...(record.status === 'approved' && info?.action === 'bardan' && typeof payload?.billId === 'string' ? { billId: payload.billId } : {}) }
     },
   })
 }
@@ -558,7 +573,17 @@ export function createMusePurchaseServer(config: {
         const sourceId = sourceIdSchema.parse(url.searchParams.get('sourceId'))
         if (!config.writeDraft) throw new MusePurchaseError(503, 'DRAFT_WRITER_NOT_CONFIGURED', 'The Windows connector is in read-only mode.')
         const status = await config.writeDraft.status(type, sourceId)
-        return reply(status ? 200 : 404, status ?? { error: 'DRAFT_NOT_FOUND' })
+        if (!status) return reply(404, { error: 'DRAFT_NOT_FOUND' })
+        if (status.status === 'approved' && status.recordId && !status.kapilPath) {
+          const ledger = config.loadLedger('9999-12-31')
+          const bill = type === 'bill' || type === 'action' ? ledger.bills.find((b) => b.id === (status.billId ?? status.recordId)) : undefined
+          const payment = type === 'payment' ? ledger.payments.find((p) => p.id === status.recordId) : undefined
+          const path = bill ? '/purchase-bills/' + encodeURIComponent(bill.inNo)
+            : payment ? '/ledger?tab=suppliers&supplierSection=payments&supplierId=' + encodeURIComponent(payment.supplierId) : undefined
+          const { billId: _, ...publicStatus } = status
+          return reply(200, { ...publicStatus, ...(path ? { kapilPath: path } : {}) })
+        }
+        return reply(200, status)
       }
       if (req.method !== 'GET' && !(req.method === 'POST' && /^\/v1\/(?:preview|drafts)\/(?:bill|payment|bardan|new-supplier-bill|opening-balance)$/.test(route))) {
         req.resume(); return reply(404, { error: 'UNKNOWN_OPERATION' })

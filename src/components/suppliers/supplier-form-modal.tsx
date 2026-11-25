@@ -1,5 +1,5 @@
 import { inputClass as baseInputClass } from '@/components/ui/form-control-classes'
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { DateInput } from '@/components/ui/date-input'
 import { parseNonNegativeNumber } from '@/lib/inr-format'
@@ -56,6 +56,7 @@ export function SupplierFormModal({
   onClose: () => void
   onSave: () => void
 }) {
+  const [openingLocked] = useState(() => Boolean(formState.id && (formState.openingBalanceDate || formState.openingKachaRupees || formState.openingGstRupees)))
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === 'Escape') onClose()
@@ -124,12 +125,13 @@ export function SupplierFormModal({
               </select>
             </Field>
             <Field label="Opening Balance Date">
-              <DateInput className={inputClass} value={formState.openingBalanceDate} onChange={(nextDate) => onChange({ ...formState, openingBalanceDate: nextDate })} />
+              <fieldset disabled={openingLocked}><DateInput className={inputClass} value={formState.openingBalanceDate} onChange={(nextDate) => onChange({ ...formState, openingBalanceDate: nextDate })} /></fieldset>
             </Field>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3.5 space-y-3">
+          <fieldset disabled={openingLocked} className="rounded-lg border border-slate-200 bg-slate-50/70 p-3.5 space-y-3">
             <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-700">Opening Balances</h4>
+            {openingLocked && <p className="text-xs text-slate-600">Use Correct opening balance in the supplier ledger to change these amounts.</p>}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <Field label="Opening Kacha (₹)">
@@ -187,7 +189,7 @@ export function SupplierFormModal({
                 </div>
               </div>
             </div>
-          </div>
+          </fieldset>
 
           <Field label="Notes (optional)">
             <textarea

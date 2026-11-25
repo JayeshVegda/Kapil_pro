@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterDraftInbox, type InboxEntry, type InboxFilters } from '@/domain/draft-inbox'
+import { filterDraftInbox, groupOpeningDrafts, type InboxEntry, type InboxFilters } from '@/domain/draft-inbox'
 
 const rows: InboxEntry[] = [
   { id: 'sales', module: 'sales', kind: 'bill', status: 'pending_review', created: '2026-11-15 10:00:00', searchText: 'VEC brass' },
@@ -15,6 +15,14 @@ const base: InboxFilters = {
 }
 
 describe('unified draft inbox', () => {
+  it('puts the opening balance immediately before its bills and payments without duplicating it', () => {
+    const group: Array<{ id: string; waitingFor?: string; isOpeningBalance?: boolean }> = [
+      { id: 'purchase-bill', waitingFor: 'opening' }, { id: 'sales-bill' },
+      { id: 'purchase-payment', waitingFor: 'opening' }, { id: 'opening', isOpeningBalance: true }, { id: 'casting' },
+    ]
+    expect(groupOpeningDrafts(group).map((row) => row.id)).toEqual(['opening', 'purchase-bill', 'purchase-payment', 'sales-bill', 'casting'])
+    expect(groupOpeningDrafts([group[0]])).toEqual([group[0]])
+  })
   it('shows pending rows from all enabled lanes, newest first; history is opt in', () => {
     expect(filterDraftInbox(rows, base).map((row) => row.id)).toEqual(['casting', 'purchase', 'sales'])
     expect(filterDraftInbox(rows, { ...base, showHistory: true }).map((row) => row.id)).toEqual(['casting', 'purchase', 'sales', 'old', 'rejected'])

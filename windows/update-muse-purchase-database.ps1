@@ -42,7 +42,7 @@ function Get-PendingMuseMigrations {
 
 function Test-ProtectedMuseHook([string]$Route) {
   try {
-    Invoke-WebRequest -Method Post -Body '{}' -ContentType 'application/json' -Uri ("http://127.0.0.1:8090/api/kapil/muse/" + $Route) -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop | Out-Null
+    Invoke-WebRequest -Method Post -Body '{}' -ContentType 'application/json' -Uri ("http://127.0.0.1:8090/api/kapil/" + $Route) -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop | Out-Null
     throw "Muse endpoint '$Route' unexpectedly accepted an unauthenticated request."
   } catch {
     $response = $_.Exception.Response
@@ -54,7 +54,7 @@ function Test-ProtectedMuseHook([string]$Route) {
 }
 
 $pending = @(Get-PendingMuseMigrations)
-$requiredHooks = @('create-party', 'approve-opening-balance')
+$requiredHooks = @('muse/create-party', 'muse/approve-opening-balance', 'purchase/correct-opening-balance')
 $missingHooks = @($requiredHooks | Where-Object { -not (Test-ProtectedMuseHook $_) })
 if ($pending.Count -eq 0 -and -not $needsHookPath -and $missingHooks.Count -eq 0) {
   Write-Host 'Muse database updates are already applied. Nothing was restarted.'

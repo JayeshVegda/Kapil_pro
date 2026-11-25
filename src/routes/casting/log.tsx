@@ -7,7 +7,7 @@ import { Edit3, Eye, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { z } from 'zod'
 import { toUserMessage } from '@/app/errors'
-import { deleteCastingSession, loadCastingSessions, saveCastingSession } from '@/data/casting'
+import { deleteCastingSession, loadCastingSession, loadCastingSessions, saveCastingSession } from '@/data/casting'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { CastingTicket } from '@/components/casting/casting-ticket'
@@ -20,7 +20,7 @@ export const Route = createFileRoute('/casting/log')({
   validateSearch: z.object({
     sessionId: z.string().optional(),
     sessionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    action: z.enum(['edit', 'delete']).optional(),
+    action: z.enum(['view', 'edit', 'delete']).optional(),
   }),
   component: CastingLogPage,
 })
@@ -90,6 +90,12 @@ export function CastingLogPage() {
         ...(dateFrom ? { from: dateFrom } : {}),
         ...(dateTo ? { to: dateTo } : {}),
       }),
+  })
+  const linkedSession = useQuery({
+    queryKey: ['casting-session-link', sessionId],
+    enabled: Boolean(action === 'view' && sessionId),
+    queryFn: () => loadCastingSession(sessionId!),
+    retry: false,
   })
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -243,12 +249,13 @@ export function CastingLogPage() {
     }
     const actionKey = `${sessionId}:${action}`
     if (handledAction.current === actionKey) return
-    const session = sessionsQuery.data?.find((row) => row.id === sessionId)
+    const session = action === 'view' ? linkedSession.data : sessionsQuery.data?.find((row) => row.id === sessionId)
     if (!session) return
     handledAction.current = actionKey
-    if (action === 'edit') openEdit(session)
+    if (action === 'view') setViewing(session)
+    else if (action === 'edit') openEdit(session)
     else setDeletingSession(session)
-  }, [action, sessionId, sessionsQuery.data])
+  }, [action, sessionId, sessionsQuery.data, linkedSession.data])
 
   function closeEdit() {
     setEditing(null)
@@ -283,7 +290,8 @@ export function CastingLogPage() {
     }
   }, [visibleRows])
 
-  const helperStatus = statusText || (deleteMutation.isPending ? 'Deleting...' : '')
+  const helperStatus = statusText || (action === 'view' && (linkedSession.isError || linkedSession.data === null)
+    ? 'The linked casting session is no longer available.' : deleteMutation.isPending ? 'Deleting...' : '')
 
   return (
     <div className="w-full space-y-5 px-3 pb-8 pt-3 sm:px-4 lg:px-6">

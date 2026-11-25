@@ -211,7 +211,9 @@ If the owner gives a starting balance, use a **separate** source ID and send the
 }
 ```
 
-Use an explicit effective date and pool. Rupee fields are decimal strings: positive means **we owe the supplier**, negative means **supplier advance**. Omit an unused pool or send `"0"`; both cannot be zero. Do not guess a pool or a direction. The owner reviews this draft first, before confirming any bills or payments for that supplier. A supplier with existing activity or an already set opening balance needs manual review. Approval changes only the supplier's starting balance and records an audit entry; rejection leaves the supplier and any separate drafts unchanged. Check status with `type=action`.
+Use an explicit effective date and pool. Rupee fields are decimal strings: positive means **we owe the supplier**, negative means **supplier advance**. Omit an unused pool or send `"0"`; both cannot be zero. Do not guess a pool or a direction. The UI points related bills and payments to the pending opening balance first; Kapil blocks posting those records until it is approved or rejected. A supplier with existing activity or an already set opening balance needs manual review. Approval changes only the supplier's starting balance and records an audit entry; rejection leaves the supplier and any separate drafts unchanged. Check status with `type=action`: expect `recordId` and, when available, `kapilPath` for an approved entry, or `rejectionReason` for a rejected one. `kapilPath` is relative to the operator's Kapil app, not the Muse gateway.
+
+Muse cannot correct a posted opening balance. The owner can use **Supplier Ledger → Correct opening balance**. Kapil requires a reason and saves the old and new values in the audit log.
 
 ### F. Follow-up for a legacy supplier proposal
 

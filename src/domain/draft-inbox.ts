@@ -45,3 +45,25 @@ export function draftAge(created: string, now = Date.now()): string {
   if (hours < 24) return `${hours}h ago`
   return `${Math.floor(hours / 24)}d ago`
 }
+
+/** Keep the opening balance first, followed by its visible bills and payments. */
+export function groupOpeningDrafts<T extends { id: string; waitingFor?: string; isOpeningBalance?: boolean }>(rows: T[]): T[] {
+  const parents = new Map(rows.filter((row) => row.isOpeningBalance).map((row) => [row.id, row]))
+  const children = new Map<string, T[]>()
+  for (const row of rows) {
+    if (!row.waitingFor || !parents.has(row.waitingFor)) continue
+    const group = children.get(row.waitingFor) ?? []
+    group.push(row)
+    children.set(row.waitingFor, group)
+  }
+  const seen = new Set<string>()
+  return rows.flatMap((row) => {
+    const parent = row.waitingFor ? parents.get(row.waitingFor) : undefined
+    const root = parent ?? row
+    // IDs belong to separate collections; only opening-group roots need deduplication.
+    if (!root.isOpeningBalance || !children.has(root.id)) return [row]
+    if (seen.has(root.id)) return []
+    seen.add(root.id)
+    return [root, ...children.get(root.id)!]
+  })
+}

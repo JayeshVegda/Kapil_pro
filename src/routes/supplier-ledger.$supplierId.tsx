@@ -38,6 +38,8 @@ import {
 import { SupplierPaymentsTable } from '@/components/suppliers/supplier-payments-table'
 import { DateInput } from '@/components/ui/date-input'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { CorrectOpeningBalanceDialog } from '@/components/suppliers/correct-opening-balance-dialog'
+import { buttonClass } from '@/components/ui/form-control-classes'
 import {
   computeSupplierBundleLedger,
   deactivateSupplier,
@@ -104,6 +106,7 @@ export function SupplierLedgerDetail({
 
   // Supplier Edit state
   const [editSupplierOpen, setEditSupplierOpen] = useState(false)
+  const [correctOpening, setCorrectOpening] = useState(false)
   const [supplierFormState, setSupplierFormState] = useState<SupplierFormState | null>(null)
   const [supplierError, setSupplierError] = useState('')
   const [deactivateOpen, setDeactivateOpen] = useState(false)
@@ -482,6 +485,8 @@ export function SupplierLedgerDetail({
             >
               <Edit3 size={14} /> Edit
             </button>
+            {Boolean(s.openingBalanceDate || s.openingKachaPaise || s.openingGstPaise) && <button type="button"
+              className={buttonClass('secondary')} onClick={() => setCorrectOpening(true)}>Correct opening balance</button>}
             <button
               type="button"
               onClick={() => (s.active ? setDeactivateOpen(true) : statusMutation.mutate())}
@@ -1002,6 +1007,7 @@ export function SupplierLedgerDetail({
       {paymentDetailsId && <PaymentDetailsModal paymentId={paymentDetailsId} onClose={() => setPaymentDetailsId(null)} />}
 
       {/* Supplier Edit Modal */}
+      {correctOpening && <CorrectOpeningBalanceDialog key={s.id} supplier={s} onClose={() => setCorrectOpening(false)} />}
       {editSupplierOpen && supplierFormState && (
         <SupplierFormModal
           formState={supplierFormState}

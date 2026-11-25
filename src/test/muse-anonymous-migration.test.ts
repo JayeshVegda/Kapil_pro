@@ -186,6 +186,11 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
       })
       const first = await openingDraft('test-opening-first')
       const other = await openingDraft('test-opening-second')
+      const addBill = () => fetch(url + '/api/collections/purchase_bills/records', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: operator.token },
+        body: JSON.stringify({ supplier: party.id }),
+      })
+      expect((await addBill()).status).toBe(400)
       expect((await approve(first.id, muse.token)).status).toBe(403)
       const saved = await approve(first.id, operator.token, { ...values, kachaPaise: values.kachaPaise + 1 })
       expect(await saved.json()).toMatchObject({ status: 'approved', supplierId: party.id })
@@ -198,6 +203,28 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
       expect(await read('muse_purchase_action_drafts/records/' + first.id)).toMatchObject({ status: 'approved', converted_record: party.id })
       expect(await read('muse_purchase_action_drafts/records/' + other.id)).toMatchObject({ status: 'pending_review' })
       expect(await read('purchase_audit_log/records')).toMatchObject({ totalItems: 1, items: [{ record_id: party.id, actor: operator.record.id }] })
+      const rejectedOpening = await fetch(url + '/api/collections/muse_purchase_action_drafts/records/' + other.id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: operator.token },
+        body: JSON.stringify({ status: 'rejected', rejection_reason: 'Duplicate proposal' }),
+      })
+      expect(rejectedOpening.status).toBe(200)
+      const bill = await addBill()
+      expect(bill.status).toBe(200)
+      const savedBill = await bill.json() as { id: string }
+      const correct = (token: string, reason: string) => fetch(url + '/api/kapil/purchase/correct-opening-balance', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token },
+        body: JSON.stringify({ supplierId: party.id, reason, expected: { ...values, kachaPaise: 15000051 }, values }),
+      })
+      expect((await correct(muse.token, 'No permission')).status).toBe(403)
+      expect((await correct(operator.token, ' ')).status).toBe(400)
+      expect((await correct(operator.token, 'Corrected supplier statement')).status).toBe(200)
+      expect((await correct(operator.token, 'Stale second edit')).status).toBe(400)
+      expect(await read('suppliers/records/' + party.id)).toMatchObject({ opening_kacha_paise: 15000050 })
+      expect(await read('purchase_audit_log/records')).toMatchObject({ totalItems: 2, items: expect.arrayContaining([
+        expect.objectContaining({ after_json: expect.stringContaining('Corrected supplier statement') }),
+      ]) })
+      expect((await fetch(url + '/api/collections/purchase_bills/records/' + savedBill.id,
+        { method: 'DELETE', headers: { Authorization: operator.token } })).status).toBe(204)
     }
   }
   const salesDraftPath = '/api/collections/bill_drafts/records'

@@ -23,7 +23,12 @@ const model = buildPurchaseReadModel([
 }, testDate)
 const ledger = { ...model, asOf: testDate, items: [{ id: itemId, name: 'Pata', active: true, aliases: '', created: '' }] }
 const write = vi.fn(async () => ({ draftId: 'sample', status: 'pending_review', reused: false }))
-const status = vi.fn(async (_type: string, source: string) => source === 'source:opening' ? null : ({ draftId: 'sample', status: 'pending_review' }))
+const status = vi.fn(async (_type: string, source: string) => {
+  if (source === 'source:opening') return null
+  if (source === 'source:approved') return { draftId: 'sample', status: 'approved', recordId: billId }
+  if (source === 'source:rejected') return { draftId: 'sample', status: 'rejected', rejectionReason: 'Wrong pool' }
+  return { draftId: 'sample', status: 'pending_review' }
+})
 const server = createMusePurchaseServer({
   keyDigest: createHash('sha256').update(key).digest(),
   loadLedger: () => ledger,
@@ -50,6 +55,14 @@ const draft = (payload: Record<string, unknown>) => ({ sourceId: 'source:one', o
 const sale = { supplier_name: 'Vashram bhai', date: testDate, pool: 'kacha', lines: [{ item_name: 'Pata', weight_kg: '380', rate_rs_per_kg: '990' }] }
 
 describe('Purchase-only Muse gateway', () => {
+  it('links the approved Purchase slip and returns the rejection reason', async () => {
+    expect(await (await send('/v1/purchase/drafts/status?type=bill&sourceId=source:approved')).json()).toMatchObject({
+      status: 'approved', recordId: billId, kapilPath: '/purchase-bills/IN-2627-0001',
+    })
+    expect(await (await send('/v1/purchase/drafts/status?type=bill&sourceId=source:rejected')).json()).toEqual({
+      draftId: 'sample', status: 'rejected', rejectionReason: 'Wrong pool',
+    })
+  })
   it('previews signed opening balances and stages them only for a clean supplier', async () => {
     write.mockClear()
     const payload = { supplier: newSupplierId, date: '2026-01-01', kacha_rs: '1,50,000.50', gst_rs: '-20000.00' }
