@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createDraftWriter, createMusePurchaseServer } from '../../scripts/muse-purchase-api'
 
 const supplierId = 'supplier0000001'
+const newSupplierId = 'supplier0000002'
 const itemId = 'pata00000000001'
 const billId = 'oldbill00000001'
 const lineId = 'oldline00000001'
@@ -13,6 +14,7 @@ const key = 'disposable-test-key'
 const testDate = '2026-11-24'
 const model = buildPurchaseReadModel([
   mapSupplier({ id: supplierId, company_name: 'Vashram (Pata)', aliases: 'Vashram bhai', active: 1 }),
+  mapSupplier({ id: newSupplierId, company_name: 'Demo One', active: 1 }),
 ], {
   bills: [mapBill({ id: billId, in_no: 'IN-2627-0001', supplier: supplierId, date: testDate, pool: 'kacha' })],
   lines: [mapLine({ id: lineId, bill: billId, item_name: 'Pata', weight_g: 10_000, rate_milli: 990_000, amount_paise: 990_000 })],
@@ -21,12 +23,13 @@ const model = buildPurchaseReadModel([
 }, testDate)
 const ledger = { ...model, asOf: testDate, items: [{ id: itemId, name: 'Pata', active: true, aliases: '', created: '' }] }
 const write = vi.fn(async () => ({ draftId: 'sample', status: 'pending_review', reused: false }))
+const status = vi.fn(async (_type: string, source: string) => source === 'source:opening' ? null : ({ draftId: 'sample', status: 'pending_review' }))
 const server = createMusePurchaseServer({
   keyDigest: createHash('sha256').update(key).digest(),
   loadLedger: () => ledger,
   loadCasting: () => ({ enabled: true, materials: [{ id: itemId, name: 'Pata', aliases: 'raw pata', code: '', category: '', isActive: true }] }),
   writeDraft: Object.assign(write, {
-    status: vi.fn(async () => ({ draftId: 'sample', status: 'pending_review' })),
+    status,
     supplierDependency: vi.fn(async (id: string) => ({ id, name: 'Pending Supplier', approved: false })),
     listDrafts: vi.fn(async () => ({ entries: [], nextCursor: null })),
   }),
@@ -47,6 +50,24 @@ const draft = (payload: Record<string, unknown>) => ({ sourceId: 'source:one', o
 const sale = { supplier_name: 'Vashram bhai', date: testDate, pool: 'kacha', lines: [{ item_name: 'Pata', weight_kg: '380', rate_rs_per_kg: '990' }] }
 
 describe('Purchase-only Muse gateway', () => {
+  it('previews signed opening balances and stages them only for a clean supplier', async () => {
+    write.mockClear()
+    const payload = { supplier: newSupplierId, date: '2026-01-01', kacha_rs: '1,50,000.50', gst_rs: '-20000.00' }
+    const request = { ...draft(payload), sourceId: 'source:opening' }
+    const preview = await send('/v1/purchase/preview/opening-balance', request)
+    expect(await preview.json()).toMatchObject({ status: 'preview_only', preview: { supplier: 'Demo One', canApprove: true, kachaPaise: 15000050, gstPaise: -2000000 } })
+    expect(write).not.toHaveBeenCalled()
+    const blocked = await send('/v1/purchase/drafts/opening-balance', { ...request, payload: { ...payload, supplier: supplierId } })
+    expect(blocked.status).toBe(409)
+    expect(write).not.toHaveBeenCalled()
+    const invalid = await send('/v1/purchase/drafts/opening-balance', { ...request, payload: { ...payload, date: '2099-01-01' } })
+    expect(invalid.status).toBe(422)
+    const staged = await send('/v1/purchase/drafts/opening-balance', request)
+    expect(staged.status).toBe(201)
+    expect(await staged.json()).toMatchObject({ status: 'pending_review', posted: false })
+    expect(write).toHaveBeenCalledWith('action', request.sourceId, request.originalMessage,
+      { kind: 'opening_balance', supplierId: newSupplierId, supplierName: 'Demo One', date: '2026-01-01', kachaPaise: 15000050, gstPaise: -2000000 })
+  })
   it('previews Casting without writing and stages only a canonical draft', async () => {
     write.mockClear()
     const input = draft({
@@ -79,7 +100,10 @@ describe('Purchase-only Muse gateway', () => {
       total: 1, pageSize: 25, suppliers: [{ name: 'Vashram (Pata)', duePaise: 900_000, slipCount: 1 }],
     })
     expect(await (await send('/v1/dues?include=suppliers')).json()).toMatchObject({
-      suppliers: [{ name: 'Vashram (Pata)', kachaPayablePaise: 900_000, gstPayablePaise: 0 }],
+      suppliers: [
+        { name: 'Vashram (Pata)', kachaPayablePaise: 900_000, gstPayablePaise: 0 },
+        { name: 'Demo One', kachaPayablePaise: 0, gstPayablePaise: 0 },
+      ],
     })
     expect(await (await send('/v1/activity?days=7')).json()).toMatchObject({
       from: '2026-11-18', total: 2, entries: expect.arrayContaining([expect.objectContaining({ type: 'slip' }), expect.objectContaining({ type: 'payment', direction: 'outgoing' })]),

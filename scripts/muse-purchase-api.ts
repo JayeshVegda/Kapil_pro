@@ -10,7 +10,7 @@ import { calculateCastingCost } from '@/domain/casting-calculations'
 import type { CastingMaterialRecord } from '@/domain/casting-types'
 import { calculateDraftLinePaise, matchPurchaseMaster, parsePurchaseBillDraft } from '@/domain/purchase-bill-draft'
 import { parsePurchasePaymentDraft } from '@/domain/purchase-payment-draft'
-import { prepareMusePurchaseAction, purchaseBusinessDate } from '@/domain/muse-purchase-actions'
+import { openingBalanceFromRupees, prepareMusePurchaseAction, purchaseBusinessDate } from '@/domain/muse-purchase-actions'
 import { computeBillNet } from '@/domain/supplier-purchases'
 import { bundleToSettlementInput } from '@/domain/supplier-bundle'
 import { computeSupplierSettlement, previewSupplierPayment } from '@/domain/supplier-settlement'
@@ -50,6 +50,7 @@ function describePurchaseDraft(kind: GatewayDraftKind, payload: unknown) {
       const parsed = kind === 'bill' ? parsePurchaseBillDraft(2, payload) : null
       const action = kind === 'action' ? prepareMusePurchaseAction(payload) : null
       if (action?.kind === 'bardan') return { action: 'bardan', billId: action.billId, date: action.date, amountPaise: action.creditPaise }
+      if (action?.kind === 'opening_balance') return { action: action.kind, party: action.supplierName, supplierId: action.supplierId, date: action.date, kachaPaise: action.kachaPaise, gstPaise: action.gstPaise }
       const bill = action?.kind === 'new_supplier_bill' ? action.bill : parsed?.kind === 'valid' ? parsed.value : null
       if (bill) {
         const net = computeBillNet(bill.lines.map((line) => ({ amountPaise: calculateDraftLinePaise(line.weight_g, line.rate_milli) })),
@@ -341,6 +342,22 @@ function canonicalBill(input: Record<string, unknown>, ledger: MusePurchaseLedge
 export function prepareApiProposal(kind: string, value: unknown, ledger: MusePurchaseLedger) {
   const body = envelopeSchema.parse(value)
   const p = body.payload
+  if (kind === 'opening-balance') {
+    const request = z.strictObject({
+      supplier: z.string().trim().min(1).max(150), date: purchaseBusinessDate,
+      kacha_rs: z.string().max(24).optional(), gst_rs: z.string().max(24).optional(),
+    }).parse(p)
+    const supplier = masterLookup(request.supplier, supplierChoices(ledger))
+    let values
+    try { values = openingBalanceFromRupees(request.date, request.kacha_rs, request.gst_rs) }
+    catch (err) { inputError(err instanceof Error ? err.message : 'Invalid signed opening balance.') }
+    if (values.date > indiaDate()) inputError('Opening balance date cannot be in the future.')
+    const payload = { kind: 'opening_balance' as const, supplierId: supplier.id, supplierName: supplier.name, ...values }
+    const bundle = ledger.supplierContexts.get(supplier.id)?.bundle
+    const canApprove = Boolean(bundle && !bundle.supplier.openingBalanceDate && !bundle.supplier.openingKachaPaise && !bundle.supplier.openingGstPaise && !bundle.bills.length && !bundle.payments.length)
+    return { ...body, kind: 'action' as const, payload, preview: { supplier: supplier.name, supplierId: supplier.id, ...values, canApprove,
+      ...(!canApprove ? { warning: 'This supplier already has an opening balance or activity. Review it manually in Kapil.' } : {}) } }
+  }
   if (kind === 'bill' || kind === 'new-supplier-bill') {
     const bill = canonicalBill(p, ledger, kind === 'new-supplier-bill')
     if (kind === 'bill') return { ...body, kind: 'bill' as const, ...bill }
@@ -543,7 +560,7 @@ export function createMusePurchaseServer(config: {
         const status = await config.writeDraft.status(type, sourceId)
         return reply(status ? 200 : 404, status ?? { error: 'DRAFT_NOT_FOUND' })
       }
-      if (req.method !== 'GET' && !(req.method === 'POST' && /^\/v1\/(?:preview|drafts)\/(?:bill|payment|bardan|new-supplier-bill)$/.test(route))) {
+      if (req.method !== 'GET' && !(req.method === 'POST' && /^\/v1\/(?:preview|drafts)\/(?:bill|payment|bardan|new-supplier-bill|opening-balance)$/.test(route))) {
         req.resume(); return reply(404, { error: 'UNKNOWN_OPERATION' })
       }
       if (req.method === 'GET' && !['/v1/supplier', '/v1/suppliers', '/v1/item', '/v1/dues', '/v1/recent-payment', '/v1/slips', '/v1/activity'].includes(route)) return reply(404, { error: 'UNKNOWN_OPERATION' })
@@ -614,6 +631,10 @@ export function createMusePurchaseServer(config: {
       const link = dependency ? { supplierDraftId: dependency.id, waitingForSupplier: !dependency.approved } : {}
       if (route.startsWith('/v1/preview/')) return reply(200, { status: 'preview_only', preview: proposal.preview, ...link })
       if (!config.writeDraft) throw new MusePurchaseError(503, 'DRAFT_WRITER_NOT_CONFIGURED', 'The Windows connector is in read-only mode.')
+      if (operation === 'opening-balance' && 'canApprove' in proposal.preview && !proposal.preview.canApprove &&
+        !await config.writeDraft.status('action', proposal.sourceId)) {
+        throw new MusePurchaseError(409, 'OPENING_BALANCE_MANUAL_REVIEW', 'This supplier already has an opening balance or activity. Review it manually in Kapil.')
+      }
       const saved = dependency
         ? await config.writeDraft(proposal.kind, proposal.sourceId, proposal.originalMessage, proposal.payload, dependency.id)
         : await config.writeDraft(proposal.kind, proposal.sourceId, proposal.originalMessage, proposal.payload)

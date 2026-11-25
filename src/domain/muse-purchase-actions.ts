@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { isValidCalendarDay } from '@/lib/date'
-import { calculateDraftLinePaise, purchaseBillDraftPayloadV2, parsePurchaseBillDraft } from './purchase-bill-draft'
+import { calculateDraftLinePaise, purchaseBillDraftPayloadV2, parsePurchaseBillDraft, parsePurchaseDecimal } from './purchase-bill-draft'
 import { MAX_PURCHASE_WEIGHT_G, MAX_PURCHASE_RATE_MILLI } from './supplier-units'
 
 const id = z.string().regex(/^[a-z0-9]{15}$/)
@@ -29,11 +29,38 @@ const newSupplierBill = z.strictObject({
   }),
 })
 
-export const musePurchaseActionSchema = z.discriminatedUnion('kind', [bardanAction, newSupplierBill])
+const signedPaise = z.number().int().min(-1_000_000_000_000).max(1_000_000_000_000)
+const openingShape = {
+  date: purchaseBusinessDate,
+  kachaPaise: signedPaise,
+  gstPaise: signedPaise,
+}
+const hasBalance = (row: { kachaPaise: number; gstPaise: number }) => row.kachaPaise !== 0 || row.gstPaise !== 0
+export const openingBalanceValues = z.strictObject(openingShape).refine(hasBalance, 'Enter a nonzero balance in at least one pool.')
+export type OpeningBalanceValues = z.infer<typeof openingBalanceValues>
+const openingBalance = z.strictObject({
+  kind: z.literal('opening_balance'), supplierId: id, supplierName: z.string().min(1), ...openingShape,
+})
+export const musePurchaseActionSchema = z.discriminatedUnion('kind', [bardanAction, newSupplierBill, openingBalance])
 export type MusePurchaseAction = z.infer<typeof musePurchaseActionSchema>
+
+export function openingBalanceFromRupees(date: unknown, kacha = '0', gst = '0'): OpeningBalanceValues {
+  const parse = (text: string, pool: string) => {
+    const trimmed = text.trim()
+    const normalized = /^-?\d{1,2}(?:,\d{2})+,\d{3}(?:\.\d+)?$/.test(trimmed) ? trimmed.replace(/,/g, '') : trimmed
+    return parsePurchaseDecimal(normalized, 2, pool)
+  }
+  return openingBalanceValues.parse({
+    date, kachaPaise: parse(kacha, 'Kacha'), gstPaise: parse(gst, 'GST'),
+  })
+}
 
 export function prepareMusePurchaseAction(payload: unknown) {
   const action = musePurchaseActionSchema.parse(payload)
+  if (action.kind === 'opening_balance') {
+    if (!hasBalance(action)) throw new Error('Enter a nonzero balance in at least one pool.')
+    return action
+  }
   if (action.kind === 'bardan') {
     return { ...action, creditPaise: action.method === 'deduct' ? calculateDraftLinePaise(action.weightG, action.rateMilli) : 0 }
   }

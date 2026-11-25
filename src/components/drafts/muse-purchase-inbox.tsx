@@ -78,12 +78,17 @@ export function MusePurchaseActionReview({ selected, onClose }: { selected: Muse
           {action.bill.lines.map((entry, i) => <p key={i}>{entry.item_name} · {entry.weight_g / 1000} kg × ₹{entry.rate_milli / 1000} · {formatPaiseInr(entry.amount_paise)}</p>)}
           <p className="font-semibold">Bill net {formatPaiseInr(billPreview.netPaise)}</p>
         </div>}
+        {action?.kind === 'opening_balance' && <div className="space-y-2 rounded-lg border p-3 text-sm">
+          <p><strong>{action.supplierName}</strong> · opening balance proposal · {action.date}</p>
+          <p>Kacha: {formatPaiseInr(action.kachaPaise)} · GST: {formatPaiseInr(action.gstPaise)}</p>
+          {selected.status === 'approved' && <Link className="underline" to="/supplier-ledger/$supplierId" params={{ supplierId: action.supplierId }}>View saved balance in supplier ledger</Link>}
+        </div>}
         {!action && <p role="alert" className="text-xs text-rose-700">Invalid proposal. Reject it and ask Muse to resubmit.</p>}
         {selected.raw_text && <details className="text-xs"><summary>Original message</summary><p className="mt-1 whitespace-pre-wrap break-words">{selected.raw_text}</p></details>}
         {review.isError && <p role="alert" className="text-xs text-rose-700">{toUserMessage(review.error)}</p>}
         <div className="flex flex-wrap justify-end gap-2">
           <button type="button" className={buttonClass('secondary')} disabled={review.isPending} onClick={onClose}>Close</button>
-          {selected.status === 'pending_review' && <button type="button" className={buttonClass('primary')} disabled={review.isPending || !action || (action.kind === 'bardan' && (!line || target?.bill.cancelled || line.rateMilli !== action.rateMilli))} onClick={() => review.mutate()}>Confirm &amp; Save</button>}
+          {selected.status === 'pending_review' && action?.kind !== 'opening_balance' && <button type="button" className={buttonClass('primary')} disabled={review.isPending || !action || (action.kind === 'bardan' && (!line || target?.bill.cancelled || line.rateMilli !== action.rateMilli))} onClick={() => review.mutate()}>Confirm &amp; Save</button>}
         </div>
       </DialogContent>
     </Dialog>

@@ -21,6 +21,8 @@ Use the same key for all three gateway modules. Don't request the PocketBase pas
 
 Create masters with `POST /v1/sales/customer` or `POST /v1/purchase/supplier` using `{"sourceId":"message-id:party","name":"Company name"}`. For Casting, read `GET /v1/casting/materials`, use `POST /v1/casting/preview/session` then `POST /v1/casting/drafts/session` with the [Casting v1 payload](../architecture/MUSE-DRAFT-SCHEMA.md), and check `GET /v1/casting/drafts/status?sourceId=…`.
 
+Supplier opening balances use a separate Purchase opening-balance draft, not the supplier-creation endpoint. The Windows updater checks that the protected approval hook is loaded and takes the usual offline backup before restarting if it is missing.
+
 | Operation | Request |
 | --- | --- |
 | Confirm connector credentials | `GET /v1/health` |

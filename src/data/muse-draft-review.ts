@@ -5,14 +5,14 @@ import { loadCustomerAutoBalanceContext } from './customer-balance'
 import { loadCustomerPaymentLedger } from './payments'
 import { loadPurchaseBillDraft } from './purchase-bill-drafts'
 import { loadPurchasePaymentDraft } from './purchase-payment-drafts'
-import { approveMusePurchaseAction, type MusePurchaseActionRecord } from './muse-purchase-action-drafts'
+import { approveMuseOpeningBalance, approveMusePurchaseAction, type MusePurchaseActionRecord } from './muse-purchase-action-drafts'
 import { loadCastingSessionDraft } from './casting-session-drafts'
 import { loadCastingMaterials, normalizeBatchesForSave, saveCastingSession, type SaveCastingSessionPayload } from './casting'
 import { savePaymentFromDraft } from './payment-drafts'
-import { createPurchaseBill, createSupplierPayment, getNextPurchaseInNo, loadPurchaseBill, loadPurchaseReadModel, listPurchaseItems, listSuppliers } from './suppliers'
+import { createPurchaseBill, createSupplierPayment, getNextPurchaseInNo, loadPurchaseBill, loadPurchaseReadModel, loadSupplierBundle, listPurchaseItems, listSuppliers } from './suppliers'
 import { buildPaymentDraftView, composeReceiptNote, type PaymentDraftRecordInput } from '@/domain/payment-drafts'
 import { buildPaymentPreview } from '@/domain/payment-ledger'
-import { prepareMusePurchaseAction } from '@/domain/muse-purchase-actions'
+import { prepareMusePurchaseAction, type OpeningBalanceValues } from '@/domain/muse-purchase-actions'
 import { calculateBillingLineBags, getBillingUnit } from '@/domain/billing-modes'
 import { calculateBillTotals, calculateLineAmount } from '@/domain/billing-calculations'
 import { buildBillPreviewProps } from '@/lib/bill-preview-props'
@@ -36,7 +36,7 @@ const tables = {
 } as const
 export type ReviewSource = keyof typeof tables
 type Info = { party: string; date: string; amount: string; details?: string[] }
-type Review = { info: Info; raw: string; fingerprint: string; commit: () => Promise<unknown> } & (
+type Review = { info: Info; raw: string; fingerprint: string; commit: (values?: OpeningBalanceValues) => Promise<unknown>; opening?: OpeningBalanceValues } & (
   { view: 'sales-bill'; preview: ReturnType<typeof buildBillPreviewProps> } |
   { view: 'purchase-bill'; preview: BillChittyData } |
   { view: 'casting'; preview: CastingSessionWithInputs } |
@@ -79,7 +79,7 @@ export function buildDraftCastingTicket(payload: SaveCastingSessionPayload): Cas
 }
 
 export async function prepareMuseDraftReview(source: ReviewSource, id: string): Promise<Review> {
-  function evidence<T>(view: T, raw: string, info: Info, snapshot: unknown, commit: () => Promise<unknown>, preview?: unknown) {
+  function evidence<T>(view: T, raw: string, info: Info, snapshot: unknown, commit: (values?: OpeningBalanceValues) => Promise<unknown>, preview?: unknown) {
     return { view, raw, info, fingerprint: JSON.stringify({ snapshot, info, preview }), commit, ...(preview ? { preview } : {}) } as Review
   }
   if (source === 'sales-bill') {
@@ -150,6 +150,18 @@ export async function prepareMuseDraftReview(source: ReviewSource, id: string): 
     const record = await pb.collection('muse_purchase_action_drafts').getOne<MusePurchaseActionRecord>(id)
     ready(record.status)
     const action = prepareMusePurchaseAction(record.payload)
+    if (action.kind === 'opening_balance') {
+      const { supplier, bills, payments } = await loadSupplierBundle(action.supplierId)
+      if (!supplier.active) throw new Error('This supplier is inactive.')
+      if (supplier.openingBalanceDate || supplier.openingKachaPaise || supplier.openingGstPaise || bills.length || payments.length)
+        throw new Error('Supplier already has an opening balance or activity. Review it manually in Kapil.')
+      const values = { date: action.date, kachaPaise: action.kachaPaise, gstPaise: action.gstPaise }
+      const label = (amount: number) => amount === 0 ? 'None' : `${formatPaiseInr(Math.abs(amount))} ${amount > 0 ? 'payable' : 'advance'}`
+      return { ...evidence('summary', record.raw_text, {
+        party: supplier.companyName, date: action.date, amount: 'Supplier opening balance',
+        details: [`Kacha: ${label(values.kachaPaise)}`, `GST: ${label(values.gstPaise)}`, 'This sets the starting ledger balance. It creates no bill or payment.'],
+      }, { action, supplier: supplier.companyName }, (edited) => approveMuseOpeningBalance(id, supplier.companyName, edited ?? values)), opening: values }
+    }
     if (action.kind === 'bardan') {
       const target = await loadPurchaseBill(action.billId)
       const line = target.lines.find((x) => x.id === action.lineId)

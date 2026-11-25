@@ -201,6 +201,18 @@ This path accepts `supplier_name` (no ID), `date`, explicit `pool`, `tax_mode`, 
 
 On an explicit request to create a new supplier, resolve any plausible master matches first, then send `POST /v1/purchase/supplier` with `{"sourceId":"msg-104:supplier","name":"Demo One"}`. This saves or reuses the supplier; it does not write a bill or opening balance. Use the returned ID/name in the standard Purchase bill preview and stage calls, with a separate stable source ID for the bill. A rejected bill does not remove the supplier.
 
+If the owner gives a starting balance, use a **separate** source ID and send the same body to `POST /v1/purchase/preview/opening-balance` and, when eligible, `POST /v1/purchase/drafts/opening-balance`:
+
+```json
+{
+  "sourceId": "msg-104:opening",
+  "originalMessage": "We already owe Demo One ₹1,50,000 Kacha as of 2026-11-24.",
+  "payload": { "supplier": "<supplier id or exact name>", "date": "2026-11-24", "kacha_rs": "150000.00" }
+}
+```
+
+Use an explicit effective date and pool. Rupee fields are decimal strings: positive means **we owe the supplier**, negative means **supplier advance**. Omit an unused pool or send `"0"`; both cannot be zero. Do not guess a pool or a direction. The owner reviews this draft first, before confirming any bills or payments for that supplier. A supplier with existing activity or an already set opening balance needs manual review. Approval changes only the supplier's starting balance and records an audit entry; rejection leaves the supplier and any separate drafts unchanged. Check status with `type=action`.
+
 ### F. Follow-up for a legacy supplier proposal
 
 For a normal bill or payment preview/stage, put `"supplierDraftId": "<draftId of new-supplier-bill>"` **beside** `sourceId`, not inside `payload`. You can omit `supplier_name` and `supplier_id` in the payload; the connector fills them from the linked proposal. This is how to queue a real follow-up before the supplier exists. Use a separate stable source ID for each true follow-up; don't duplicate the first bill. The response reports `waitingForSupplier`. In **AI Drafts**, approve the supplier + first bill before reviewing the follow-up. A rejected supplier must not be bypassed or guessed. Payment previews while a supplier is pending start at zero and do not include the first bill that hasn't been posted yet; the owner reviews the live balance when saving.

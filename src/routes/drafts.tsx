@@ -54,6 +54,7 @@ type InboxRow = InboxEntry & {
   invalid: boolean
   label?: string
   waitingFor?: string
+  isOpeningBalance?: boolean
 }
 
 function DraftsPage() {
@@ -95,6 +96,9 @@ function DraftsPage() {
     const common = { id: action.id, module: 'purchase' as const, source: 'purchase-action' as const, status: action.status, created: action.created, view: action, confidence: 0, warning: '', invalid: false }
     try {
       const parsed = prepareMusePurchaseAction(action.payload)
+      if (parsed.kind === 'opening_balance') return { ...common, kind: 'action', label: 'Supplier opening balance', isOpeningBalance: true, party: parsed.supplierName,
+        date: parsed.date, amount: `Kacha ${formatPaiseInr(parsed.kachaPaise)} · GST ${formatPaiseInr(parsed.gstPaise)}`,
+        searchText: [parsed.supplierName, action.raw_text, 'opening balance'].join(' ') }
       if (parsed.kind === 'bardan') return { ...common, kind: 'action', label: 'Bardan',
         party: `${parsed.bagCount} bags · ${(parsed.weightG / 1000).toFixed(3)} kg`, date: parsed.date,
         amount: parsed.method === 'deduct' ? formatPaiseInr(parsed.creditPaise) : 'In kind',
@@ -200,7 +204,7 @@ function DraftsPage() {
       <div className="flex flex-wrap items-center justify-between gap-2"><div><h1 className="text-lg font-semibold">AI Drafts</h1><p className="text-xs text-slate-600">Review Sales, Purchase, and Casting proposals here. Nothing posts until you confirm.</p></div><button type="button" className={buttonClass('secondary')} onClick={() => { setShowHistory(!showHistory); setStatus('all') }}>{showHistory ? 'Pending only' : 'Show history'}</button></div>
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex flex-wrap gap-1" aria-label="Module filter">{(['all', 'sales', 'purchase', 'casting'] as const).filter((item) => item === 'all' || item === 'sales' || item === 'purchase' && purchaseEnabled || item === 'casting' && castingEnabled).map((item) => <button key={item} type="button" onClick={() => setModule(item)} className={item === module ? buttonClass() : buttonClass('secondary')}>{item === 'all' ? `All ${counts.sales + counts.purchase + counts.casting}` : `${item[0].toUpperCase()}${item.slice(1)} ${counts[item]}`}</button>)}</div>
-        <select aria-label="Draft type" className={`${selectClass} w-auto`} value={kind} onChange={(event) => setKind(event.target.value as InboxKind | 'all')}><option value="all">All types</option><option value="bill">Bills</option><option value="payment">Payments</option>{purchaseEnabled && <option value="action">Bardan and actions</option>}{castingEnabled && <option value="session">Sessions</option>}</select>
+        <select aria-label="Draft type" className={`${selectClass} w-auto`} value={kind} onChange={(event) => setKind(event.target.value as InboxKind | 'all')}><option value="all">All types</option><option value="bill">Bills</option><option value="payment">Payments</option>{purchaseEnabled && <option value="action">Purchase actions</option>}{castingEnabled && <option value="session">Sessions</option>}</select>
         <select aria-label="Draft status" className={`${selectClass} w-auto`} value={showHistory ? status : 'pending_review'} disabled={!showHistory} onChange={(event) => setStatus(event.target.value as InboxStatus | 'all')}><option value="all">All statuses</option><option value="pending_review">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select>
         {<button type="button" aria-pressed={needsCorrection} onClick={() => setNeedsCorrection(!needsCorrection)} className={buttonClass(needsCorrection ? 'primary' : 'secondary')}>Needs attention</button>}
         <input aria-label="Search drafts" className={`${inputClass} min-w-36 flex-1`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search party, material, message…" />
@@ -234,6 +238,7 @@ function DraftsPage() {
     {castingEnabled && <CastingSessionDraftLane selected={selected?.source === 'casting-session' ? selected.view as CastingSessionDraftView : null} onClose={() => setSelected(null)} />}
     {reviewing && <MuseDraftReview key={`${reviewing.row.source}:${reviewing.row.id}:${reviewing.intent}`} source={reviewing.row.source} id={reviewing.row.id} intent={reviewing.intent}
       party={reviewing.row.party} date={reviewing.row.date} amount={reviewing.row.amount}
+      isOpeningBalance={reviewing.row.isOpeningBalance}
       canLoad={!reviewing.row.waitingFor && (!reviewing.row.invalid || reviewing.row.source === 'purchase-bill' || reviewing.row.source === 'purchase-payment')}
       onClose={() => setReviewing(null)}
       onLoad={async () => { await load(reviewing.row); setReviewing(null) }}

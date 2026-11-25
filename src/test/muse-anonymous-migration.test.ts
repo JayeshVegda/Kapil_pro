@@ -84,13 +84,20 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
       account.set('role', role)
       app.save(account)
     }
-    ${['purchase_bills', 'supplier_payments', 'bills', 'bill_items', 'payments', 'items', 'brass_rates', 'casting_sessions', 'casting_batches', 'casting_batch_inputs', 'casting_materials'].map(minimalCollection).join('\n    ')}
+    ${['bills', 'bill_items', 'payments', 'items', 'brass_rates', 'casting_sessions', 'casting_batches', 'casting_batch_inputs', 'casting_materials'].map(minimalCollection).join('\n    ')}
+    app.save(new Collection({name: 'app_settings', type: 'base', fields: [{name: 'purchase_enabled', type: 'bool'}]}))
+    app.save(new Collection({name: 'purchase_audit_log', type: 'base', listRule: '', fields:
+      ['collection', 'record_id', 'action', 'before_json', 'after_json', 'actor'].map(name => ({name, type: 'text'})),
+    }))
+    for (const name of ['purchase_bills', 'supplier_payments']) {
+      app.save(new Collection({name, type: 'base', listRule: '', viewRule: '', createRule: '', updateRule: '', deleteRule: '', fields: [{name: 'supplier', type: 'text'}]}))
+    }
     for (const name of ['customers', 'suppliers']) {
       app.save(new Collection({ name, type: 'base', listRule: '', viewRule: '', fields: [
         { name: 'company_name', type: 'text', required: true },
         { name: 'name', type: 'text' }, { name: 'aliases', type: 'text' },
         { name: 'active', type: 'bool' }, { name: 'opening_balance', type: 'number' },
-        { name: 'opening_kacha_paise', type: 'number' }, { name: 'opening_gst_paise', type: 'number' },
+        { name: 'opening_kacha_paise', type: 'number' }, { name: 'opening_gst_paise', type: 'number' }, { name: 'opening_balance_date', type: 'text' },
       ] }))
     }
     for (const [name, converted] of [['bill_drafts', 'converted_bill'], ['payment_drafts', 'converted_payment']]) {
@@ -162,6 +169,36 @@ it.skipIf(!existsSync(binary))('accepts anonymous Muse draft before staged rules
     expect((await createParty({ ...proposal, name: 'Demo Two' })).status).toBe(409)
     const list = await fetch(url + '/api/collections/' + (module === 'sales' ? 'customers' : 'suppliers') + '/records', { headers: { Authorization: operator.token } })
     expect(await list.json()).toMatchObject({ totalItems: 1, items: [{ id: party.id, company_name: 'Demo One', active: true, opening_balance: 0, opening_kacha_paise: 0 }] })
+    if (module === 'purchase') {
+      const values = { date: '2026-01-01', kachaPaise: 15000050, gstPaise: -2000000 }
+      const openingDraft = async (source: string) => {
+        const res = await fetch(url + '/api/collections/muse_purchase_action_drafts/records', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: muse.token },
+          body: JSON.stringify({ created_by: muse.record.id, source_message_id: source, status: 'pending_review',
+            payload: { kind: 'opening_balance', supplierId: party.id, supplierName: 'Demo One', ...values } }),
+        })
+        expect(res.status).toBe(200)
+        return res.json() as Promise<{ id: string }>
+      }
+      const approve = (draftId: string, token: string, edited = values) => fetch(url + '/api/kapil/muse/approve-opening-balance', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token },
+        body: JSON.stringify({ draftId, supplierName: 'Demo One', values: edited }),
+      })
+      const first = await openingDraft('test-opening-first')
+      const other = await openingDraft('test-opening-second')
+      expect((await approve(first.id, muse.token)).status).toBe(403)
+      const saved = await approve(first.id, operator.token, { ...values, kachaPaise: values.kachaPaise + 1 })
+      expect(await saved.json()).toMatchObject({ status: 'approved', supplierId: party.id })
+      expect((await approve(first.id, operator.token)).status).toBe(400)
+      expect((await approve(other.id, operator.token)).status).toBe(400)
+      const read = (path: string) => fetch(url + '/api/collections/' + path, { headers: { Authorization: operator.token } }).then(r => r.json())
+      expect(await read('suppliers/records/' + party.id)).toMatchObject({
+        opening_kacha_paise: 15000051, opening_gst_paise: -2000000, opening_balance_date: '2026-01-01',
+      })
+      expect(await read('muse_purchase_action_drafts/records/' + first.id)).toMatchObject({ status: 'approved', converted_record: party.id })
+      expect(await read('muse_purchase_action_drafts/records/' + other.id)).toMatchObject({ status: 'pending_review' })
+      expect(await read('purchase_audit_log/records')).toMatchObject({ totalItems: 1, items: [{ record_id: party.id, actor: operator.record.id }] })
+    }
   }
   const salesDraftPath = '/api/collections/bill_drafts/records'
   const stageSalesDraft = (id: string, source?: string) => fetch(url + '/api/batch', {

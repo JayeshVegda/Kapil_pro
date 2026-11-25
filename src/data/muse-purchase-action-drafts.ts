@@ -1,6 +1,6 @@
 import { pb } from './pocketbase'
 import { addPurchaseBardanEntry, createPurchaseBill, listPurchaseItems } from './suppliers'
-import { prepareMusePurchaseAction } from '@/domain/muse-purchase-actions'
+import { openingBalanceValues, prepareMusePurchaseAction, type OpeningBalanceValues } from '@/domain/muse-purchase-actions'
 import { matchPurchaseMaster } from '@/domain/purchase-bill-draft'
 
 const collection = 'muse_purchase_action_drafts'
@@ -33,11 +33,18 @@ export async function rejectMusePurchaseAction(id: string) {
   await pb.collection(collection).update(id, { status: 'rejected' })
 }
 
+export async function approveMuseOpeningBalance(draftId: string, supplierName: string, values: OpeningBalanceValues) {
+  return pb.send<{ supplierId: string; status: 'approved' }>('/api/kapil/muse/approve-opening-balance', {
+    method: 'POST', body: { draftId, supplierName, values: openingBalanceValues.parse(values) },
+  })
+}
+
 export async function approveMusePurchaseAction(record: MusePurchaseActionRecord, inNo = '') {
   const current = await pb.collection(collection).getOne<MusePurchaseActionRecord>(record.id)
   if (current.status !== 'pending_review') throw new Error('This proposal was already processed.')
   if (JSON.stringify(current.payload) !== JSON.stringify(record.payload)) throw new Error('This proposal changed. Close and review it again.')
   const action = prepareMusePurchaseAction(current.payload)
+  if (action.kind === 'opening_balance') throw new Error('Review opening balances in AI Drafts.')
   if (action.kind === 'bardan') {
     await addPurchaseBardanEntry({
       actionDraftId: record.id, billId: action.billId, rateLineId: action.lineId, bagCount: action.bagCount,

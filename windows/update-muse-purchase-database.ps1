@@ -22,6 +22,7 @@ $configuredExe = [IO.Path]::GetFullPath([string]$parameters.Application)
 $migrationDir = Join-Path $script:ProjectRoot 'pb_migrations'
 $hooksDir = Join-Path $script:ProjectRoot 'pb_hooks'
 Assert-KapilFile (Join-Path $hooksDir 'muse_party_create.pb.js') 'Muse party and review hook'
+Assert-KapilFile (Join-Path $hooksDir 'muse_opening_balance.pb.js') 'Muse opening balance hook'
 $serviceArgs = [string]$parameters.AppParameters
 if ($configuredExe -ine $script:PocketBaseExe -or
     $serviceArgs -notmatch ('--dir\s+"?' + [regex]::Escape($script:DataDir) + '(?:"|\s|$)') -or
@@ -39,13 +40,29 @@ function Get-PendingMuseMigrations {
   return ($result | ConvertFrom-Json)
 }
 
+function Test-ProtectedMuseHook([string]$Route) {
+  try {
+    Invoke-WebRequest -Method Post -Body '{}' -ContentType 'application/json' -Uri ("http://127.0.0.1:8090/api/kapil/muse/" + $Route) -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop | Out-Null
+    throw "Muse endpoint '$Route' unexpectedly accepted an unauthenticated request."
+  } catch {
+    $response = $_.Exception.Response
+    if (-not $response) { throw }
+    if ([int]$response.StatusCode -eq 404) { return $false }
+    if ([int]$response.StatusCode -notin @(401, 403)) { throw }
+    return $true
+  }
+}
+
 $pending = @(Get-PendingMuseMigrations)
-if ($pending.Count -eq 0 -and -not $needsHookPath) {
+$requiredHooks = @('create-party', 'approve-opening-balance')
+$missingHooks = @($requiredHooks | Where-Object { -not (Test-ProtectedMuseHook $_) })
+if ($pending.Count -eq 0 -and -not $needsHookPath -and $missingHooks.Count -eq 0) {
   Write-Host 'Muse database updates are already applied. Nothing was restarted.'
   return
 }
 if ($CheckOnly) {
   Write-Host ('Pending Muse database updates: ' + ($pending -join ', '))
+  if ($missingHooks.Count -gt 0) { Write-Host ('Pending Muse hooks: ' + ($missingHooks -join ', ')) }
   if ($needsHookPath) { Write-Host 'The Windows service needs its explicit project hooks path.' }
   return
 }
@@ -86,13 +103,7 @@ Wait-KapilUrl 'http://127.0.0.1:4174'
 
 $remaining = @(Get-PendingMuseMigrations)
 if ($remaining.Count -gt 0) { throw ('Kapil restarted, but these migrations are still pending: ' + ($remaining -join ', ')) }
-try {
-  Invoke-WebRequest -Method Post -Body '{}' -ContentType 'application/json' -Uri 'http://127.0.0.1:8090/api/kapil/muse/create-party' -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop | Out-Null
-  throw 'The Muse party endpoint unexpectedly accepted a request without authentication.'
-} catch {
-  $response = $_.Exception.Response
-  if (-not $response -or [int]$response.StatusCode -notin @(401, 403)) {
-    throw 'Muse hook endpoint could not be verified after restart. The connector was not restarted.'
-  }
+foreach ($route in $requiredHooks) {
+  if (-not (Test-ProtectedMuseHook $route)) { throw "Muse hook '$route' did not load. The connector was not restarted." }
 }
 Write-Host 'Kapil is healthy. All Muse database updates are applied.'
